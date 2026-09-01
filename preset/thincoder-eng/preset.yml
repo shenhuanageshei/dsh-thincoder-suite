@@ -1,0 +1,3 @@
+name: Thincoder Eng
+description: "工程模式会话：设计→评审→实现→验收。架构师角色从第一句起生效——先澄清需求、写设计文档，设计评审由用户发起（advisor type=design），实现走 eng_coder + design token，交付后自动 code review。基于 thincoder-suite 插件机制（全局装配），本预设是一键入口。"
+order: 2

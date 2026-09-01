@@ -1,0 +1,22 @@
+{
+  "name": "@dsh-external/dsh-thincoder-suite",
+  "description": "thincoder 四功能移植：advisor 评审收敛 / 工程模式 eng / 飞刀 escalate / 会诊 consult（host-only 纯 JS 免构建）",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.mjs",
+  "exports": {
+    ".": { "default": "./lib/index.mjs" },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.7"
+  },
+  "license": "MIT"
+}
