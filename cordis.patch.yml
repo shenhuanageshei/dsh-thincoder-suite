@@ -1,0 +1,24 @@
+# dsh-thincoder-suite bundle：向组合挂 thincoder 四功能（advisor 评审收敛 / eng 工程模式 / escalate 飞刀 / consult 会诊）
+#
+# 示例配置（部署时按自身环境替换 provider/model——本文件在 bundle 安装时会作为默认 patch 应用，
+# 留空的键运行时全部可选，示例仅展示形状）。
+- insert:
+    - id: thincoder-suite
+      name: '@dsh-external/dsh-thincoder-suite'
+      config:
+        # escalate/consult 共用模型池（最多 5 个）。首个为飞刀默认。
+        # 示例占位——替换为你部署里实际可用的 provider/model 组合。
+        consultModels:
+          - provider: your-provider
+            model: your-model
+          - provider: another-provider
+            model: another-model
+        # advisor 评审路由（单模型；不配置则跟随当前会话模型）
+        advisor:
+          provider: your-provider
+          model: your-model
+          timeoutMs: 600000
+        # 所有会话默认进工程模式（默认 false）
+        engineering: false
+        engTokenTtlMs: 3600000
+        consultTimeoutMs: 600000
