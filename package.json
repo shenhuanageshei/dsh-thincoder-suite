@@ -18,5 +18,8 @@
   "peerDependencies": {
     "cordis": "^4.0.0-rc.7"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test"
+  }
 }

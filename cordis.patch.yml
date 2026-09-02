@@ -1,7 +1,7 @@
 # dsh-thincoder-suite bundle：向组合挂 thincoder 四功能（advisor 评审收敛 / eng 工程模式 / escalate 飞刀 / consult 会诊）
 #
 # 示例配置（部署时按自身环境替换 provider/model——本文件在 bundle 安装时会作为默认 patch 应用，
-# 留空的键运行时全部可选，示例仅展示形状）。
+# 留空的键运行时全部可选，示例仅展示形状）。分组结构见 docs/2026-09-01-advisor-config-design.md §3.1。
 - insert:
     - id: thincoder-suite
       name: '@dsh-external/dsh-thincoder-suite'
@@ -13,11 +13,22 @@
             model: your-model
           - provider: another-provider
             model: another-model
-        # advisor 评审路由（单模型；不配置则跟随当前会话模型）
+        # advisor 评审路由（不配置则跟随当前会话模型）——按轮次分层（§3.2）：
         advisor:
-          provider: your-provider
-          model: your-model
-          timeoutMs: 600000
+          round1:                    # 首次全量评审（advisorRound == 0）
+            provider: your-provider
+            model: your-model
+            effort: medium           # 可选 off|low|medium|high|max；缺省不传（适配器默认）
+            timeoutMs: 900000        # 缺省 600000
+          convergence:               # 收敛轮（advisorRound >= 1，round 2+ 共用）
+            provider: your-provider
+            model: your-fast-model
+            effort: low
+            timeoutMs: 300000
+          includeProjectGuide: false # 评审是否注入 AGENTS.md（默认 false，§3.5）
+        # F9 子代理资源（§3.10）：
+        engCoderMaxTokens: 65536     # eng_coder 子代理输出预算（可选；缺省 65536）
+        engCoderEffort: low          # eng_coder 子代理推理档（可选 off|low|medium|high|max；缺省 low；非法值忽略并警告 N4）
         # 所有会话默认进工程模式（默认 false）
         engineering: false
         engTokenTtlMs: 3600000
