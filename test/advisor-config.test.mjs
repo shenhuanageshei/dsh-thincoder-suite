@@ -24,6 +24,11 @@ import { loadTokenRecord, saveTokenRecord, resolveTokenStorePath } from "../lib/
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// 二期隔离：advisor 消费点现在合并 config-store user 层（$DSH_HOME/.thincoder/config.json）。
+// 本机宿主 DSH_HOME 指向真实 profile——若有真实 user 层会污染断言。屏蔽 env → 探测回落 null
+// （本文件进程内生效；真实宿主不受影响）。F10/token 用例全走显式注入路径，不受影响。
+process.env.DSH_HOME = ""
+
 // ————————————— stub 基础设施 —————————————
 
 /** 静默流：永不产出 chunk；opts.signal abort 后在下一 tick 干净结束（close 有界）。 */

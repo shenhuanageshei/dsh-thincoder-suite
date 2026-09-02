@@ -2,6 +2,14 @@
 #
 # 示例配置（部署时按自身环境替换 provider/model——本文件在 bundle 安装时会作为默认 patch 应用，
 # 留空的键运行时全部可选，示例仅展示形状）。分组结构见 docs/2026-09-01-advisor-config-design.md §3.1。
+#
+# 二层配置（二期，docs/2026-09-02-settings-ui-design.md §2）：
+# - 本文件 config = entry base（启动快照）：改动需重启 DSH 生效；
+# - $DSH_HOME/.thincoder/config.json 的 config = user 层（DSH 设置面板「Thincoder」页编辑；
+#   字段级覆盖下方 base；保存即生效无需重启；删除/清空则回落本 base）。
+#   用户层可配字段白名单：advisor.round1/convergence 组（provider/model/effort/timeoutMs）、
+#   advisor.includeProjectGuide、consultModels（整体替换）、engCoderMaxTokens、engCoderEffort。
+#   下列示例值若在 user 层被覆盖，以 user 层为准。
 - insert:
     - id: thincoder-suite
       name: '@dsh-external/dsh-thincoder-suite'
