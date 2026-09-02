@@ -1,18 +1,27 @@
 {
   "name": "@dsh-external/dsh-thincoder-suite",
-  "description": "thincoder 四功能移植：advisor 评审收敛 / 工程模式 eng / 飞刀 escalate / 会诊 consult（host-only 纯 JS 免构建）",
+  "description": "thincoder 四功能移植：advisor 评审收敛 / 工程模式 eng / 飞刀 escalate / 会诊 consult（纯 JS 免构建；host + 设置页 client）",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "lib/index.mjs",
   "exports": {
     ".": { "default": "./lib/index.mjs" },
+    "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-connection"
+      ],
+      "platform": "web"
     }
   },
   "peerDependencies": {

@@ -81,7 +81,7 @@ design-before-code 的运行时门禁：
 
 ## 安装
 
-要求：DSH 桌面壳（cordis `^4.0.0-rc.7`）+ web profile 标准服务（tools / llm / subagents / systemPrompt）。
+要求：DSH 桌面壳（cordis `^4.0.0-rc.7`）+ web profile 标准服务（tools / llm / subagents / systemPrompt / webServer——webServer 缺失时仅设置页 API 降级，host 工具不受影响）。
 
 ```bash
 git clone https://github.com/shenhuanageshei/dsh-thincoder-suite.git
@@ -115,7 +115,41 @@ pnpm add link:<克隆路径>/dsh-thincoder-suite
 
 即装配成功。
 
-## 配置
+## 配置（二层）
+
+全局配置分两层（详见 `docs/2026-09-02-settings-ui-design.md` §2）：
+
+| 层 | 位置 | 编辑方式 | 生效时机 |
+|---|---|---|---|
+| **base** | `cordis.patch.yml` 的 `config`（启动快照） | 手编本文件 / profile 部署副本 | 重启 DSH |
+| **user 层** | `$DSH_HOME/.thincoder/config.json`（`.config` 字段） | **DSH 设置面板 →「Thincoder」页**（也可手编 JSON） | **保存即生效**（评审/工具每次调用时读取合并） |
+
+生效全局 = user 层（字段级覆盖 base）⊕ base；user 层缺失/损坏 → 回落 base。user 层可配字段白名单：
+`advisor.round1/convergence` 组（provider/model/effort/timeoutMs）、`advisor.includeProjectGuide`、
+`consultModels`（整体替换）、`engCoderMaxTokens`、`engCoderEffort`——其余字段（engineering /
+engTokenTtlMs / consultTimeoutMs 等）只在 base 配。文件示例：
+
+```json
+{ "version": 1, "config": { "advisor": { "round1": { "provider": "…", "model": "…" } } } }
+```
+
+> 部署侧 bundle 安装时 cordis.patch.yml 会作为默认 patch 应用——本仓库文件是 base 示例（单
+> 一事实源）；`link:` 安装直接编辑克隆目录即可。两层的示例值关系见下方 `cordis.patch.yml`
+> 头部注释。
+
+### DSH 设置面板「Thincoder」页（二期 UI）
+
+设置 →「Thincoder」：round1 / 收敛轮两组卡片（provider/model 下拉——数据来自官方
+`llm.providers/models` RPC，目录不可用时降级文本输入；effort 下拉；timeoutMs 数字输入）、
+includeProjectGuide 开关、consult/escalate 共用模型池可编辑行、engCoderMaxTokens /
+engCoderEffort 输入。**保存全局默认** → 写 user 层（`config.json`）；**恢复默认** → 清 user 层
+回落 base。非法值表单内联报错不提交（与一期解析链同源校验）。顶部为**当前会话视图**：
+生效摘要（含覆盖来源标注）→「应用到当前会话」写该会话 `advisorOverride`（仅 advisor 子集，
+优先级高于全局，见下方会话级覆盖）/「恢复会话默认」清除；活动会话 id 取不到时降级为
+「复制 advisor_config 命令」文本框。host API 前缀：`/thincoder-suite/api`
+（GET/PUT/DELETE `/config`、GET/DELETE `/session`、POST `/apply-session`；loopback 信任模型）。
+
+### base 配置示例（cordis.patch.yml）
 
 配置经插件 `cordis.patch.yml` 的 insert 行传入（link: 安装直接编辑克隆目录里的文件即可）——分组结构见设计文档 `docs/2026-09-01-advisor-config-design.md` §3.1：
 
@@ -172,7 +206,7 @@ advisor_config request={"action":"set","path":"round1.effort","value":"low"}
 advisor_config request={"action":"reset","path":"convergence"}
 ```
 
-会话覆盖优先于全局组配置（字段级合并，未覆盖字段回落全局），会话销毁即失效；非法输入返回 `advisor_config: invalid input — <原因>` 且不改动现有覆盖。全局配置仍编辑 `cordis.patch.yml`（二期设置页 UI 统一读写）。
+会话覆盖优先于全局组配置（字段级合并，未覆盖字段回落全局——含 user 层与 base 的合并结果），会话销毁即失效；非法输入返回 `advisor_config: invalid input — <原因>` 且不改动现有覆盖。全局默认的二层编辑见上文（二期设置页写 user 层；恢复默认回落 base）。
 
 ### 迁移说明（v0.2 分组配置）
 
@@ -211,12 +245,12 @@ cp preset/thincoder-eng/* ~/.dsh/.agent-presets/thincoder-eng/
 
 ## 架构说明
 
-- **纯 JS 免构建** —— host 侧全部是 `.mjs`，无 TypeScript、无打包步骤（继承 thincoder 的 zero-dependency 哲学）
-- **零 bare import** —— 不 `import` cordis / schemastery：插件经 junction 安装后 Node 会 realpath 化，从安装目录向上解析不到宿主的包；工具手工构造 ToolDefinition 形状，插件契约只依赖 `export name / inject / apply`
+- **host + client 双层** —— host 侧全部是 `.mjs`（advisor / eng / escalate / consult / 设置页 config API）；client 侧是手写 CJS（`lib/client.js`，设置页「Thincoder」，经 `dsh.client` 声明 + `exports["./client"]` 由 dsh-client-modules 装配）。两层都无 TypeScript、无打包步骤（继承 thincoder 的 zero-dependency 哲学；client 只依赖装配契约 dsh-client-runtime/ui-slots/connection 与壳 seed 的 react）。一期 host-only（交互经对话流工具卡片）；二期（本设置页）引入 client，host 工具不变
+- **零 bare import** —— host 不 `import` cordis / schemastery：插件经 junction 安装后 Node 会 realpath 化，从安装目录向上解析不到宿主的包；工具手工构造 ToolDefinition 形状，插件契约只依赖 `export name / inject / apply`
 - **advisor** = `ctx.llm.stream` 自管工具循环：每轮完整替换 system prompt，配只读工具集（read / glob / grep）；LLM 调用带 **绝对截止定时器**（单轮剩余预算到点即中止，不依赖 chunk 到达）与 chunk 级看门狗双保险（90s 无输出即中止，最多重试 3 次，仍失败转为可诊断的 `provider_stall` 错误；两类结束消息见设计 §3.4）——DSH 的 GenerateOptions 没有 per-request 超时字段，这是移植侧的替代机制
 - **飞刀 / 会诊 / eng-coder** = `ctx.subagents.start`：模型覆盖（agentOptions）、深度限制（maxDepth）、工具过滤（toolFilter）
 - **写门禁** = `tools/pre-execute` waterfall 拦截
-- **host-only** —— 无 client bundle，前端零变更，全部交互经对话流中的工具卡片呈现
+- **设置页 config API** = `ctx.webServer.register` prefix `/thincoder-suite/api`（super-injector 同款；webServer 缺失时跳过注册仅 console.warn——host 工具不受影响）
 
 ## 与上游 thincoder 的差异
 
@@ -233,6 +267,7 @@ MIT —— 见 [LICENSE](./LICENSE)。基于 [thincoder](https://gitee.com/shang
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v0.4 | 2026-09-02 | **二期设置页 UI（config.json user 层）**：全局默认配置分层（entry base ⊕ `$DSH_HOME/.thincoder/config.json` user 层，字段级白名单合并）；DSH 设置面板「Thincoder」页（手写 CJS client 免构建；round1/收敛组 + 记忆开关 + consult/escalate 池 + engCoder 项；保存即生效）；host config API（`/thincoder-suite/api`：GET/PUT/DELETE config、GET/DELETE session、POST apply-session；webServer 缺失降级仅 warn）；advisor/eng_coder 的 config 消费点统一合并 user 层（每次调用时读，U5）；导出校验 helper 供 host API 复用（评审 #5） |
 | v0.3 | 2026-09-02 | **F10** design token 磁盘持久化（`$DSH_HOME/.thincoder/`，重启后 eng_coder 免重评审）；**F11** reviewType 切换重置评审轮次（code↔design 隔离）；thincoder-eng 预设补 PTC（code）工具集（tool-bash/tool-pwsh，native 呈现）；F8 判定启发式迭代至 v4（severity 单元格锚定 + 否定语境扩围）；默认 token TTL 对齐 1h；code review 加固（stream 关闭/超时消息/警告带出） |
 | v0.2 | 2026-09-01/02 | **一期 host 机制**：advisor 分层路由（round1 旗舰 / convergence 快档）、effort 透传、评审记忆开关（includeProjectGuide）、会话级覆盖（advisor_config）、预算模型 + 超时硬生效（绝对截止）、旧配置兼容迁移；**F8** 评审通过判定修复（收敛轮 Fixed 表正常签发）；**F9** eng_coder 子代理资源与确认策略（maxTokens/reasoningEffort/禁提问/禁破坏性 git） |
 | v0.1 | 2026-09-01 | thincoder 四机制（advisor/eng/escalate/consult）移植为 DSH 插件 |
