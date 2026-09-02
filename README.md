@@ -37,7 +37,8 @@ advisor 把它变成 `for round in 1..5 { 权限递减的对账 }`：
 - **响应表协议** —— 被评审方每轮必须回 `| # | Action | Detail |`（Fixed / Not an issue / Deferred），逐条对账
 - **引用验真** —— 评审报告中的 `file:line` 引用逐条与磁盘文件比对，伪造引用直接标注
 - **每轮全新上下文** —— prior 输出以原文注入新会话，防锚定
-- **预算共享** —— code review 与 design review 共用 5 轮预算，修完复审不重新计数
+- **预算共享 + 类型隔离（F11）** —— code review 与 design review 共用 5 轮预算，修完复审不重新计数；但 **reviewType 切换（code ↔ design）时重置轮次与 prior**——新设计文档评审总是从 round 1 开始，不携带 code 评审的收敛上下文（2026-09-02 实测事故修复：code 3 轮后 design 评审误走收敛轮、新文档未被全量评审）
+- **超时硬生效（F5）** —— 单轮评审硬预算 = 该轮组 `timeoutMs`，绝对截止定时器 + chunk 墙钟双检查，静默流/稳定涓流都在预算时刻被中止（消除 606~699s 超跑）；裁决顺序绝对截止优先，stall 重试不豁免预算
 
 ## 工程模式 eng
 
@@ -48,6 +49,17 @@ design-before-code 的运行时门禁：
 - 设计评审的**每一轮**（round 1 与收敛轮）user 消息都携带 `## Approval Signal`——8 位批准码（`[APPROVE:<8hex>]`；token 每评审会话只铸造一次、每轮同码，token 本体不进提示词）。评审通过且无 🔴 Critical 时，advisor 回显 `[APPROVE:<code>]`，宿主校验命中后注入完整 design token（附有效期提示）；`eng_coder` 携带该 token 派实现子代理（token 机械校验，不消费、可多次 spawn；后续评审不通过则撤销，拒绝消息按「未签发 / 已过期 / 不一致」三态分别提示）
 - **双写门禁** —— 工程模式 ON 且主代理无有效 token 时，`write`/`edit` 对产品代码路径的调用被 `tools/pre-execute` 拦截：`src/**` 一律算产品代码，其他目录里非文档扩展名也算；`docs/**` 与根级文档（`.md` / `.txt` 等）豁免——那是架构师的产出物。间接写（shell 等）不拦，靠流程纪律，与上游同款取舍
 - 子代理交付后自动触发交付 code review；变更合并回父会话并重置评审预算
+
+### design token 跨重启持久化（F10）
+
+评审签发的 design token 除内存态外还会镜像到 `$DSH_HOME/.thincoder/design-tokens.json`（profile 根下，与 `super-injector/`、`undo-snapshots/` 平级）——DSH 重启后，同一会话的 `eng_coder` 校验在内存无 token 时自动查盘：本 sessionId 有条目且回传 token 与记录全等且签名/有效期校验通过 → 回填内存态并通过，**有效期内无需重新评审**。
+
+- **只增不改签发协议**：签发判定、TTL（`engTokenTtlMs`）、三态拒绝（未签发 / 已过期 / 不一致）语义不变——磁盘只是第二存储，内存态仍是第一存储与签发源
+- **过期全量清扫**：每次写入时清理所有 session 的过期条目（不只本 session）；过期 token 在 `eng_coder` 校验路径自然落入 expired 拒绝（提示重跑评审铸新 token）
+- **fail-safe**：文件损坏 / 路径不可写 / 被外部删除 → 仅 `console.warn`，签发与校验不崩溃、不误放行；删除存储文件即回到 F10 前的纯内存行为
+- **安全模型**：token 短生命周期（TTL 1h 级）+ HMAC 绑定本机 `THINCODER_TOKEN_SECRET`，明文落盘基于本机信任模型（N3）
+
+详细设计见 `docs/2026-09-02-thincoder-suite-extensions-design.md` §2.1。
 
 配套 **thincoder-eng 预设**（见下文）：新会话一键从工程模式开始。
 
@@ -105,7 +117,7 @@ pnpm add link:<克隆路径>/dsh-thincoder-suite
 
 ## 配置
 
-配置经插件 `cordis.patch.yml` 的 insert 行传入（link: 安装直接编辑克隆目录里的文件即可）：
+配置经插件 `cordis.patch.yml` 的 insert 行传入（link: 安装直接编辑克隆目录里的文件即可）——分组结构见设计文档 `docs/2026-09-01-advisor-config-design.md` §3.1：
 
 ```yaml
 - insert:
@@ -120,27 +132,80 @@ pnpm add link:<克隆路径>/dsh-thincoder-suite
           - provider: provider-b
             model: strong-model-y
             effort: high                # 可选，映射 reasoningEffort
-        # 可选：advisor 评审路由（缺省跟随当前会话模型）
+        # advisor 评审路由（不配置则跟随当前会话模型）——按轮次分层：
         advisor:
-          provider: provider-a
-          model: reviewer-model
-          timeoutMs: 600000
+          round1:                      # 首次全量评审（advisorRound == 0；建议旗舰组）
+            provider: provider-a
+            model: reviewer-model
+            effort: medium             # 可选 off|low|medium|high|max；缺省不传（适配器默认）
+            timeoutMs: 900000          # round1 缺省 600000
+          convergence:                 # 收敛轮（advisorRound >= 1，round 2+ 共用；建议快档）
+            provider: provider-a
+            model: fast-reviewer-model
+            effort: low
+            timeoutMs: 300000          # convergence 缺省 300000
+          includeProjectGuide: false   # 评审是否注入 AGENTS.md（默认 false；评审只认显式 documents）
+        # F9：eng_coder 子代理资源（缺省即安全值，一般无需配置）
+        engCoderMaxTokens: 65536       # eng_coder 子代理输出预算（可选；缺省 65536）
+        engCoderEffort: low            # eng_coder 子代理推理档（可选 off|low|medium|high|max；缺省 low；非法值忽略并警告）
         # 可选：其余开关
         engineering: false              # 所有会话默认进工程模式（默认 false）
         engTokenTtlMs: 3600000          # design token 有效期
         consultTimeoutMs: 600000        # 会诊子代理超时
 ```
 
+字段说明（解析链与校验细节见设计文档 §3.2/§3.6）：
+
+- **provider/model 成对解析**：合并后的组字段（会话覆盖 ⊕ 全局组）→ 旧字段 `advisor.provider/model`（仅 round1，兼容迁移）→ 主代理路由；任一步得到完整 provider/model 对即定案，禁止跨层混搭。两组都没配 → 评审跟随当前会话模型。
+- **effort**：`off|low|medium|high|max`，映射 `reasoningEffort` 透传；非法值忽略并警告（N4），缺省不传（用适配器默认）。
+- **timeoutMs**：单轮评审硬预算（绝对截止，见下）；合法区间 1000~3600000；非法值忽略并警告。
+- **includeProjectGuide**：评审是否注入 `AGENTS.md` 项目记忆（默认 false——评审独立于项目记忆，需求/验收标准请显式传 `documents=[...]`；true 时按 16K 截断注入）。
+- **engCoderMaxTokens / engCoderEffort**：eng_coder 子代理的输出预算与推理档（F9）——实现任务机械执行，低推理档把输出预算留给正文。
+
+### 会话级覆盖（advisor_config 工具）
+
+一期经对话内 `advisor_config` 工具操作当前会话的临时覆盖（`{ action: "get" }` 查看生效配置与来源标注；set/reset 见设计 §3.6）：
+
+```
+advisor_config request={"action":"get"}
+advisor_config request={"action":"set","path":"round1.effort","value":"low"}
+advisor_config request={"action":"reset","path":"convergence"}
+```
+
+会话覆盖优先于全局组配置（字段级合并，未覆盖字段回落全局），会话销毁即失效；非法输入返回 `advisor_config: invalid input — <原因>` 且不改动现有覆盖。全局配置仍编辑 `cordis.patch.yml`（二期设置页 UI 统一读写）。
+
+### 迁移说明（v0.2 分组配置）
+
+- 旧字段 `advisor.provider / advisor.model / advisor.timeoutMs` **仅映射 round1 组**（首次全量评审；timeoutMs 亦只作 round1 缺省来源）；**收敛轮（round 2+）不会沿用旧字段**——未配置 `advisor.convergence` 时收敛轮回落主代理路由（缺失组视为未配置，属正常回落而非错误）。
+- 升级到分组配置后建议显式配置两组（round1 旗舰保质量、convergence 快档核销提速）：
+  ```yaml
+  advisor:
+    round1:                 # 首次全量评审（旗舰）
+      provider: provider-a
+      model: strong-model
+      effort: medium
+      timeoutMs: 900000
+    convergence:            # 收敛轮（快档）
+      provider: provider-a
+      model: fast-model
+      effort: low
+      timeoutMs: 300000
+    includeProjectGuide: false   # 评审是否注入 AGENTS.md（默认 false）
+  ```
+- 详细设计见 `docs/2026-09-01-advisor-config-design.md`。
+
 ## thincoder-eng 预设（可选）
 
-[`preset/thincoder-eng/`](./preset/thincoder-eng/) 是工程模式的一键入口：用它创建的会话从第一句起就是工程模式（架构师角色 + 门禁全开）。
+[`preset/thincoder-eng/`](./preset/thincoder-eng/) 是工程模式的一键入口：用它创建的会话从第一句起就是工程模式（架构师角色 + 门禁全开）。工具集 = DSH 内置 code（PTC）预设工具集 − Code-Mode 呈现（native 直调，含 `tool-bash`/`tool-pwsh` shell 工具，平台条件禁用与 code preset 逐字一致）。
 
-安装：把两个文件复制到 `~/.dsh/.agent-presets/thincoder-eng/`：
+**安装 / 同步**：把两个文件复制到 `~/.dsh/.agent-presets/thincoder-eng/`（本机 = `D:\DSH-Portable\profile\.agent-presets\thincoder-eng\`）：
 
 ```bash
 mkdir -p ~/.dsh/.agent-presets/thincoder-eng
 cp preset/thincoder-eng/* ~/.dsh/.agent-presets/thincoder-eng/
 ```
+
+**preset 源文件变更后需重新同步**：改动发生在插件仓库的 `preset/thincoder-eng/*`（本仓库是单一事实源），部署副本不会自动跟随——再跑一次上面的复制命令；**新会话**生效（已运行会话不重装 preset）。
 
 新建会话时选择 "Thincoder Eng" 预设即可。插件监听 `agent/session-start` 识别预设 id 自动进入工程模式——预设本身不重复装配插件（避免双实例）。
 
@@ -148,7 +213,7 @@ cp preset/thincoder-eng/* ~/.dsh/.agent-presets/thincoder-eng/
 
 - **纯 JS 免构建** —— host 侧全部是 `.mjs`，无 TypeScript、无打包步骤（继承 thincoder 的 zero-dependency 哲学）
 - **零 bare import** —— 不 `import` cordis / schemastery：插件经 junction 安装后 Node 会 realpath 化，从安装目录向上解析不到宿主的包；工具手工构造 ToolDefinition 形状，插件契约只依赖 `export name / inject / apply`
-- **advisor** = `ctx.llm.stream` 自管工具循环：每轮完整替换 system prompt，配只读工具集（read / glob / grep）；LLM 调用带 chunk 级看门狗（90s 无输出即中止，最多重试 3 次，仍失败转为可诊断的 `provider_stall` 错误——DSH 的 GenerateOptions 没有 per-request 超时字段，这是移植侧的替代机制）
+- **advisor** = `ctx.llm.stream` 自管工具循环：每轮完整替换 system prompt，配只读工具集（read / glob / grep）；LLM 调用带 **绝对截止定时器**（单轮剩余预算到点即中止，不依赖 chunk 到达）与 chunk 级看门狗双保险（90s 无输出即中止，最多重试 3 次，仍失败转为可诊断的 `provider_stall` 错误；两类结束消息见设计 §3.4）——DSH 的 GenerateOptions 没有 per-request 超时字段，这是移植侧的替代机制
 - **飞刀 / 会诊 / eng-coder** = `ctx.subagents.start`：模型覆盖（agentOptions）、深度限制（maxDepth）、工具过滤（toolFilter）
 - **写门禁** = `tools/pre-execute` waterfall 拦截
 - **host-only** —— 无 client bundle，前端零变更，全部交互经对话流中的工具卡片呈现
@@ -163,3 +228,11 @@ cp preset/thincoder-eng/* ~/.dsh/.agent-presets/thincoder-eng/
 ## License
 
 MIT —— 见 [LICENSE](./LICENSE)。基于 [thincoder](https://gitee.com/shanghai-xinbo/thincoder)（[thincoder.com](https://thincoder.com/)）移植，向上游贡献者致谢。
+
+## 变更记录
+
+| 版本 | 日期 | 变更 |
+|---|---|---|
+| v0.3 | 2026-09-02 | **F10** design token 磁盘持久化（`$DSH_HOME/.thincoder/`，重启后 eng_coder 免重评审）；**F11** reviewType 切换重置评审轮次（code↔design 隔离）；thincoder-eng 预设补 PTC（code）工具集（tool-bash/tool-pwsh，native 呈现）；F8 判定启发式迭代至 v4（severity 单元格锚定 + 否定语境扩围）；默认 token TTL 对齐 1h；code review 加固（stream 关闭/超时消息/警告带出） |
+| v0.2 | 2026-09-01/02 | **一期 host 机制**：advisor 分层路由（round1 旗舰 / convergence 快档）、effort 透传、评审记忆开关（includeProjectGuide）、会话级覆盖（advisor_config）、预算模型 + 超时硬生效（绝对截止）、旧配置兼容迁移；**F8** 评审通过判定修复（收敛轮 Fixed 表正常签发）；**F9** eng_coder 子代理资源与确认策略（maxTokens/reasoningEffort/禁提问/禁破坏性 git） |
+| v0.1 | 2026-09-01 | thincoder 四机制（advisor/eng/escalate/consult）移植为 DSH 插件 |
