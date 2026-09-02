@@ -267,6 +267,7 @@ MIT —— 见 [LICENSE](./LICENSE)。基于 [thincoder](https://gitee.com/shang
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v0.5 | 2026-09-02 | **设置页 UI 打磨（code review 收敛）**：样式全量换宿主语义 token（`--dsw-alias-*` 深浅色主题随动、不透明卡片表面、字号提升至正文 13.5/提示 12）；code review 2 轮收敛 11 项修复（stateOf 接线/记忆开关显示路径/模型池 poolDirty 语义/草稿从 user 层播种/错误可见可重试等）+ 分歧审计 D1（池保存丢失）/D2（cwdHint 形态）修复；交互与文案（组卡用途说明、字段中文标签、池列头、恢复默认二次确认、术语白话化）；测试 50/50 全绿 |
 | v0.4 | 2026-09-02 | **二期设置页 UI（config.json user 层）**：全局默认配置分层（entry base ⊕ `$DSH_HOME/.thincoder/config.json` user 层，字段级白名单合并）；DSH 设置面板「Thincoder」页（手写 CJS client 免构建；round1/收敛组 + 记忆开关 + consult/escalate 池 + engCoder 项；保存即生效）；host config API（`/thincoder-suite/api`：GET/PUT/DELETE config、GET/DELETE session、POST apply-session；webServer 缺失降级仅 warn）；advisor/eng_coder 的 config 消费点统一合并 user 层（每次调用时读，U5）；导出校验 helper 供 host API 复用（评审 #5） |
 | v0.3 | 2026-09-02 | **F10** design token 磁盘持久化（`$DSH_HOME/.thincoder/`，重启后 eng_coder 免重评审）；**F11** reviewType 切换重置评审轮次（code↔design 隔离）；thincoder-eng 预设补 PTC（code）工具集（tool-bash/tool-pwsh，native 呈现）；F8 判定启发式迭代至 v4（severity 单元格锚定 + 否定语境扩围）；默认 token TTL 对齐 1h；code review 加固（stream 关闭/超时消息/警告带出） |
 | v0.2 | 2026-09-01/02 | **一期 host 机制**：advisor 分层路由（round1 旗舰 / convergence 快档）、effort 透传、评审记忆开关（includeProjectGuide）、会话级覆盖（advisor_config）、预算模型 + 超时硬生效（绝对截止）、旧配置兼容迁移；**F8** 评审通过判定修复（收敛轮 Fixed 表正常签发）；**F9** eng_coder 子代理资源与确认策略（maxTokens/reasoningEffort/禁提问/禁破坏性 git） |
