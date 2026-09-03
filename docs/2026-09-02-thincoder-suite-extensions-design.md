@@ -1,7 +1,7 @@
 # thincoder-suite 扩展：F10 design token 持久化 + thincoder-eng PTC 工具集
 
 - 日期：2026-09-02
-- 状态：PROPOSED（待用户发起设计评审）
+- 状态：✅ 已实施（2026-09-02 v0.3 交付：token-store/advisor.mjs/eng.mjs/preset PTC/测试；F11 同批 hotfix）
 - 范围：F10（token 跨重启存活）+ thincoder-eng 预设工具集补齐（PTC/code preset 工具集 + native 呈现）
 - 关联文档：`../METHODOLOGY.md`（工程工作流）、`../docs/2026-09-01-advisor-config-design.md`（一期交付，F8/F9 先例）、`README.md`
 
