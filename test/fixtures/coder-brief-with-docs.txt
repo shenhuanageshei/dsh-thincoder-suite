@@ -1,0 +1,20 @@
+# Implementation Task (engineering workflow)
+implement the design doc
+
+## Docs involved (read them ALL in full before coding)
+- docs/2026-09-02-session-state-stages-design.md
+- docs/other.md
+
+Implement to the full design — no silent degradation. If a stated design element is missing from the docs above, note it in your report; do not invent.
+Do not modify any file not listed in the design.
+Do NOT run destructive git commands (rebase / reset --hard / clean -f / push --force) — the parent session owns git history operations.
+Do NOT ask the user questions (ask_user_question is disabled for you). If a user decision is needed, list it under 'Decisions needed from the parent session' in your report.
+
+Your last message IS the report the parent sees. Make it complete:
+1. What you changed and why
+2. The path of every file you touched
+3. How you verified (checks/tests run, with results)
+4. Any deviations from the design or items worth follow-up
+
+END the report with one line exactly in this format (comma-separated relative paths, or 'none'):
+Touched files: <paths>

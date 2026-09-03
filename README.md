@@ -61,6 +61,32 @@ design-before-code 的运行时门禁：
 
 详细设计见 `docs/2026-09-02-thincoder-suite-extensions-design.md` §2.1。
 
+### 会话级状态持久化（F12）
+
+工程模式与评审协议推进状态（`engineering` tri-state、`advisorRound`/`lastAdvisorOutput`/`lastReviewType`、`mutatedThisRun`、`touchedFiles`、`advisorOverride`）镜像到 `$DSH_HOME/.thincoder/session-state.json`（与 `design-tokens.json` **分文件**——回滚独立：删 session-state.json 回纯内存行为，token 不受牵连）。宿主恢复会话时 `agent/session-start` 预载恢复：会话 Map 无该 key 且盘上条目在 7d TTL 内 → 白名单校验 + 规范化后整条灌入（**只填空槽**——本进程已活跃/已推进的会话不被盘上陈旧条目覆盖）；`engineering === true` 恢复后自动重挂工程模式人格 section。
+
+- **写点**（§2.3 语义转换点，非每次 mutation）：eng enter/exit 翻转后、advisor 完成分支轮次推进后与 F11 类型切换重置后、eng_coder/escalate 交付后、advisor_config set/reset 与设置页 apply/reset-session 后；`lastAdvisorOutput` 落盘前超 32K 截断 + `[truncated]` 标记、`touchedFiles` 去重封顶 200
+- **原子组**：round 与 prior 一起落盘；恢复时 `round>0 且无 prior → round=0`（单存轮次会恢复出「无 prior 的收敛轮」，恢复侧规范化消解）
+- **清理**：`session/disposed` 删除条目 + 写时全量清扫 `lastSeen` 超 7d 孤儿（TTL 是防泄漏常量，非用户配置）
+- **fail-safe**：文件损坏/缺失/超 TTL → 回落纯内存行为；写失败仅 `console.warn`（丢=回上一写点的内存语义）
+- **凭证隔离**：session-state.json **绝不含 designToken**（F10 token-store 单路管理，双盘写=双事实源）
+- **边界**：停机期间改了 config 默认 → 恢复的显式翻转值胜出（tri-state 优先级内建，启动日志一行观测）；换 preset 后恢复 engineering=true → 人格段并存（接受并文档化）
+- **已知限制**：单宿主进程多会话并发 read-modify-write 为 last-write-wins（写低频 + 丢=回内存行为，接受）
+
+详细设计见 `docs/2026-09-02-session-state-stages-design.md` §2。
+
+### eng_coder 阶段化任务书（F13）
+
+`eng_coder` 新增可选结构化参数 `stages`（每项 `{ goal, files, acceptance, check }` 全必填非空，schema `maxItems: 10`，建议 2–8 个可自查交付增量；渲染前另有代码级防御校验）——大任务按显式阶段执行：统一编号四段渲染（`### Stage N — goal / Files / Acceptance / Self-check`）+ 阶段纪律（按序执行；自查不过不进下一阶段；阶段内只动本阶段 files；同一阶段第二次真修仍失败 → STOP 上报；跨阶段文件需求 → STOP 上报）。
+
+- **单次 spawn 跑完全部阶段**（有意设计，勿改 per-stage：每阶段一 spawn 会触发 advisorRound 清零 + touchedFiles 合并的隐性耦合，且 docs 重复读、上下文断裂）
+- **stage 状态表前置**：交付报告必须以 `| Stage | Status (passed/failed/skipped) | check summary |` 开头——输出被 max-tokens 掐断也保住分类账（Touched files 被掐丢可从表内 Files 列重建）；预算将尽 → 停止开启新阶段、跑完当前 check、以 stage 表收尾
+- **阶段失败**：父代理裁决后新开一次 eng_coder（从失败阶段起 corrected stages）——token 不消费可多次 spawn；不做整体自动重试
+- **漂移探测**：未传 stages 但 task 文本匹配 `/stage|阶段\s*\d/i` → 返回前缀警告（提醒改用结构化参数）
+- **零回归**：stages 缺省时任务书逐字节等于现行（fixture 回归锁死——三个历史交付共同依赖的契约）
+
+详细设计见 `docs/2026-09-02-session-state-stages-design.md` §3。
+
 配套 **thincoder-eng 预设**（见下文）：新会话一键从工程模式开始。
 
 ## 飞刀 escalate
@@ -256,7 +282,7 @@ cp preset/thincoder-eng/* ~/.dsh/.agent-presets/thincoder-eng/
 
 1. **LLM 调用超时**：上游有 per-request `FETCH_TIMEOUT`；DSH 的 GenerateOptions 无超时字段，移植版以 chunk 级看门狗（90s）+ 3 次重试替代，挂起的 provider 调用最终转为有界可诊断错误
 2. **子代理宿主**：上游 spawn 独立 CLI 进程；移植版用 DSH 进程内 subagents（spawn / fork provider）
-3. **eng 会话状态**：内存态（会话内 enter / exit 翻转），DSH 重启后回到配置默认值
+3. **eng 会话状态**：内存态为主 + `$DSH_HOME/.thincoder/session-state.json` 镜像（F12）——`agent/session-start` 预载恢复 engineering/评审轮次（只填空槽，7d TTL，7 天以上未见的孤儿写时清扫）；删除该文件即回纯内存行为
 4. **预设入口**：DSH 特有——工程模式的新会话一键入口用 agent preset 实现，机制本体留在插件（运行时状态机装不进静态预设）
 
 ## License
@@ -267,6 +293,7 @@ MIT —— 见 [LICENSE](./LICENSE)。基于 [thincoder](https://gitee.com/shang
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v0.6 | 2026-09-03 | **F12 会话级状态持久化**：`$DSH_HOME/.thincoder/session-state.json`（与 design-tokens.json 分文件、回滚独立、原子写 tmp+rename）——engineering/评审轮次+prior/lastReviewType/mutatedThisRun/touchedFiles(去重封顶 200)/advisorOverride 跨重启恢复（`agent/session-start` 预载、只填空槽、engineering=true 重挂人格 section、7d TTL 写时清扫、session/disposed 删除、**绝不含 designToken**）；公共路径解析抽 `lib/dsh-home.mjs`（token-store/config-store 两处单一化 + token-store 顺带升级原子写，行为零变化）。**F13 eng_coder 阶段化任务书**：可选 `stages` 结构化参数（schema maxItems 10 + 渲染前防御校验）——统一编号四段渲染、阶段纪律（自查不过不进下一阶段/两败 STOP）、stage 状态表前置（max-tokens 掐断生存性）、预算将尽条款、漂移探测前缀警告；stages 缺省时 brief 逐字节等于现行（fixture 回归锁死）。**D 复核**：评审工具输出预算确认已对齐上游 64K（readonly-tools 不动，新增 T17 截断阈值+续读指针回归锁）；compactMessages keyFiles 去重 + 上限 15（防中段压缩后评审重复读已查文件）；测试 50 → 78 全绿 |
 | v0.5 | 2026-09-02 | **设置页 UI 打磨（code review 收敛）**：样式全量换宿主语义 token（`--dsw-alias-*` 深浅色主题随动、不透明卡片表面、字号提升至正文 13.5/提示 12）；code review 2 轮收敛 11 项修复（stateOf 接线/记忆开关显示路径/模型池 poolDirty 语义/草稿从 user 层播种/错误可见可重试等）+ 分歧审计 D1（池保存丢失）/D2（cwdHint 形态）修复；交互与文案（组卡用途说明、字段中文标签、池列头、恢复默认二次确认、术语白话化）；测试 50/50 全绿 |
 | v0.4 | 2026-09-02 | **二期设置页 UI（config.json user 层）**：全局默认配置分层（entry base ⊕ `$DSH_HOME/.thincoder/config.json` user 层，字段级白名单合并）；DSH 设置面板「Thincoder」页（手写 CJS client 免构建；round1/收敛组 + 记忆开关 + consult/escalate 池 + engCoder 项；保存即生效）；host config API（`/thincoder-suite/api`：GET/PUT/DELETE config、GET/DELETE session、POST apply-session；webServer 缺失降级仅 warn）；advisor/eng_coder 的 config 消费点统一合并 user 层（每次调用时读，U5）；导出校验 helper 供 host API 复用（评审 #5） |
 | v0.3 | 2026-09-02 | **F10** design token 磁盘持久化（`$DSH_HOME/.thincoder/`，重启后 eng_coder 免重评审）；**F11** reviewType 切换重置评审轮次（code↔design 隔离）；thincoder-eng 预设补 PTC（code）工具集（tool-bash/tool-pwsh，native 呈现）；F8 判定启发式迭代至 v4（severity 单元格锚定 + 否定语境扩围）；默认 token TTL 对齐 1h；code review 加固（stream 关闭/超时消息/警告带出） |
