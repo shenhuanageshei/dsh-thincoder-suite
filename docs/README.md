@@ -10,6 +10,7 @@
 | [2026-09-02-thincoder-suite-extensions-design.md](2026-09-02-thincoder-suite-extensions-design.md) | 2026-09-02 | F10 design token 磁盘持久化（重启存活）+ thincoder-eng 预设 PTC 工具集（PROPOSED） |
 | [2026-09-02-settings-ui-design.md](2026-09-02-settings-ui-design.md) | 2026-09-02 | 二期：DSH 设置页「Thincoder」全局配置编辑器（config.json user 层 + 手写 CJS client；U 系列验收；定案取代 2026-09-01 §4/§5.2）——已实施（v0.4） |
 | [2026-09-02-session-state-stages-design.md](2026-09-02-session-state-stages-design.md) | 2026-09-02 | F12 会话级状态持久化（engineering/评审轮次重启恢复）+ F13 eng_coder 阶段化任务书（stages）+ D 复核（工具输出已 64K，keyFiles 改进）——设计输入为会诊（consult 2026-09-02）——已实施（v0.6） |
+| [2026-09-05-defect-remediation-requirements.md](2026-09-05-defect-remediation-requirements.md) | 2026-09-05 | 机制缺陷治理 R0-R4：需求三层（不变式总体目标 / 12 用户故事 / 7 非功能标准）——设计输入为会诊（consult 2026-09-05，2/3 回复）——PROPOSED |
 
 ## 标准
 
