@@ -10,15 +10,15 @@
 
 | ID | 主题 | 现象（一句话） | 根因状态 | 证据 | 风险 | 轮次 | 状态 |
 |---|---|---|---|---|---|---|---|
-| D-01 | 失败语义 | advisor dsh 空响应不可诊断：两种形态坍缩为同一句文案（finish===null / stop 零块），finish.reason 从不记录；空响应不重试、不进任何计数 | 已定位 advisor.mjs:779（审计修正：坍缩形态实为 2+1，error-无-message 有独立路径但同样无归因） | 🟡 | R1 观测 + R3 重试/分类（D-裁决-1） | 待修 |
+| D-01 | 失败语义 | advisor dsh 空响应不可诊断：两种形态坍缩为同一句文案（finish===null / stop 零块），finish.reason 从不记录；空响应不重试、不进任何计数 | 已定位 advisor.mjs:779（审计修正：坍缩形态实为 2+1，error-无-message 有独立路径但同样无归因）。**2026-09-05 生产复现 ×2**：① glm-5.3/max；② deepseek-v4-pro/high——跨模型复现指向结构性根因：LLM_MAX_TOKENS=8192（advisor.mjs:57 硬编码）在推理阶段耗尽 → finish=length 零文本块 → 代码不检查 length 落入坍缩路径（finish.kind 无记录，推断待 R1 观测证实） | 🔴（升级：两次阻塞设计评审→阻塞 token 签发→阻塞实施链） | R1 观测 + R3 重试/分类（D-裁决-1）；修复应含 finish=length 显式分类与 maxTokens 不足的独立诊断 | 待修 |
 | D-02 | 能力校验 | effort 校验漏点实为矩阵级：consult:165 / escalate:207 裸传；eng:399 codex 用原始值且 :385 按父模型解析（对 codex 无意义）；全部 codex 行无 L1（catalog 数据存在但从未用作校验源）；effort-resolve.mjs:6 「四点同修」注释为假 | 已定位（消费点×层矩阵见审计 §4，9 行中 6 行 GAP） | 🔴 | R1（D-裁决-2 最近支持档） | 待修 |
 | D-03 | 执行架构 | eng_coder codex 路径完全无钳制无告警：默认 30min 预算在 600s 墙钟下静默死亡 | 已定位 eng.mjs:402-411 | 🔴 | R2（jobs 迁移） | 待修 |
 | D-04 | 执行架构 | escalate followup 绕过 budgetCap：runner.timeoutMs ?? 600000 = 零余量撞墙 | 已定位 escalate.mjs:101 + adapter:506 | 🔴 | R2 | 待修 |
-| D-05 | 执行架构 | jobs 派发 job id 恒显 "?"：平台 start 返回 branded string，插件取 .id 落空；测试 fake 返回对象掩盖本缺陷 | 已定位 advisor.mjs:1072；平台 dsh-jobs-local/lib/index.js:176 `return id` | 🟡 | R2 | 待修 |
+| D-05 | 执行架构 | jobs 派发 job id 恒显 "?"：平台 start 返回 branded string，插件取 .id 落空；测试 fake 返回对象掩盖本缺陷 | 已定位 advisor.mjs:1072；平台 dsh-jobs-local/lib/index.js:176 `return id`。**2026-09-05 生产复现**：本次设计评审派发返回 "background job ?" | 🟡 | R2 | 待修 |
 | D-06 | 并发安全 | advisor 后台评审无 single-flight：同会话二次调用照派第二个 job，双 finalize → 轮次双增、prior 踩踏 | 已定位（无 in-flight map；平台 10/owner 上限不是替代） | 🔴 | R2 | 待修 |
 | D-07 | 回落自愈 | 回落活锁：计数在回落**开始前**清零（:1015）；失败不推进 advisorRound → MAX_ADVISOR_ROUNDS 对失败序列完全失效，codex↔dsh 无界交替 | 已定位 advisor.mjs:1015/:942 | 🔴 | R3（D-裁决-3 连败 2 次硬停） | 待修 |
 | D-08 | 评审协议 | ~~design token 尾部截断丢失~~ **已驳回**：平台截断为保尾语义（retainTail），token 位于尾部反而安全；相邻真缺陷是 D-09 | 已驳回（dsh-tool-jobs/lib/index.js:100-107 TextRetainer kind:"tail"） | — | — | 已驳回（US-3 改为回归测试钉死该平台保证） |
-| D-09 | 评审协议 | 派发文案谎称「通知含评审全文」——平台完成通知只含一行指针，全文必须 job_output 读取 | 已定位 advisor.mjs:1074 vs dsh-tool-jobs:116-132 | 🟡 | R2 | 待修 |
+| D-09 | 评审协议 | 派发文案谎称「通知含评审全文」——平台完成通知只含一行指针，全文必须 job_output 读取 | 已定位 advisor.mjs:1074 vs dsh-tool-jobs:116-132。**2026-09-05 生产复现**：本次派发返回文本即含该虚假承诺 | 🟡 | R2 | 待修 |
 | D-10 | 并发安全 | 晚到的 job finalize 复活已重置状态：无代际/版本检查，40min job 完成于 eng 交付重置之后会覆写 advisorRound/prior | 已定位 advisor.mjs:934-986 vs eng.mjs:415-422 | 🔴 | R2 | 待修 |
 | D-11 | 进程卫生 | 写任务截断杀 = 半途编辑残留 + 无术后报告 + touchedFiles 丢失（partial 无 Touched 行）；jobs 迁移只护优雅销毁路径，宿主硬死孤儿仍在 | 已定位 adapter:626-635 + 硬死无 dispose | 🔴 | R2（告警+指引+清扫；硬死边界文档化） | 待修 |
 | D-12 | 设置页 UX | 保存竞态：busy 只禁按钮，表单可编辑；成功后 refreshView 整体替换草稿，保存期间编辑被静默覆盖 | 已定位 client.js:697/:552 | 🟡 | R4 | 待修 |
