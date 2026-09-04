@@ -10,7 +10,7 @@
 
 | ID | 主题 | 现象（一句话） | 根因状态 | 证据 | 风险 | 轮次 | 状态 |
 |---|---|---|---|---|---|---|---|
-| D-01 | 失败语义 | advisor dsh 空响应不可诊断：两种形态坍缩为同一句文案（finish===null / stop 零块），finish.reason 从不记录；空响应不重试、不进任何计数 | 已定位 advisor.mjs:779（审计修正：坍缩形态实为 2+1，error-无-message 有独立路径但同样无归因）。**2026-09-05 生产复现 ×2**：① glm-5.3/max；② deepseek-v4-pro/high——跨模型复现指向结构性根因：LLM_MAX_TOKENS=8192（advisor.mjs:57 硬编码）在推理阶段耗尽 → finish=length 零文本块 → 代码不检查 length 落入坍缩路径（finish.kind 无记录，推断待 R1 观测证实） | 🔴（升级：两次阻塞设计评审→阻塞 token 签发→阻塞实施链） | R1 观测 + R3 重试/分类（D-裁决-1）；修复应含 finish=length 显式分类与 maxTokens 不足的独立诊断 | 待修 |
+| D-01 | 失败语义 | advisor dsh 空响应不可诊断：两种形态坍缩为同一句文案（finish===null / stop 零块），finish.reason 从不记录；空响应不重试、不进任何计数 | 已定位 advisor.mjs:779（审计修正：坍缩形态实为 2+1，error-无-message 有独立路径但同样无归因）。**2026-09-05 生产复现 ×2**：① glm-5.3/max；② deepseek-v4-pro/high——跨模型复现指向结构性根因：LLM_MAX_TOKENS=8192（advisor.mjs:57 硬编码）在推理阶段耗尽 → finish=length 零文本块 → 代码不检查 length 落入坍缩路径（finish.kind 无记录，推断待 R1 观测证实） | 🔴（升级：两次阻塞设计评审→阻塞 token 签发→阻塞实施链） | R1 观测 + R3 重试/分类（D-裁决-1）；修复应含 finish=length 显式分类、maxTokens 不足的独立诊断、**maxOutputTokens 可配置化**。〔2026-09-05 用户授权热修：LLM_MAX_TOKENS 8192→16384 一行（工程模式例外，留痕于此）；R1 正式化〕 | 待修（热修已落地，正式修复在 R1） |
 | D-02 | 能力校验 | effort 校验漏点实为矩阵级：consult:165 / escalate:207 裸传；eng:399 codex 用原始值且 :385 按父模型解析（对 codex 无意义）；全部 codex 行无 L1（catalog 数据存在但从未用作校验源）；effort-resolve.mjs:6 「四点同修」注释为假 | 已定位（消费点×层矩阵见审计 §4，9 行中 6 行 GAP） | 🔴 | R1（D-裁决-2 最近支持档） | 待修 |
 | D-03 | 执行架构 | eng_coder codex 路径完全无钳制无告警：默认 30min 预算在 600s 墙钟下静默死亡 | 已定位 eng.mjs:402-411 | 🔴 | R2（jobs 迁移） | 待修 |
 | D-04 | 执行架构 | escalate followup 绕过 budgetCap：runner.timeoutMs ?? 600000 = 零余量撞墙 | 已定位 escalate.mjs:101 + adapter:506 | 🔴 | R2 | 待修 |
