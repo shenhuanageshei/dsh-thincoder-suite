@@ -90,7 +90,7 @@ escalate codex（首次 + **followup**，D-04 一并修）与 eng_coder codex �
 - 预算 > budgetCap 且 jobs 可用 → 派发（owner 绑定 agent、cancel 走 ctrl.abort、run() 内自有 watchdog）；预算 ≤ cap → 同步执行（现状）。
 - **工具契约**（UI 决策 UI-2）：立即返回 job 句柄 + 显式指令「**等待完成通知后再继续**（发散审计/交付评审）；长任务勿用 job_output wait 阻塞等待（平台等待上限 600s）」——修正 D-09 的虚假承诺文本。
 - **簿记进 done() 且仅成功分支**（D-20 一并修）：escalate 的 touchedFiles 合并 + codexThreads 记录、eng 的轮次重置/mutatedThisRun/touched 合并，全部移入任务完成回调的成功分支；失败分支只输出诊断 + partial 的 advisory touched 提示。
-- **followup 预算**：followup 路径预算解析与首次一致（runner.timeoutMs → budgetCap 钳制/jobs 判定），消除 D-04 的零余量撞墙。
+- **followup 预算**：followup 路径预算解析与首次一致（runner.timeoutMs → budgetCap 钳制/jobs 判定），消除 D-04 的零余量撞墙；**补 followup effort 复用回归用例**（R1 审计 🔵5：首次交付保存已解析 runner，followup 复用——锁死该语义）。
 - jobs 缺失降级：同步 + 钳制 + 响亮告警（镜像 advisor）。
 
 ### 4.2 D-21 dsh 子代理路径（DP-1，评审裁定）
@@ -113,6 +113,7 @@ escalate codex（首次 + **followup**，D-04 一并修）与 eng_coder codex �
 - **D-16**：mitigation 收口——钳制告警（已有）+ 设置页提示（已有）+ 派发时若 `budgetCapMs ≥ 600000` 输出一次不变式提醒（「确认已同步提高平台 maxWallMs 且 cap < wall」）；登记表标注不可完全强制。
 - **D-22**：`codexFailureCount` 会话销毁清理（挂到既有 session/disposed 清理组）；consult 子代理 run 补 dispose；`cleanCwdRoot` 死旋钮删除（消费点与注释一并清）。
 - **R2 附带观测**（供 D-15 与 maxWallMs 留证）：adapter 退出时记录本次运行最大静默间隙（lastActivityAt 差分最大值）到诊断/warn。
+- **R1 code review 🔵 折入**：① escalate effort-note 前缀统一为 `\n\n[thincoder-suite]`（与其余消费点对齐）；② advisor codex 行的 `resolveCodexCliGlobals` warnings 并入 `route.warnings`（手编 config 非法 codexCi 值运行时同样响亮告警）。
 
 ### 4.6 R2 受影响文件
 
@@ -168,7 +169,7 @@ busy 期间禁用全部表单输入（非仅按钮）；保存成功后的 refre
 
 ### 6.4 D-24 + 收尾
 
-eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠账）；全部登记条目状态核对；METHODOLOGY 文档历史记入 R0-R4；版本号推进至 0.8.0。
+eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠账）；全部登记条目状态核对；METHODOLOGY 文档历史记入 R0-R4；版本号推进至 0.8.0。**R1 审计 🔵 遗留收口**：① per-point fail-open（元数据缺失）补 1-2 个接线级用例（或接受 resolver 级覆盖并记录）；② 登记表 D-02 用例数 17→19 更正；③ 登记表 D-18「TIMEOUT 信封补 usage」措辞收窄（仅 idle-watchdog 信封带结构化 usage，墙钟信封在诊断串内——设计 §3.2 本就只要求诊断）；④ `discoverCodexModels` 缓存无 refresh 通道（R1 评审 #3）——加 refresh 参数或注释缓存语义。
 
 ### 6.5 R4 受影响文件与验收
 
@@ -179,7 +180,7 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 
 | # | 决策 | 轮次 |
 |---|---|---|
-| UI-1 | effort 下拉全部目录化：dsh 行按行 provider+model 取 /catalog 档位；codex 行取 codex catalog；engCard 补模型上下文 | R1 |
+| UI-1 | effort 下拉全部目录化：dsh 行按行 provider+model 取 /catalog 档位；codex 行取 codex catalog；engCard 补模型上下文。**〔2026-09-05 实施裁决〕engCard 上下文来源**：codex 后端 → CodexEffortInput 随 codexCli.model 联动（真实目标模型）；dsh 后端 → dsh 目录档位并集（目标=父代理路由，设置页不可知；运行时 L1 兜底） | R1 |
 | UI-2 | 后台派发返回文本 = job 句柄 + 「等完成通知再继续；勿用 job_output wait 阻塞等长任务」显式指令 | R2 |
 | UI-3 | 保存期间全表单禁用；保存后草稿不被未触碰字段的刷新覆盖，触碰字段保留 + 提示条 | R4 |
 | UI-4 | 设置页新增 `codexCli.maxConcurrent` 字段（默认 8，提示全局 codex 进程上限） | R2 |
