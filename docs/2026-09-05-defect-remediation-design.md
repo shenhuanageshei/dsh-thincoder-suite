@@ -63,6 +63,10 @@ advisor dsh 主路径 + 回落轮：`effective = min(route.timeoutMs, budgetCapM
 
 package.json 版本锚定 0.7.0；`effort-resolve.mjs:6` 注释修正（其余漂移标记随各自轮次修）。
 
+### 3.5b D-01 热修正式化（R1 新增，2026-09-05 热修的配置化收口）
+
+advisor 单次 LLM 输出预算 `LLM_MAX_TOKENS` 由硬编码改为可配置：全局配置 `advisor.maxOutputTokens`（缺省 16384——2026-09-05 用户授权热修值；合法区间 4096..65536）。热修仅改常量值，本节把配置面、设置页字段与越界校验补齐（含回归用例：非法值回落缺省 + 告警）。
+
 ### 3.6 R1 受影响文件
 
 `lib/effort-resolve.mjs`（重规约 + codex resolver）、`lib/codex-adapter.mjs`（导出 catalog 解析）、`lib/advisor.mjs`、`lib/consult.mjs`、`lib/escalate.mjs`、`lib/eng.mjs`、`lib/client.js`（UI-1）、`package.json`、`test/codex-runner.test.mjs`
