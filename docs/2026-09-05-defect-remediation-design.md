@@ -1,13 +1,13 @@
 # 设计文档：机制缺陷分轮修复设计（R1-R4）
 
 - 日期：2026-09-05
-- 状态：PROPOSED（待用户发起设计评审）
+- 状态：APPROVED（2026-09-05 设计评审通过——4🟡+2🔵 发现全部折入；DP-1/2/3 待用户终裁后实施）
 - 上游：[需求文档](2026-09-05-defect-remediation-requirements.md)（含三项用户裁决 D-裁决-1/2/3）· [缺陷登记表](2026-09-05-defect-registry.md)（D-01…D-24，全部条目带证据行号）· 审计报告（thorough 子代理，2026-09-05）
 - 平台契约依据：登记表「平台契约要点」五条（jobs 返回 branded string / 通知只含指针 / cancel→abort / run() 无墙钟 / job_output wait 上限 600s）
 
 ## 1. 问题陈述
 
-四机制 + codex runner 已功能可用（125 测试绿），但机制层存在 8 项 🔴 阻塞级缺陷（effort 矩阵级漏校验、eng codex 无钳制静默死亡、followup 绕过预算、后台无单飞、回落活锁、晚到 finalize 复活状态、写任务半途残留、dsh 子代理路径无界等待）与 10+ 项 🟡/🔵 缺陷。根因横切四个层面：执行架构（回合内 await × 平台墙钟）、失败语义（观测缺失 + 分类坍缩）、自愈边界（回落无封顶）、配置一致性（白名单/数据源漂移）。本设计按「诊断先行 → 架构收口 → 语义完备 → 一致性收尾」分四轮修复，每轮独立提交、独立可回滚、可独立验收。
+四机制 + codex runner 已功能可用（125 测试绿），但机制层存在 9 项 🔴 阻塞级缺陷（**D-01 空响应坍缩**〔2026-09-05 生产复现 ×2 后由 🟡 升级〕、effort 矩阵级漏校验、eng codex 无钳制静默死亡、followup 绕过预算、后台无单飞、回落活锁、晚到 finalize 复活状态、写任务半途残留、dsh 子代理路径无界等待）与 10+ 项 🟡/🔵 缺陷。根因横切四个层面：执行架构（回合内 await × 平台墙钟）、失败语义（观测缺失 + 分类坍缩）、自愈边界（回落无封顶）、配置一致性（白名单/数据源漂移）。本设计按「诊断先行 → 架构收口 → 语义完备 → 一致性收尾」分四轮修复，每轮独立提交、独立可回滚、可独立验收。
 
 ## 2. 总体方案
 
@@ -63,22 +63,23 @@ advisor dsh 主路径 + 回落轮：`effective = min(route.timeoutMs, budgetCapM
 
 package.json 版本锚定 0.7.0；`effort-resolve.mjs:6` 注释修正（其余漂移标记随各自轮次修）。
 
-### 3.5b D-01 热修正式化（R1 新增，2026-09-05 热修的配置化收口）
+### 3.6 D-01 热修正式化（R1 新增，2026-09-05 热修的配置化收口）
 
-advisor 单次 LLM 输出预算 `LLM_MAX_TOKENS` 由硬编码改为可配置：全局配置 `advisor.maxOutputTokens`（缺省 16384——2026-09-05 用户授权热修值；合法区间 4096..65536）。热修仅改常量值，本节把配置面、设置页字段与越界校验补齐（含回归用例：非法值回落缺省 + 告警）。
+advisor 单次 LLM 输出预算 `LLM_MAX_TOKENS` 由硬编码改为可配置：全局配置 `advisor.maxOutputTokens`（缺省 16384——2026-09-05 用户授权热修值；合法区间 4096..65536）。**三面白名单同步落地（N-5/US-10，防 D-13 同类漂移）**：PUT 校验（`index.mjs` topAllowed 增该字段 + 数值区间校验）、配置合并（`config-store.mjs` merge 白名单）、运行时读取（`advisor.mjs` 常量改为 effectiveGlobalConfig 读取 + 越界回落缺省并告警）、设置页字段（`client.js`）。热修仅改常量值，本节补齐全部配置面（含回归用例：非法值回落缺省 + 告警；三面白名单同步断言）。
 
-### 3.6 R1 受影响文件
+### 3.7 R1 受影响文件
 
-`lib/effort-resolve.mjs`（重规约 + codex resolver）、`lib/codex-adapter.mjs`（导出 catalog 解析）、`lib/advisor.mjs`、`lib/consult.mjs`、`lib/escalate.mjs`、`lib/eng.mjs`、`lib/client.js`（UI-1）、`package.json`、`test/codex-runner.test.mjs`
+`lib/effort-resolve.mjs`（重规约 + codex resolver）、`lib/codex-adapter.mjs`（导出 catalog 解析）、`lib/advisor.mjs`（含 maxOutputTokens 配置化）、`lib/consult.mjs`、`lib/escalate.mjs`、`lib/eng.mjs`、`lib/index.mjs` + `lib/config-store.mjs`（maxOutputTokens 白名单两面）、`lib/client.js`（UI-1 + 新字段）、`package.json`、`test/codex-runner.test.mjs`
 
-### 3.7 R1 验收标准
+### 3.8 R1 验收标准
 
 1. 矩阵 9 消费点全部转绿：每点 ≥1 回归用例（非法档 → 最近档回落 + note 断言；元数据缺失 → 透传 + 告警断言）；
 2. tie-break 用例：medium 缺失且 low/high 皆支持 → 取 high（DP-2 过评审后锁定）；
 3. codex 行用例：catalog 命中/未命中/off→null 三形态；
 4. 空响应文本含分类行与观测字段；
 5. dsh 超限预算钳制告警用例；版本 0.7.0 入库；
-6. 全量测试绿（≥125 基线 + 新增）。
+6. 全量测试绿（≥125 基线 + 新增）；
+7. maxOutputTokens 配置化验收：非法值回落缺省 + 告警用例；三面白名单同步断言（PUT 接受 ⊕ merge 保留 ⊕ 运行时生效）。
 
 ## 4. R2 — 执行架构与进程生命周期
 
@@ -98,7 +99,7 @@ escalate codex（首次 + **followup**，D-04 一并修）与 eng_coder codex �
 
 ### 4.3 D-06 single-flight
 
-模块级在飞表 `Map<sessionId, {mechanism, jobId}>`；advisor + 迁移后的 escalate/eng codex 派发前检查，命中 → 拒绝并告知在飞 job id 与接续方式；settle 时清除。
+模块级在飞表（**复合键 `sessionId + mechanism`**，每机制独立单飞槽位——同会话 advisor 在飞不阻塞 escalate/eng 派发，反之亦然，对齐 US-4/N-3 的 per-session-**per-mechanism** 语义）；advisor + 迁移后的 escalate/eng codex 派发前检查，命中 → 拒绝并告知在飞 job id 与接续方式；settle 时清除。
 
 ### 4.4 D-10 代际检查
 
@@ -125,7 +126,8 @@ escalate codex（首次 + **followup**，D-04 一并修）与 eng_coder codex �
 4. D-20 用例：失败交付不重置轮次/不置 mutated；
 5. job id 真实渲染（fake 返回 string）；D-09 文本修正断言；
 6. 全局并发上限 fail-fast 用例；启动清扫用例；D-22 三项卫生用例；
-7. dsh 路径（DP-1 方案 A）截止告警用例。
+7. dsh 路径（DP-1 方案 A）截止告警用例；
+8. **US-3 token 截断存活性回归**：模拟 job_output 保尾截断（头部丢弃 + [output truncated] 标记）→ 尾部 design token 完整可提取——钉死平台 retainTail 契约（用户故事-测试映射补全）。
 
 ## 5. R3 — 回落与失败语义完备化
 
