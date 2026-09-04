@@ -14,6 +14,8 @@ import {
   buildCodexArgs, resolveExecutableFile, runCodexTask, discoverCodexModels, codexRowLabel,
 } from "../lib/codex-adapter.mjs"
 import { resolveAdvisorRoute } from "../lib/advisor.mjs"
+import { resolveSupportedEffort, resolveCodexRowEffort } from "../lib/effort-resolve.mjs"
+import { startConsultSession, checkConsultSession } from "../lib/consult.mjs"
 import { mergeGlobalConfig } from "../lib/config-store.mjs"
 import { validateGlobalUserConfig } from "../lib/index.mjs"
 import { runEscalate } from "../lib/escalate.mjs"
@@ -761,4 +763,561 @@ test("PUT /config: provider 存在性 = 运行时注册表 ∪ settings（deepse
   await handler(req2, res2)
   assert.equal(res2.statusCode, 400)
   assert.ok(JSON.parse(res2.body).errors.some((e) => e.includes("totally-fake")))
+})
+
+// ————————————— R1 D-02：effort 三层校验收口（D-裁决-2 最近支持档 + DP-2 等距向上取） —————————————
+// 覆盖：dsh resolver（resolveSupportedEffort）核心语义、codex resolver（resolveCodexRowEffort，
+// 数据源 = discoverCodexModels catalog）、9 消费点接线（consult dsh/codex、escalate dsh/codex、
+// eng dsh/codex、advisor codex runner/组 effort、advisor dsh 主路径、advisor 回落轮）。
+
+/** 档位元数据 llm stub：resolveModelInfo 返回 reasoning.efforts（生产 LlmRuntime 实有该 API）。 */
+const ladderLlm = (efforts) => ({
+  async resolveModelInfo() {
+    return { reasoning: { efforts: efforts.map((e) => ({ id: e })) } }
+  },
+})
+
+/** console.warn 捕获（fail-open 响亮告警断言用）。 */
+async function captureWarn(fn) {
+  const warnings = []
+  const orig = console.warn
+  console.warn = (m) => { warnings.push(String(m)) }
+  try { return { value: await fn(), warnings } } finally { console.warn = orig }
+}
+
+/** codex 目录 spawn：debug models 返回注入目录 JSON；exec 任务 spawn 记录 argv。
+ *  各用例用互不重复的 executable（modelCache/probeCache 按 executable 键控——防跨用例目录污染）。 */
+function catalogSpawn(catalogModels, taskSpec) {
+  const catalog = JSON.stringify({ models: catalogModels })
+  let seenArgs = null
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    if (args.includes("debug") && args.includes("models")) return { events: [{ data: catalog }], exitCode: 0 }
+    seenArgs = args
+    return taskSpec ?? { events: [], exitCode: 0, outText: "ok" }
+  })
+  return { spawn, seenArgs: () => seenArgs }
+}
+
+test("R1 effort(dsh): 受支持档保持原样（无 note 无告警）", async () => {
+  const r = await resolveSupportedEffort(ladderLlm(["off", "high", "max"]), "qax", "glm-5.3-flash", "high")
+  assert.equal(r.effort, "high")
+  assert.equal(r.note, null)
+})
+
+test("R1 effort(dsh): 非法档 → 最近支持档 + note（DP-2：medium 缺失且 low/high 皆支持 → 取 high）", async () => {
+  const r = await resolveSupportedEffort(ladderLlm(["low", "high"]), "qax", "m1", "medium")
+  assert.equal(r.effort, "high", "等距 tie-break 向上取（DP-2 终裁：保推理质量）")
+  assert.ok(r.note.includes("falling back to nearest supported effort"))
+  assert.ok(r.note.includes('"high"'))
+  assert.ok(r.note.includes("supported: low|high"))
+})
+
+test("R1 effort(dsh): 非等距取序距离最近（high 对 [off,low] → low；历史事故 low 对 [off,high,max] → off）", async () => {
+  const a = await resolveSupportedEffort(ladderLlm(["off", "low"]), "p", "m", "high")
+  assert.equal(a.effort, "low")
+  // 2026-09-04 生产事故复现档：glm-5.3-flash efforts 仅 off/high/max，engCoderEffort "low" 秒死
+  const b = await resolveSupportedEffort(ladderLlm(["off", "high", "max"]), "p", "glm-5.3-flash", "low")
+  assert.equal(b.effort, "off", "off 序距离最近（D-裁决-2 最近支持档，绝不秒死）")
+  assert.ok(b.note.includes("falling back"))
+})
+
+test("R1 effort(dsh): off 参与档位序（未受支持 → 最近档；受支持 → 保持）", async () => {
+  const a = await resolveSupportedEffort(ladderLlm(["low", "high"]), "p", "m", "off")
+  assert.equal(a.effort, "low")
+  const b = await resolveSupportedEffort(ladderLlm(["off", "high"]), "p", "m", "off")
+  assert.equal(b.effort, "off")
+  assert.equal(b.note, null)
+})
+
+test("R1 effort(dsh): 元数据不可得（resolveModelInfo 缺失/抛错）→ fail-open 透传 + 响亮告警 + note", async () => {
+  const r1 = await captureWarn(() => resolveSupportedEffort({ stream: () => { } }, "p", "m", "low"))
+  assert.equal(r1.value.effort, "low")
+  assert.ok(r1.value.note.includes("passed through unverified"), "透传也带 note（设计 §3.1）")
+  assert.ok(r1.warnings.some((w) => w.includes("effort metadata unavailable")), "响亮告警 console.warn 留档")
+  const throwing = { async resolveModelInfo() { throw new Error("boom") } }
+  const r2 = await captureWarn(() => resolveSupportedEffort(throwing, "p", "m", "low"))
+  assert.equal(r2.value.effort, "low")
+  assert.ok(r2.value.note.includes("lookup failed"))
+  assert.ok(r2.warnings.some((w) => w.includes("lookup failed")))
+})
+
+test("R1 effort(codex): catalog 命中同名 → 保持；非法档 → 最近档（等距向上取 high）", async () => {
+  const cat = catalogSpawn([{ slug: "m1", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] }])
+  const deps = baseDeps(cat.spawn)
+  const keep = await resolveCodexRowEffort(deps, { kind: "codex-cli", model: "m1", executable: "t-eff-keep" }, "low")
+  assert.equal(keep.effort, "low")
+  assert.equal(keep.note, null)
+  const near = await resolveCodexRowEffort(deps, { kind: "codex-cli", model: "m1", executable: "t-eff-keep" }, "medium")
+  assert.equal(near.effort, "high", "medium 对 [low,high] 等距 → 向上取 high")
+  assert.ok(near.note.includes("falling back to nearest supported effort"))
+  assert.ok(near.note.includes("codex model m1"))
+})
+
+test("R1 effort(codex): off → null（不传，codex 无 off）", async () => {
+  const cat = catalogSpawn([{ slug: "m1", supported_reasoning_levels: [{ effort: "low" }] }])
+  const r = await resolveCodexRowEffort(baseDeps(cat.spawn), { kind: "codex-cli", model: "m1", executable: "t-eff-off" }, "off")
+  assert.equal(r.effort, null)
+  assert.equal(r.note, null)
+})
+
+test("R1 effort(codex): catalog 未命中模型 / 目录不可得 / 未配 model → fail-open 透传 + 响亮告警", async () => {
+  const cat = catalogSpawn([{ slug: "other", supported_reasoning_levels: [{ effort: "low" }] }])
+  const r1 = await captureWarn(() => resolveCodexRowEffort(baseDeps(cat.spawn), { kind: "codex-cli", model: "m-missing", executable: "t-eff-miss" }, "low"))
+  assert.equal(r1.value.effort, "low")
+  assert.ok(r1.value.note.includes("未命中 codex 模型目录"))
+  assert.ok(r1.warnings.some((w) => w.includes("未命中")))
+  // 目录不可得：debug models 退出码非零 + CODEX_HOME 指向空目录（无 models_cache.json 兜底，隔离真机 ~/.codex）
+  const emptyHome = mkdtempSync(join(tmpdir(), "codex-empty-"))
+  const bad = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return { events: [], exitCode: 1 }
+  })
+  const r2 = await captureWarn(() => resolveCodexRowEffort({ spawn: bad, platform: "linux", env: { CODEX_HOME: emptyHome } }, { kind: "codex-cli", model: "m1", executable: "t-eff-bad" }, "low"))
+  assert.equal(r2.value.effort, "low")
+  assert.ok(r2.value.note.includes("codex 模型目录不可得"))
+  assert.ok(r2.warnings.some((w) => w.includes("目录不可得")))
+  // runner 未配 model（codex 自身默认模型——无法按目录校验）
+  const r3 = await captureWarn(() => resolveCodexRowEffort(baseDeps(cat.spawn), { kind: "codex-cli" }, "low"))
+  assert.equal(r3.value.effort, "low")
+  assert.ok(r3.value.note.includes("未配置 model"))
+})
+
+test("R1 接线 consult dsh 行：effort 按行 provider/model 解析（agentOptions 收最近档）+ note 入回复尾部", async () => {
+  const started = []
+  const ctx = {
+    llm: ladderLlm(["off", "high", "max"]),
+    subagents: {
+      async start(_kind, req) {
+        started.push(req)
+        return { result: Promise.resolve({ output: [{ type: "text", text: "second opinion" }], stopReason: "completed" }), dispose: async () => { } }
+      },
+    },
+  }
+  const sid = "r1-consult-dsh"
+  const state = sessionState(sid)
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
+  const r = await startConsultSession(
+    { ctx, agent, config: { consultModels: [{ provider: "qax", model: "glm-5.3-flash", effort: "low" }] }, state },
+    "problem brief", undefined,
+  )
+  const reply = await checkConsultSession(state, r.id)
+  assert.equal(started.length, 1)
+  assert.equal(started[0].agentOptions.reasoningEffort, "off", "low 对 [off,high,max] 序距离最近 = off")
+  assert.ok(reply.reply.includes("second opinion"))
+  assert.ok(reply.reply.includes("falling back to nearest supported effort"), "note 入回复尾部（主代理可见）")
+  dropSession(sid)
+})
+
+test("R1 接线 consult codex 行：effort 经 codex catalog 校验（argv 最近档）+ note 入回复", async () => {
+  const cat = catalogSpawn([{ slug: "m-cc", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] }], { events: [], exitCode: 0, outText: "codex opinion" })
+  const sid = "r1-consult-codex"
+  const state = sessionState(sid)
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
+  const deps = {
+    ctx: {},
+    agent,
+    config: { consultModels: [{ runner: { kind: "codex-cli", model: "m-cc", effort: "medium", executable: "t-cc-1" } }] },
+    state, signal: undefined, spawn: cat.spawn, platform: "linux", env: {},
+  }
+  const r = await startConsultSession(deps, "problem brief", undefined)
+  const reply = await checkConsultSession(state, r.id)
+  assert.ok(cat.seenArgs().includes('model_reasoning_effort="high"'), "medium 对 [low,high] 等距向上 → high")
+  assert.ok(reply.reply.includes("codex opinion"))
+  assert.ok(reply.reply.includes("falling back to nearest supported effort"))
+  dropSession(sid)
+})
+
+test("R1 接线 escalate dsh 行：effort 按行 provider/model 解析（agentOptions）+ note 入术后报告尾部", async () => {
+  const started = []
+  const ctx = {
+    llm: ladderLlm(["low", "high"]),
+    subagents: {
+      async start(_kind, req) {
+        started.push(req)
+        return { result: Promise.resolve({ output: [{ type: "text", text: "done the work\n\nTouched files: none" }], stopReason: "completed" }), dispose: async () => { } }
+      },
+    },
+  }
+  const sid = "r1-esc-dsh"
+  const deps = {
+    ctx,
+    agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
+    config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "medium" }] },
+    state: sessionState(sid), signal: undefined,
+    spawn: () => { throw new Error("codex must not spawn for a dsh row") }, platform: "linux", env: {},
+  }
+  const out = await runEscalate(deps, "fix it", undefined)
+  assert.ok(out.includes("post-op report"))
+  assert.equal(started[0].agentOptions.reasoningEffort, "high", "medium 对 [low,high] 等距向上取")
+  assert.ok(out.includes("falling back to nearest supported effort"), "note 入报告尾部")
+  dropSession(sid)
+})
+
+test("R1 接线 escalate codex 行：effort 经 codex catalog 回落进 argv + note 入报告", async () => {
+  const cat = catalogSpawn([{ slug: "m-esc", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] }], { events: [], exitCode: 0, outText: "ok\n\nTouched files: none" })
+  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "m-esc", effort: "medium", executable: "t-esc-1" } }], codexCli: { executable: "t-esc-1" } }
+  const sid = "r1-esc-codex"
+  const out = await runEscalate(makeEscDeps(sid, cat.spawn, cfg), "x", undefined)
+  assert.ok(cat.seenArgs().includes('model_reasoning_effort="high"'), "argv 收最近支持档")
+  assert.ok(out.includes("falling back to nearest supported effort"))
+  dropSession(sid)
+})
+
+test("R1 接线 escalate codex 行：effort=off → argv 不传 model_reasoning_effort（codex 无 off）", async () => {
+  const cat = catalogSpawn([{ slug: "m-esc2", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] }], { events: [], exitCode: 0, outText: "ok\n\nTouched files: none" })
+  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "m-esc2", effort: "off", executable: "t-esc-2" } }], codexCli: { executable: "t-esc-2" } }
+  const sid = "r1-esc-codex-off"
+  const out = await runEscalate(makeEscDeps(sid, cat.spawn, cfg), "x", undefined)
+  assert.ok(!cat.seenArgs().some((a) => String(a).includes("model_reasoning_effort")), "off → null 不传（全 argv 无 effort 配置项）: " + JSON.stringify(cat.seenArgs()))
+  assert.ok(out.includes("post-op report"))
+  dropSession(sid)
+})
+
+test("R1 接线 eng codex 分支：effort 走 codex resolver（argv 最近档）+ dsh 解析不在 codex 分支跑（误导告警消除）", async () => {
+  const cat = catalogSpawn([{ slug: "m-eng", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] }], { events: [], exitCode: 0, outText: "implemented\n\nTouched files: src/x.ts" })
+  const sid = "r1-eng-codex"
+  const st = sessionState(sid)
+  st.engineering = true
+  const token = makeEngToken(st)
+  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "parent-model" } }
+  const config = { engCoderEffort: "medium", codexCli: { engCoderRunner: "codex-cli", model: "m-eng", executable: "t-eng-1" } }
+  const out = await runEngCoder(
+    {
+      ctx: {
+        subagents: { start: () => { throw new Error("dsh spawn must not run for codex backend") } },
+        // 若 dsh 侧解析误跑（D-02 旧缺陷：eng:385 在 codex 分支也执行），会产出含 parent-model 的 effort 告警
+        llm: ladderLlm(["low"]),
+      },
+      agent, config, signal: undefined, configDefaultEngineering: false, spawn: cat.spawn, platform: "linux", env: {},
+    },
+    { task: "implement x", designToken: token, docs: [] },
+  )
+  assert.ok(cat.seenArgs().includes('model_reasoning_effort="high"'), "medium → high（等距向上）")
+  assert.ok(out.includes("eng_coder delivery (codex-cli)"))
+  assert.ok(out.includes("falling back to nearest supported effort"))
+  assert.ok(!out.includes("parent-model"), "codex 分支不跑 dsh 侧解析（eng:385 误导告警消除，D-02）")
+  dropSession(sid)
+})
+
+test("R1 接线 eng dsh 分支：effort 按父代理路由模型解析（agentOptions 最近档）+ note 走 warn 通道", async () => {
+  const started = []
+  const subagents = {
+    async start(_kind, req) {
+      started.push(req)
+      return { result: Promise.resolve({ output: [{ type: "text", text: "ok\n\nTouched files: none" }], stopReason: "completed" }), dispose: async () => { } }
+    },
+  }
+  const sid = "r1-eng-dsh"
+  const st = sessionState(sid)
+  st.engineering = true
+  const token = makeEngToken(st)
+  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "glm-5.3-flash" } }
+  const out = await runEngCoder(
+    { ctx: { subagents, llm: ladderLlm(["off", "high", "max"]) }, agent, config: { engCoderEffort: "low" }, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
+    { task: "implement y", designToken: token, docs: [] },
+  )
+  assert.ok(out.includes("eng_coder delivery:"))
+  assert.equal(started[0].agentOptions.reasoningEffort, "off", "low 对 [off,high,max] 最近 = off")
+  assert.ok(out.includes("is not supported by model glm-5.3-flash"), "note 经 warn 通道随工具返回可见")
+  dropSession(sid)
+})
+
+test("R1 接线 advisor codex 行：runner.effort 经 catalog 校验回落（argv）+ note 并入结果尾部", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const cat = catalogSpawn([{ slug: "m-adv", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] }], { events: [], exitCode: 0, outText: "| # | Issue | Detail |\n|---|---|---|\n| 1 | x | y |" })
+  const sid = "r1-adv-codex"
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "m-adv", effort: "medium" }, timeoutMs: 300000 } }, codexCli: { executable: "t-adv-1" } }
+  const out = await runAdvisorReview(
+    { llm: { stream: () => { throw new Error("must not be used") } }, spawn: cat.spawn, platform: "linux", env: {} },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  assert.ok(cat.seenArgs().includes('model_reasoning_effort="high"'), "argv 收最近支持档（buildCodexArgs 之前收口）")
+  assert.ok(out.includes("Issue"), "评审正文照常交付")
+  assert.ok(out.includes("falling back to nearest supported effort"), "note 并入结果尾部")
+  assert.ok(!out.startsWith("Advisor:"), "回落 note 是后缀——不破坏 completed 判定")
+  dropSession(sid)
+})
+
+test("R1 接线 advisor codex 行：组环 effort（runner.effort 未配）同样解析并真正生效（消灭静默丢弃）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const cat = catalogSpawn([{ slug: "m-adv2", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] }], { events: [], exitCode: 0, outText: "| # | Issue | Detail |\n|---|---|---|\n| 1 | x | y |" })
+  const sid = "r1-adv-codex2"
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "m-adv2" }, effort: "low", timeoutMs: 300000 } }, codexCli: { executable: "t-adv-2" } }
+  const out = await runAdvisorReview(
+    { llm: { stream: () => { throw new Error("must not be used") } }, spawn: cat.spawn, platform: "linux", env: {} },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  assert.ok(cat.seenArgs().includes('model_reasoning_effort="low"'), "组环 effort 对 codex 行生效（此前被 runner 静默丢弃）")
+  assert.ok(!out.includes("falling back"), "low 受支持 → 无回落 note")
+  dropSession(sid)
+})
+
+test("R1 接线 advisor dsh 主路径：effort 按路由模型解析（stream reasoningEffort 最近档）+ note 入尾部", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const sid = "r1-adv-dsh"
+  const streamOptsSeen = []
+  const llm = {
+    ...ladderLlm(["off", "high", "max"]),
+    stream(opts) {
+      streamOptsSeen.push(opts)
+      return (async function* () {
+        yield { type: "block-end", block: { type: "text", text: "| # | I | D |\n|---|---|---|\n| 1 | a | b |" } }
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+  const out = await runAdvisorReview(
+    { llm },
+    { agent, config: { advisor: { round1: { provider: "qax", model: "glm-5.3-flash", effort: "low", timeoutMs: 300000 } } }, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  assert.equal(streamOptsSeen[0].reasoningEffort, "off", "low 对 [off,high,max] 最近 = off")
+  assert.ok(out.includes("falling back to nearest supported effort"))
+  dropSession(sid)
+})
+
+test("R1 接线 advisor 回落轮：回落模型 effort 按其实际档位解析（stream reasoningEffort 最近档）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const emptyHome = mkdtempSync(join(tmpdir(), "codex-empty-"))
+  const streamOptsSeen = []
+  const llm = {
+    ...ladderLlm(["off", "high"]),
+    stream(opts) {
+      streamOptsSeen.push(opts)
+      return (async function* () {
+        yield { type: "block-end", block: { type: "text", text: "FB REVIEW OUTPUT" } }
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args) : { events: [], exitCode: 1 })
+  const sid = "r1-adv-fb"
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", effort: "medium" } } }
+  const run = () => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: { CODEX_HOME: emptyHome } },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  await run() // codex 失败 ×2（PROCESS_ERROR）
+  await run()
+  const r3 = await run() // 第 3 轮自动回落 dsh
+  assert.ok(r3.includes("自动回落 dsh 路由"))
+  assert.ok(r3.includes("FB REVIEW OUTPUT"))
+  assert.equal(streamOptsSeen[0].reasoningEffort, "high", "回落模型 medium 对 [off,high] 最近 = high")
+  dropSession(sid)
+})
+
+// ————————————— R1 D-18/D-01：结构化观测 + 空响应分类 + D-17 dsh 预算钳制 —————————————
+
+/** advisor dsh 评审 stub：stream 返回注入的块/finish 序列（无 effort/无工具轮）。 */
+function reviewLlm(chunks) {
+  return {
+    stream() {
+      return (async function* () {
+        for (const c of chunks) yield c
+      })()
+    },
+  }
+}
+
+const REVIEW_TABLE = { type: "block-end", block: { type: "text", text: "| # | I | D |\n|---|---|---|\n| 1 | a | b |" } }
+
+async function runDshReview(sid, llm, config, deps = {}) {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+  return runAdvisorReview(
+    { llm, ...deps },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+}
+
+test("R1 D-01 观测: 空响应形态一 finish-null —— 分类行 + 观测字段（finish/blocks/usage）+ console.warn 留档", async () => {
+  const sid = "r1-empty-null"
+  const llm = reviewLlm([]) // 流直接结束：零块、零 finish
+  const r = await captureWarn(() => runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } }))
+  const out = r.value
+  assert.ok(out.startsWith("Advisor: (empty response"), "返回语义不变（R1 不重试不烧轮次——留 R3）: " + out.slice(0, 80))
+  assert.ok(out.includes("empty-response classification: finish-null"), "三形态之一：finish null")
+  assert.ok(out.includes("stream observation: finish=null"), "观测字段：finish kind")
+  assert.ok(out.includes("blocks(text=0,tool-call=0)"), "观测字段：block 计数")
+  assert.ok(out.includes("usage=none"), "观测字段：usage")
+  assert.ok(r.warnings.some((w) => w.includes("stream observation: finish=null")), "console.warn 留档（D-18）")
+  dropSession(sid)
+})
+
+test("R1 D-01 观测: 空响应形态二 stop 零文本块 —— 分类行 + finish 携带的 usage 入观测", async () => {
+  const sid = "r1-empty-stop"
+  const llm = reviewLlm([
+    { type: "finish", reason: { kind: "stop" }, usage: { inputTokens: 5, outputTokens: 0 } },
+  ])
+  const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } })
+  assert.ok(out.startsWith("Advisor: (empty response"))
+  assert.ok(out.includes("empty-response classification: stop-zero-text-blocks"), "三形态之二：stop 零块")
+  assert.ok(out.includes("stream observation: finish=stop"))
+  assert.ok(out.includes('"inputTokens":5'), "finish 携带的 usage 入观测字段")
+  dropSession(sid)
+})
+
+test("R1 D-01 观测: 空响应形态三 error 无 message —— 失败文本带分类行（不再坍缩为 unknown provider error）", async () => {
+  const sid = "r1-empty-error"
+  const llm = reviewLlm([
+    { type: "finish", reason: { kind: "error", failure: {} } },
+  ])
+  const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } })
+  assert.ok(out.startsWith("Advisor: review failed — unknown provider error"))
+  assert.ok(out.includes("empty-response classification: error-no-message"), "三形态之三：error 无 message（有独立路径但同样可归因）")
+  assert.ok(out.includes("stream observation: finish=error"))
+  dropSession(sid)
+})
+
+test("R1 D-01 观测: finish=length 显式分类（生产复现根因：推理烧光 maxTokens 零正文）", async () => {
+  const sid = "r1-empty-length"
+  const llm = reviewLlm([
+    { type: "finish", reason: { kind: "length" } },
+  ])
+  const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } })
+  assert.ok(out.startsWith("Advisor: (empty response"))
+  assert.ok(out.includes("empty-response classification: length"), "length 显式分类（登记表 D-01 修复要求）")
+  assert.ok(out.includes("advisor.maxOutputTokens"), "maxTokens 不足的独立诊断指引")
+  dropSession(sid)
+})
+
+test("R1 D-17: advisor dsh 主路径预算钳制——timeoutMs>budgetCap → 生效值=budgetCap + 结果尾部截断告警", async () => {
+  const sid = "r1-dsh-clamp"
+  const t0 = Date.now()
+  const llm = { stream: () => (async function* () { await new Promise(() => { }) })() } // 静默挂起流：等 deadline
+  const out = await runDshReview(sid, llm, {
+    advisor: { round1: { provider: "p", model: "m", timeoutMs: 900000 } },
+    codexCli: { budgetCapMs: 400 },
+  })
+  const elapsed = Date.now() - t0
+  assert.ok(elapsed < 5000, "生效预算 = budgetCap（400ms 量级 deadline 生效，未钳制则 900s 挂死）: " + elapsed + "ms")
+  assert.ok(out.startsWith("Advisor: review timeout after"), "预算到点即 timeout")
+  assert.ok(out.includes("已按 codexCli.budgetCapMs=400ms 截断执行"), "结果尾部截断告警（镜像 codex 同步路径）")
+  assert.ok(out.includes("900000ms"), "原预算可见")
+  dropSession(sid)
+})
+
+test("R1 D-17: advisor 回落轮预算钳制（fbRoute.timeoutMs > budgetCap → 回落轮跑 budgetCap + 尾部告警）", async () => {
+  const emptyHome = mkdtempSync(join(tmpdir(), "codex-empty-"))
+  const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args) : { events: [], exitCode: 1 })
+  const sid = "r1-fb-clamp"
+  const llm = { stream: () => (async function* () { await new Promise(() => { }) })() }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "p", model: "m", timeoutMs: 900000 } }, codexCli: { budgetCapMs: 400 } }
+  const deps = { llm, spawn, platform: "linux", env: { CODEX_HOME: emptyHome } }
+  await runDshReview(sid, llm, config, deps) // codex 失败 ×1
+  await runDshReview(sid, llm, config, deps) // codex 失败 ×2
+  const t0 = Date.now()
+  const out = await runDshReview(sid, llm, config, deps) // 第 3 轮回落 dsh（预算 900000 → 钳 400）
+  const elapsed = Date.now() - t0
+  assert.ok(out.includes("自动回落 dsh 路由"), "回落路径已触发")
+  assert.ok(elapsed < 5000, "回落轮生效预算 = budgetCap: " + elapsed + "ms")
+  assert.ok(out.includes("Advisor: review timeout after"), "回落轮预算到点即 timeout（前缀前有组配置 warnPrefix——codex 路由的 UX 告警）")
+  assert.ok(out.includes("已按 codexCli.budgetCapMs=400ms 截断执行"), "回落轮截断告警")
+  dropSession(sid)
+})
+
+test("R1 D-18: codex TIMEOUT 上浮 usage（信封 + 诊断）+ stderr 保留改尾部 4K", async () => {
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return {
+      events: [
+        { stream: "stdout", data: JSON.stringify({ type: "turn.completed", usage: { input_tokens: 11, output_tokens: 7 } }) + "\n" },
+        { stream: "stderr", data: "HEAD-NOISE-" + "x".repeat(5000) },
+        { stream: "stderr", data: "TAIL-MARKER-FATAL-HERE" },
+      ],
+      hang: true, // 等 watchdog 触发 TIMEOUT
+    }
+  })
+  const env = await runCodexTask(baseDeps(spawn), { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", timeoutMs: 300, runner: RUNNER, globals: GLOBALS })
+  assert.equal(env.code, "TIMEOUT")
+  assert.deepEqual(env.usage, { inputTokens: 11, outputTokens: 7 }, "TIMEOUT 信封上浮 usage（此前只捕获不上浮）")
+  assert.ok(env.diagnostics.includes('"inputTokens":11'), "TIMEOUT 诊断含 usage")
+  assert.ok(env.diagnostics.includes("TAIL-MARKER-FATAL-HERE"), "stderr 保留尾部（可用错误在尾）")
+  assert.ok(!env.diagnostics.includes("HEAD-NOISE"), "头部启动噪音被裁掉（保尾 4K）")
+})
+
+test("R1 D-18: codex PROCESS_ERROR 诊断含 usage + stderr 保尾", async () => {
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return {
+      events: [
+        { stream: "stdout", data: JSON.stringify({ type: "turn.completed", usage: { input_tokens: 3, output_tokens: 4 } }) + "\n" },
+        { stream: "stderr", data: "HEAD-NOISE-" + "y".repeat(5000) + "FATAL-TAIL-CODE" },
+      ],
+      exitCode: 1,
+    }
+  })
+  const env = await runCodexTask(baseDeps(spawn), { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS })
+  assert.equal(env.code, "PROCESS_ERROR")
+  assert.deepEqual(env.usage, { inputTokens: 3, outputTokens: 4 })
+  assert.ok(env.diagnostics.includes('"outputTokens":4'), "PROCESS_ERROR 诊断上浮 usage")
+  assert.ok(env.diagnostics.includes("FATAL-TAIL-CODE"), "stderr 保尾")
+  assert.ok(!env.diagnostics.includes("HEAD-NOISE"), "头部被裁（保尾 4K）")
+})
+
+// ————————————— R1 §3.6（D-01 热修正式化）：advisor.maxOutputTokens 三面白名单同步 —————————————
+
+test("R1 maxOutputTokens 三面同步: PUT 接受合法值 ⊕ merge 保留 ⊕ 运行时生效", async () => {
+  // 面 1：PUT 校验（index.mjs validateGlobalUserConfig 经 makeApiHandler 真实 PUT 路径）
+  const { makeApiHandler } = await import("../lib/index.mjs")
+  const handler = makeApiHandler({}, { baseConfig: {}, dshHomeOverride: mkdtempSync(join(tmpdir(), "maxout-")) })
+  const req = { method: "PUT", url: "/thincoder-suite/api/config", [Symbol.asyncIterator]: function* () { yield Buffer.from(JSON.stringify({ config: { advisor: { maxOutputTokens: 8192 } } })) } }
+  const res = { statusCode: 0, body: "", writeHead(code) { this.statusCode = code }, end(b) { this.body = b } }
+  await handler(req, res)
+  assert.equal(res.statusCode, 200, "PUT 接受合法值: " + res.body)
+  assert.equal(JSON.parse(res.body).user.advisor.maxOutputTokens, 8192, "sanitized 保留")
+  // 面 2：配置合并（config-store.mjs mergeGlobalConfig 白名单透传）
+  const merged = mergeGlobalConfig({}, { advisor: { maxOutputTokens: 8192 } })
+  assert.equal(merged.advisor.maxOutputTokens, 8192, "merge 保留（user 层覆盖 base）")
+  // 面 3：运行时生效（advisor.mjs stream opts maxTokens = effectiveGlobalConfig 解析值）
+  const sid = "r1-maxout"
+  const streamOptsSeen = []
+  const llm = {
+    stream(opts) {
+      streamOptsSeen.push(opts)
+      return (async function* () {
+        yield REVIEW_TABLE
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 }, maxOutputTokens: 4096 } })
+  assert.equal(streamOptsSeen[0].maxTokens, 4096, "运行时 stream opts 收配置值（热修 16384 常量退役为缺省）")
+  assert.ok(out.includes("| 1 |"), "评审照常交付")
+  dropSession(sid)
+})
+
+test("R1 maxOutputTokens: PUT 拒绝区间外/非整数（B12 字段级错误，越界值不落盘）", async () => {
+  const bad1 = validateGlobalUserConfig({ advisor: { maxOutputTokens: 100 } }, [])
+  assert.equal(bad1.ok, false)
+  assert.ok(bad1.errors.some((e) => e.includes("maxOutputTokens")))
+  const bad2 = validateGlobalUserConfig({ advisor: { maxOutputTokens: 70000 } }, [])
+  assert.equal(bad2.ok, false)
+  assert.ok(bad2.errors.some((e) => e.includes("4096..65536")))
+  const bad3 = validateGlobalUserConfig({ advisor: { maxOutputTokens: 8192.5 } }, [])
+  assert.equal(bad3.ok, false)
+  assert.equal(bad3.sanitized.advisor, undefined, "越界值不进 sanitized（不落盘）")
+})
+
+test("R1 maxOutputTokens: 运行时非法值（手编 config.json）→ 回落缺省 16384 + 响亮告警", async () => {
+  const sid = "r1-maxout-bad"
+  const streamOptsSeen = []
+  const llm = {
+    stream(opts) {
+      streamOptsSeen.push(opts)
+      return (async function* () {
+        yield REVIEW_TABLE
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const r = await captureWarn(() => runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 }, maxOutputTokens: 100 } }))
+  assert.equal(streamOptsSeen[0].maxTokens, 16384, "越界回落缺省（绝不砖化评审）")
+  assert.ok(r.warnings.some((w) => w.includes("advisor.maxOutputTokens") && w.includes("16384")), "越界告警 console.warn 留档")
+  assert.ok(r.value.includes("| 1 |"), "评审照常交付")
+  dropSession(sid)
 })

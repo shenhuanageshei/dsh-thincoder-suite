@@ -40,7 +40,10 @@ function makeEngState(id) {
   return state
 }
 
-/** eng_coder deps stub：subagents.start 收集 request 并返回固定交付报告。 */
+/** eng_coder deps stub：subagents.start 收集 request 并返回固定交付报告。
+ *  R1/D-02：ctx.llm 带最小 resolveModelInfo（生产 LlmRuntime 实有该 API——dsh-llm
+ *  LlmRuntime.resolveModelInfo；eng dsh 分支 effort L1 校验经它解析。stub 缺失会让
+ *  fail-open 透传 note 触发 T12 的「clean task → no warning」断言误报）。 */
 function makeEngDeps(id, dshHome, started) {
   const subagents = {
     async start(kind, req) {
@@ -54,8 +57,13 @@ function makeEngDeps(id, dshHome, started) {
       }
     },
   }
+  const llm = {
+    async resolveModelInfo() {
+      return { reasoning: { efforts: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }], defaultEffort: "low" } }
+    },
+  }
   return {
-    ctx: { subagents },
+    ctx: { subagents, llm },
     agent: { session: { id, header: { cwd: PLUGIN_DIR } }, options: { provider: "p", model: "m" } },
     config: {}, signal: undefined, configDefaultEngineering: false, storPathOverride: dshHome,
   }
