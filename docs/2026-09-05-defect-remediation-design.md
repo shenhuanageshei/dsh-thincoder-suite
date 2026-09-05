@@ -1,7 +1,7 @@
 # 设计文档：机制缺陷分轮修复设计（R1-R4）
 
 - 日期：2026-09-05
-- 状态：REVISED（2026-09-05 四次评审 1🔴+1🟡+4🔵 全部折入；DP-1/2/3 已终裁〔全按推荐〕；**R1 已交付**〔155/155，`95af758`〕**R2 已交付**〔185/185，`dbbb6c9`〕**R3 已交付〔含补丁轮〕**〔205/205，`4d33cf8`+`7222811`〕，本设计未决实施范围 = **R4**〔D-12/D-13/D-15/D-24 + D-23 client:726 残项 + R3 评审收尾折入〕）
+- 状态：REVISED（2026-09-05 四次评审 1🔴+1🟡+4🔵 全部折入；DP-1/2/3 已终裁〔全按推荐〕；**R1 已交付**〔155/155，`95af758`〕**R2 已交付**〔185/185，`dbbb6c9`〕**R3 已交付〔含补丁轮〕**〔205/205，`4d33cf8`+`7222811`〕**R4 已交付**〔2026-09-05，211/211——提交由架构会话执行；代码轮次全部交付完毕，余项 = 真机验证（§9 第 3 条）+ D-15 测量 + D-24 eng.mjs 评审补跑（收尾阶段任务，登记表终态标注）〕）
 - 上游：[需求文档](2026-09-05-defect-remediation-requirements.md)（含三项用户裁决 D-裁决-1/2/3）· [缺陷登记表](2026-09-05-defect-registry.md)（D-01…D-24，全部条目带证据行号）· 审计报告（thorough 子代理，2026-09-05）
 - 平台契约依据：登记表「平台契约要点」五条（jobs 返回 branded string / 通知只含指针 / cancel→abort / run() 无墙钟 / job_output wait 上限 600s）
 
@@ -165,6 +165,9 @@ R2 交付的在飞表检查仅覆盖 jobs 派发入口；同机制 >cap job 在�
 
 ## 6. R4 — 一致性与 UX 收口
 
+> 〔时态说明：本节为**已实施记录**（2026-09-05 交付）——验收条款即已验证事实；D-15 测量与
+> D-24 eng.mjs 评审补跑为收尾阶段任务（见登记表终态），非本节代码交付范围〕
+
 ### 6.1 D-12 保存竞态（UI 决策 UI-3）
 
 busy 期间禁用全部表单输入（非仅按钮）；保存成功后的 refreshView **不整体替换草稿**——只重放未被用户触碰（自保存发起时起）的字段，触碰字段保留用户值并出提示条「保存期间有编辑，已保留你的修改」。
@@ -183,11 +186,11 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 
 ### 6.5 R4 受影响文件与验收
 
-文件：`lib/client.js`、`lib/advisor.mjs`、`lib/escalate.mjs`、`lib/session-store.mjs`、`lib/index.mjs`（如 coercion 共享）、`test/codex-runner.test.mjs`、`METHODOLOGY.md`、`package.json`。〔escalate.mjs 为 R3 code review 收尾折入项 ② 所需——2026-09-05 补入清单〕
+文件：`lib/client.js`、`lib/advisor.mjs`、`lib/escalate.mjs`、`lib/session-store.mjs`、`lib/index.mjs`（如 coercion 共享——交付确认无需：coercion 全在 advisor.mjs，index.mjs 零改动）、`test/codex-runner.test.mjs`、`METHODOLOGY.md`、`package.json`、`docs/2026-09-05-defect-registry.md`（终态核对）。〔escalate.mjs 为 R3 code review 收尾折入项 ② 所需——2026-09-05 补入清单；codex-adapter.mjs 为 §6.4 ② 缓存语义注释所需——2026-09-05 R4 交付补入（注释零行为变化，与 escalate.mjs 先例同型的清单勘误）；登记表为 §6.4 ⑥ 终态核对与 D-15/D-18 标注所需〕
 
 **R3 code review 收尾折入（4 项小修）**：① 回落失败路径后缀补「回落失败 X/2」计数（与不可达路径对齐）；② escalate dsh 超时竞态分支补 codexFailureAdvisory（与 eng 对齐）；③ clearCodexFailureCount 更名 clearAdvisorRouteFailureState + 别名导出；④ advisor JSDoc 补 single-flight "Error:" 前缀例外注记。各 ≥1 断言。
 
-验收：① 竞态用例（保存期间编辑被保留 + 提示）；② runner 往返用例；③ 测量数据登记；④ eng.mjs 评审报告落档；⑤ 登记表全条目终态核对。
+验收：① 竞态用例（保存期间编辑被保留 + 提示）〔**交付形态勘误（2026-09-05 R4）**：本仓库无 client 测试面（client.js 为浏览器 CJS bundle，node --test 无法驱动 DOM/React）——① 按 §6.1 验收为代码级实现 + node --check 通过（登记表 D-12 终态如实标注）；后端可测面（runner 往返）照常带用例〕；② runner 往返用例；③ 测量数据登记〔登记表 D-15 标注判定规则与执行阶段——测量本身属真机验证阶段〕；④ eng.mjs 评审报告落档〔架构会话收尾阶段补跑——非 eng_coder 任务面，登记表 D-24 已裁决处置〕；⑤ 登记表全条目终态核对。〔R1 审计 🔵 ①② 交付记录：① per-point fail-open 接线级用例 ×2（escalate dsh 行 + advisor dsh 主路径——元数据不可得 → 原样透传 + note 入尾部 + 响亮告警）；② 缓存语义注释落地 codex-adapter.mjs（refresh 通道一期已有——注释补「快照随首次发现、UI 刷新才更新」语义）；③ D-18 措辞收窄经代码核对**前提不成立**（墙钟 TIMEOUT 信封同样带结构化 usage 字段，codex-adapter.mjs 两处 envelope 构造均传 usage、R1 用例即墙钟路径断言 env.usage 深等）——按 §9 验收第 1 条「终态与代码一致」维持原措辞并登记核对结论（见登记表 D-18）；④ docs/README.md 三文档登记核验 ✓〕
 
 ## 7. UI/交互决策汇总（METHODOLOGY 要求集中呈现）
 

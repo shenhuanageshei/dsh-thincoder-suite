@@ -2,6 +2,8 @@
 // node:test 零依赖：adapter 用假子进程（deps.spawn 注入），不碰真实 codex / 不出网。
 // 覆盖：B2/B4/B12 runner 校验、codexCli 全局节、envelope 错误码（注入法）、模型发现解析、
 // advisor 路由 codex 分支、config 合并、escalate codex 行剔除、runAdvisorReview codex 路径。
+// R4 收尾微修复轮（登记表 D-25 + code review 跟进）：TOKEN_SECRET 密钥源三形态/重启稳定性 +
+// advisor jobs 派发路径 warnPrefix 可见性。
 process.env.DSH_HOME = ""
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -2253,6 +2255,7 @@ test("R3 D-07 活锁封顶: codex 败×2 → 回落败×2 → 硬停（双路由
   assert.ok(r3.includes("自动回落 dsh 路由"), "第 3 轮触发智能回落")
   assert.ok(r3.includes("review failed (unknown) — fb route down"), "回落轮失败可归因")
   assert.equal(execCalls(), 2, "delete-after-result：回落失败不清零 codex 计数——codex 不被重试（顺序修正）")
+  assert.ok(r3.includes("回落失败 1/2"), "R4 R3收尾①：回落失败路径带「回落失败 X/2」计数后缀（与不可达路径对齐）")
   assert.ok(!r3.includes("回落硬停"), "回落失败 1/2——未硬停")
 
   const r4 = await run() // 回落失败 #2 → 硬停
@@ -2834,5 +2837,294 @@ test("R3 D-06 补丁轮 eng: >cap job 在飞期间 dsh 子代理路径调用被�
   assert.equal(specs.length, 1, "无第二个 job 派发")
   assert.equal(dshTouched, false, "dsh 分支零触碰（subagents.start 未执行——入口即拒）")
   await specs[0].hooks.done // settle 清槽位（测试隔离）
+  dropSession(sid)
+})
+
+// ————————————— R4 §6.5：R3 code review 收尾四项折入 —————————————
+// ① 回落失败路径补「回落失败 X/2」计数后缀（断言已折入上方 R3 D-07 活锁封顶用例）；
+// ② escalate dsh 超时竞态分支补 codexFailureAdvisory（与 eng 对齐）；
+// ③ clearCodexFailureCount 更名 clearAdvisorRouteFailureState + 旧名导出别名（index.mjs 挂点零改动）；
+// ④ advisor JSDoc 补 single-flight "Error:" 前缀例外注记（纯注释——全量绿即无行为变化，前缀
+//    语义由既有 D-06 系用例的 startsWith("Error") 断言锁死）。
+
+test("R4 R3收尾②: escalate dsh 超时竞态分支补 codexFailureAdvisory——partial Touched 行 advisory 解析（与 eng 对齐，不并入审计范围）", async () => {
+  const started = []
+  const ctx = {
+    llm: ladderLlm(["low"]),
+    subagents: {
+      async start(_kind, req) {
+        started.push(req)
+        // 竞态形态：run.result 不 throw、在 signal abort 时正常 resolve（stopReason=aborted）——
+        // 走 dshTimedOut 竞态分支（run.result 的 throw 分支在 R2 DP-1 用例覆盖）
+        return {
+          result: new Promise((resolve) => {
+            req.signal.addEventListener("abort", () => resolve({
+              stopReason: "aborted",
+              output: [{ type: "text", text: "halfway work\n\nTouched files: lib/racy.mjs" }],
+              diagnostic: "deadline abort",
+            }))
+          }),
+          dispose: async () => { },
+        }
+      },
+    },
+  }
+  const sid = "r4-esc-race"
+  const deps = {
+    ctx, agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
+    config: { consultModels: [{ provider: "qax", model: "glm-5.3" }], codexCli: { budgetCapMs: 250 } },
+    state: sessionState(sid), signal: undefined,
+    spawn: () => { throw new Error("codex must not spawn for a dsh row") }, platform: "linux", env: {},
+  }
+  const r = await captureWarn(() => runEscalate(deps, "long dsh task", undefined))
+  assert.equal(started.length, 1, "dsh 子代理已启动")
+  assert.ok(r.value.includes("dsh 子代理路径超内部截止"), "竞态分支终止文案（run.result 正常返回 + dshTimedOut）")
+  assert.ok(r.value.includes("halfway work"), "partial 输出可见")
+  assert.ok(r.value.includes("partial 输出含 Touched 行（advisory 解析，未并入审计范围）"), "codexFailureAdvisory 补齐（R4 R3收尾②，与 eng 对齐）")
+  assert.ok(r.value.includes("lib/racy.mjs"), "advisory 提示含 Touched 路径")
+  assert.ok(!(sessionState(sid).touchedFiles || []).includes("lib/racy.mjs"), "advisory 不并入 touchedFiles 审计范围（D-20 失败交付不簿记）")
+  dropSession(sid)
+})
+
+test("R4 R3收尾③: clearCodexFailureCount 更名 clearAdvisorRouteFailureState——旧名为同一函数导出别名（index.mjs D-22 挂点零改动）", async () => {
+  const { runAdvisorReview, clearAdvisorRouteFailureState, clearCodexFailureCount } = await import("../lib/advisor.mjs")
+  assert.equal(clearCodexFailureCount, clearAdvisorRouteFailureState, "旧名 = 新名导出别名（同一函数引用）")
+  assert.equal(typeof clearAdvisorRouteFailureState, "function", "新名可调用")
+  // 行为等价：armed 硬停经新名清理解除（镜像 R3 D-07 会话重置解除用例）
+  const { spawn, execCalls } = r3FailingCodexSpawn()
+  const llm = { stream() { return (async function* () { throw new Error("fb route down") })() } }
+  const sid = "r4-rename-alias"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const run = () => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: {} },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  for (let i = 0; i < 4; i++) await run() // 硬停 armed
+  const held = await run()
+  assert.ok(held.startsWith("Advisor: 回落硬停"), "armed 后 held 生效")
+  clearAdvisorRouteFailureState(sid) // 新名调用（index.mjs 挂点语义不变）
+  const r = await run()
+  assert.ok(!r.includes("回落硬停"), "新名清理 → 硬停解除（与旧名行为等价）")
+  assert.ok(r.includes("codex-cli PROCESS_ERROR"), "恢复常规执行")
+  assert.equal(execCalls(), 3, "解除后 codex 被调用（2 次硬停前 + 1 次解除后）")
+  dropSession(sid)
+})
+
+// ————————————— R4 §6.2（D-13）：advisorOverride.runner 三面同步 —————————————
+// 三面 = advisor_config 工具（ADVISOR_OVERRIDE_GROUP_PATHS + coerceValue 校验走
+// normalizeRunnerValue）⊕ session-store 持久化白名单 ⊕ apply-session（index.mjs 一期已接受，
+// 零改动）。会话覆盖 runner 此前「工具拒收 + 重启即丢」——resolve 链本身一期即消费 runner
+// （resolveAdvisorRoute 组环合并含 runner），缺的只是入口与持久化两道白名单。
+
+test("R4 D-13: advisor_config set/reset runner——白名单接受（normalizeRunnerValue 校验 + 归一化存储），非法值拒收（N4 不变式）", async () => {
+  const { runAdvisorConfigTool } = await import("../lib/advisor.mjs")
+  const state = { advisorOverride: null }
+  const deps = { config: { advisor: { round1: { provider: "p", model: "m" } } }, agentOpts: {}, state, sessionId: "r4-d13-set" }
+  // 字符串简写 "codex-cli" → 归一化结构存储
+  let out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":"codex-cli"}', deps)
+  assert.ok(out.startsWith("advisor_config: set round1.runner"), "runner 进入可设路径: " + out)
+  assert.deepEqual(state.advisorOverride.round1.runner, { kind: "codex-cli" }, "字符串简写 → 归一化结构")
+  // 对象形态（model/effort 字段级校验 + 透传）
+  out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":{"kind":"codex-cli","model":"gpt-5.6-sol","effort":"high"}}', deps)
+  assert.ok(out.startsWith("advisor_config: set round1.runner"))
+  assert.deepEqual(state.advisorOverride.round1.runner, { kind: "codex-cli", model: "gpt-5.6-sol", effort: "high" })
+  // 字符串 "dsh" → 显式切回 dsh（回落硬停修正指引 2 的通道）
+  out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":"dsh"}', deps)
+  assert.deepEqual(state.advisorOverride.round1.runner, { kind: "dsh" }, "dsh 显式回切（非 codex 分支，回落既有链）")
+  // 面三（resolve 链消费）：override runner=codex-cli → codex 路由生效
+  state.advisorOverride.round1.runner = { kind: "codex-cli", model: "gpt-5.6-sol" }
+  const route = resolveAdvisorRoute({ config: deps.config, override: state.advisorOverride, agentOpts: {}, advisorRound: 0 })
+  assert.equal(route.provider, "codex-cli", "会话覆盖 runner 真正生效（codex 分支——一期已支持，工具面今通）")
+  assert.equal(route.model, "gpt-5.6-sol")
+  // reset 清除
+  out = runAdvisorConfigTool('{"action":"reset","path":"round1"}', deps)
+  assert.ok(out.startsWith("advisor_config: reset round1"))
+  assert.equal(state.advisorOverride, null)
+  // 非法值拒收：未知 kind / 类型错 / 越界 timeoutMs（B12 字段级错误 → invalid input，state 不变）
+  state.advisorOverride = { round1: { provider: "keep" } }
+  const before = JSON.stringify(state.advisorOverride)
+  for (const bad of [{ kind: "bogus" }, { kind: "codex-cli", timeoutMs: 10 }, ["codex-cli"], 42]) {
+    out = runAdvisorConfigTool(JSON.stringify({ action: "set", path: "round1.runner", value: bad }), deps)
+    assert.ok(out.startsWith("advisor_config: invalid input"), "非法 runner 拒收: " + out)
+    assert.ok(out.includes("runner"), "错误信息指向 runner 校验")
+  }
+  out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":"codex-wrong"}', deps)
+  assert.ok(out.startsWith("advisor_config: invalid input") && out.includes("dsh"), "字符串非枚举拒收（错误信息含合法域）: " + out)
+  assert.equal(JSON.stringify(state.advisorOverride), before, "拒收不改 state（N4）")
+})
+
+test("R4 D-13: runner 会话覆盖持久化往返——set runner → 落盘 → 模拟重启恢复 → 仍在且解析链继续生效（session-store 白名单此前丢弃）", async () => {
+  const { runAdvisorConfigTool } = await import("../lib/advisor.mjs")
+  const home = mkdtempSync(join(tmpdir(), "runner-rt-r4-"))
+  try {
+    const sid = "r4-d13-roundtrip"
+    const state = sessionState(sid)
+    const deps = { config: {}, agentOpts: {}, state, sessionId: sid }
+    // 面 1：advisor_config 工具 set（归一化结构入 override）
+    const out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":{"kind":"codex-cli","model":"gpt-5.6-sol"}}', deps)
+    assert.ok(out.startsWith("advisor_config: set round1.runner"), "set 成功: " + out)
+    // 面 2：落盘（index.mjs advisor_config set 写点的同一视图链路：sessionStateViewWithGeneration）
+    assert.ok(saveSessionState(sid, sessionStateViewWithGeneration(state), home), "落盘成功")
+    const entry = JSON.parse(readFileSync(resolveSessionStorePath(home), "utf8")).sessions[sid]
+    assert.deepEqual(entry.advisorOverride.round1.runner, { kind: "codex-cli", model: "gpt-5.6-sol" },
+      "持久化白名单保留 runner（D-13：此前 sanitizeAdvisorOverride 丢弃——重启即失）")
+    // 模拟重启：loadSessionState（normalizeRestored）→ runner 仍在
+    const snap = loadSessionState(sid, home)
+    assert.deepEqual(snap.advisorOverride.round1.runner, { kind: "codex-cli", model: "gpt-5.6-sol" }, "恢复侧 runner 保留")
+    // 面 3：恢复的 override 继续被解析链消费（往返闭合）
+    const route = resolveAdvisorRoute({ config: {}, override: snap.advisorOverride, agentOpts: {}, advisorRound: 0 })
+    assert.equal(route.ok, true)
+    assert.equal(route.provider, "codex-cli", "恢复的 runner 继续生效（codex 路由）")
+    assert.equal(route.model, "gpt-5.6-sol")
+    dropSession(sid)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ————————————— R4 §6.4：R1 审计 🔵 遗留收口 —————————————
+// ① per-point fail-open 接线级用例：resolver 级覆盖（"元数据不可得 → 透传 + 响亮告警"）已有，
+//    此前缺消费点接线形态——escalate dsh 行 / advisor dsh 主路径（元数据不可得时 effort
+//    原样透传进 agentOptions/stream opts + note 入返回尾部，绝不砖化）。②③④见
+//    codex-adapter.mjs 缓存注释 / 登记表 D-18 措辞核对 + D-15 测量标注（docs 侧交付）。
+
+test("R4 R1审计🔵①: 接线级 fail-open — escalate dsh 行元数据不可得（llm 无 resolveModelInfo）→ effort 原样透传 + note 入术后报告", async () => {
+  const started = []
+  const ctx = {
+    llm: { stream() { } }, // 无 resolveModelInfo → 元数据不可得（fail-open 判定分支）
+    subagents: {
+      async start(_kind, req) {
+        started.push(req)
+        return { result: Promise.resolve({ output: [{ type: "text", text: "second opinion" }], stopReason: "completed" }), dispose: async () => { } }
+      },
+    },
+  }
+  const sid = "r4-failopen-esc"
+  const deps = {
+    ctx, agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
+    config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "high" }] },
+    state: sessionState(sid), signal: undefined,
+    spawn: () => { throw new Error("codex must not spawn for a dsh row") }, platform: "linux", env: {},
+  }
+  const r = await captureWarn(() => runEscalate(deps, "fix it", undefined))
+  assert.equal(started.length, 1, "dsh 子代理已启动（未砖化）")
+  assert.equal(started[0].agentOptions.reasoningEffort, "high", "接线级：effort 原样透传进 agentOptions（元数据缺失不拦截）")
+  assert.ok(r.value.includes("passed through unverified"), "透传 note 入术后报告尾部（附录 D.3）")
+  assert.ok(r.warnings.some((w) => w.includes("effort metadata unavailable")), "响亮告警 console.warn 留档")
+  dropSession(sid)
+})
+
+test("R4 R1审计🔵①: 接线级 fail-open — advisor dsh 主路径元数据不可得 → stream opts 原样透传 reasoningEffort + note 入结果尾部", async () => {
+  const sid = "r4-failopen-adv"
+  const streamOptsSeen = []
+  const llm = {
+    stream(opts) { // 有 stream 无 resolveModelInfo → 元数据不可得
+      streamOptsSeen.push(opts)
+      return (async function* () {
+        yield REVIEW_TABLE
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const r = await captureWarn(() => runDshReview(sid, llm, {
+    advisor: { round1: { provider: "qax", model: "glm-5.3", effort: "high", timeoutMs: 300000 } },
+  }))
+  assert.equal(streamOptsSeen[0].reasoningEffort, "high", "接线级：effort 原样透传进 stream opts（元数据缺失不拦截）")
+  assert.ok(r.value.includes("passed through unverified"), "透传 note 入结果尾部")
+  assert.ok(r.warnings.some((w) => w.includes("effort metadata unavailable")), "响亮告警 console.warn 留档")
+  assert.ok(r.value.includes("| 1 |"), "评审照常交付（fail-open 绝不砖化）")
+  dropSession(sid)
+})
+
+// ————————————— R4 收尾微修复轮：D-25 TOKEN_SECRET 密钥源 + jobs 派发 warnPrefix —————————————
+
+test("R4 D-25: env THINCODER_TOKEN_SECRET 有值 → 用 env（优先于既有持久化文件，不读盘不写盘；空白串视为未设）", async () => {
+  const { resolveTokenSecret } = await import("../lib/advisor.mjs")
+  const home = mkdtempSync(join(tmpdir(), "d25-env-"))
+  try {
+    // 预置持久化密钥，证明 env 优先级更高
+    mkdirSync(join(home, ".thincoder"), { recursive: true })
+    writeFileSync(join(home, ".thincoder", "token-secret"), "persisted-secret-value\n")
+    assert.equal(resolveTokenSecret({ THINCODER_TOKEN_SECRET: "env-secret-value" }, home), "env-secret-value", "env 有值 → 用 env")
+    // 空白串 = 未设 → 走持久化链
+    assert.equal(resolveTokenSecret({ THINCODER_TOKEN_SECRET: "   " }, home), "persisted-secret-value", "空白 env 视为未设 → 读持久化")
+    // env 分支不动盘上文件
+    assert.equal(readFileSync(join(home, ".thincoder", "token-secret"), "utf8").trim(), "persisted-secret-value", "env 路径不写盘")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("R4 D-25: 无 env 有路径 → 生成 randomBytes(32).hex 持久化；清缓存重解析（模块级缓存模拟重启）密钥稳定，在途 token 不失效", async () => {
+  const { resolveTokenSecret, resolveTokenSecretPath, resetTokenSecretCacheForTests, validateDesignToken } = await import("../lib/advisor.mjs")
+  const home = mkdtempSync(join(tmpdir(), "d25-persist-"))
+  const home2 = mkdtempSync(join(tmpdir(), "d25-other-"))
+  const savedHome = process.env.DSH_HOME
+  const savedSecret = process.env.THINCODER_TOKEN_SECRET
+  const mint = (secret) => {
+    const payload = "d25-" + Math.random().toString(16).slice(2) + ":" + (Date.now() + 3600_000)
+    return payload + ":" + createHmac("sha256", secret).update(payload).digest("hex").slice(0, 16)
+  }
+  try {
+    delete process.env.THINCODER_TOKEN_SECRET
+    process.env.DSH_HOME = home
+    // 无状态解析器：首次解析 → 生成 64hex 密钥并持久化到 $DSH_HOME/.thincoder/token-secret
+    const s1 = resolveTokenSecret({}, home)
+    assert.match(s1, /^[0-9a-f]{64}$/, "crypto.randomBytes(32).hex 形态")
+    assert.equal(resolveTokenSecretPath(home), join(home, ".thincoder", "token-secret"), "路径复用 dsh-home.mjs 解析链（与 token-store 同源）")
+    assert.ok(existsSync(resolveTokenSecretPath(home)), "持久化文件生成")
+    assert.equal(readFileSync(resolveTokenSecretPath(home), "utf8").trim(), s1, "文件内容 = 密钥")
+    // 模块级单例（生产消费路径 tokenSecret()）经公共行为驱动：清缓存 → validateDesignToken 以 home 的密钥验签
+    resetTokenSecretCacheForTests()
+    assert.equal(validateDesignToken(mint(s1)), true, "单例从持久化文件解析 → 与 s1 同密钥（签名通过）")
+    // 模拟重启：清缓存（= 新进程的空缓存）→ 重解析 → 读同一持久化文件 → 同一密钥 → 在途 token 仍有效
+    resetTokenSecretCacheForTests()
+    assert.equal(validateDesignToken(mint(s1)), true, "重启后密钥稳定——在途 token 不因重启失效")
+    // 负对照：换 home（另一密钥域）→ 清缓存重解析生成新密钥 → 旧 token 失效（证明重解析真实发生、密钥按 home 隔离）
+    process.env.DSH_HOME = home2
+    resetTokenSecretCacheForTests()
+    assert.equal(validateDesignToken(mint(s1)), false, "不同 DSH_HOME → 新密钥 → 旧 token 失效（缓存清零真实生效）")
+  } finally {
+    if (savedSecret === undefined) delete process.env.THINCODER_TOKEN_SECRET
+    else process.env.THINCODER_TOKEN_SECRET = savedSecret
+    process.env.DSH_HOME = savedHome
+    resetTokenSecretCacheForTests() // 后续测试（默认密钥口径 makeEngToken）从恢复后的 env 重新解析
+    rmSync(home, { recursive: true, force: true })
+    rmSync(home2, { recursive: true, force: true })
+  }
+})
+
+test("R4 D-25: 无 env 无路径（DSH_HOME 不可解析）→ 回落公开默认值 + 响亮告警「门禁不可信」", async () => {
+  const { resolveTokenSecret } = await import("../lib/advisor.mjs")
+  // cwdHint 指向无 profile 根特征的深层临时目录（向上探测不命中——同 config-api.test U 系先例）
+  const noRoot = mkdtempSync(join(tmpdir(), "d25-nopath-"))
+  try {
+    const r = await captureWarn(() => resolveTokenSecret({}, null, noRoot))
+    assert.equal(r.value, "thincoder-default-secret", "回落公开默认值（fail-open——门禁不砖化但响亮告警）")
+    assert.ok(r.warnings.some((w) => w.includes("design token 门禁使用公开默认密钥，不可信")), "响亮告警：门禁不可信")
+    assert.ok(r.warnings.some((w) => w.includes("THINCODER_TOKEN_SECRET") && w.includes("DSH_HOME")), "告警给出两条修正路径（env / DSH_HOME）")
+  } finally {
+    rmSync(noRoot, { recursive: true, force: true })
+  }
+})
+
+test("R4 收尾 #4: advisor jobs 派发路径 warnPrefix 并入派发文本——与同步路径可见性一致（此前仅 console.warn 留档）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { jobs, specs } = fakeJobsFactory()
+  const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args)
+    : { events: [], exitCode: 0, outText: "| # | Issue | Detail |\n|---|---|---|\n| 1 | x | y |" })
+  const sid = "jobs-warnprefix-r4"
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+  // 组内 runner + 显式 provider/model 并存 → route.warnings 非空（「被忽略」告警）；timeoutMs > budgetCap → jobs 派发
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 900000 } } }
+  const out = await runAdvisorReview(
+    { llm: { stream: () => { throw new Error("must not be used") } }, spawn, platform: "linux", env: {}, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  assert.ok(out.includes("advisor-codex-1"), "派发正常（fake jobs 返回 branded string）")
+  assert.ok(out.includes("advisor configuration warnings"), "warnPrefix 摘要并入派发文本（与同步路径一致）")
+  assert.ok(out.includes("被忽略"), "具体警告内容（runner=codex-cli 生效中——组内 provider/model 被忽略）随文本可见")
+  await specs[0].hooks.done // settle（finalize 轮次推进）后再清理会话
   dropSession(sid)
 })
