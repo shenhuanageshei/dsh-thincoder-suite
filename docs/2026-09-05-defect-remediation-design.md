@@ -181,7 +181,10 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 
 ### 6.5 R4 受影响文件与验收
 
-文件：`lib/client.js`、`lib/advisor.mjs`、`lib/session-store.mjs`、`lib/index.mjs`（如 coercion 共享）、`test/codex-runner.test.mjs`、`METHODOLOGY.md`、`package.json`。
+文件：`lib/client.js`、`lib/advisor.mjs`、`lib/escalate.mjs`、`lib/session-store.mjs`、`lib/index.mjs`（如 coercion 共享）、`test/codex-runner.test.mjs`、`METHODOLOGY.md`、`package.json`。〔escalate.mjs 为 R3 code review 收尾折入项 ② 所需——2026-09-05 补入清单〕
+
+**R3 code review 收尾折入（4 项小修）**：① 回落失败路径后缀补「回落失败 X/2」计数（与不可达路径对齐）；② escalate dsh 超时竞态分支补 codexFailureAdvisory（与 eng 对齐）；③ clearCodexFailureCount 更名 clearAdvisorRouteFailureState + 别名导出；④ advisor JSDoc 补 single-flight "Error:" 前缀例外注记。各 ≥1 断言。
+
 验收：① 竞态用例（保存期间编辑被保留 + 提示）；② runner 往返用例；③ 测量数据登记；④ eng.mjs 评审报告落档；⑤ 登记表全条目终态核对。
 
 ## 7. UI/交互决策汇总（METHODOLOGY 要求集中呈现）
