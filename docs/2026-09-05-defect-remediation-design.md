@@ -1,7 +1,7 @@
 # 设计文档：机制缺陷分轮修复设计（R1-R4）
 
 - 日期：2026-09-05
-- 状态：APPROVED（2026-09-05 设计评审通过——4🟡+2🔵 发现全部折入；DP-1/2/3 待用户终裁后实施）
+- 状态：APPROVED（2026-09-05 二次评审通过——5🟡+3🔵 全部折入；DP-1/2/3 已全部终裁〔全按推荐〕；**R1 已交付**〔155/155 绿，提交 95af758〕，本设计未决实施范围 = R2-R4）
 - 上游：[需求文档](2026-09-05-defect-remediation-requirements.md)（含三项用户裁决 D-裁决-1/2/3）· [缺陷登记表](2026-09-05-defect-registry.md)（D-01…D-24，全部条目带证据行号）· 审计报告（thorough 子代理，2026-09-05）
 - 平台契约依据：登记表「平台契约要点」五条（jobs 返回 branded string / 通知只含指针 / cancel→abort / run() 无墙钟 / job_output wait 上限 600s）
 
@@ -31,6 +31,8 @@
 
 ## 3. R1 — 诊断与校验层
 
+> 〔时态说明：本节为**已实施记录**（2026-09-05 交付，155/155 绿）——验收条款即已验证事实；未决实施范围为 §4-§6（R2-R4）〕
+
 ### 3.1 D-02 effort 三层校验收口（核心）
 
 **现状**：9 个消费点 × 三层矩阵中 6 个 GAP（登记表 D-02 + 审计 §4 矩阵）；`effort-resolve.mjs` 现行为回落到模型 `defaultEffort`（违背 D-裁决-2）。
@@ -38,7 +40,7 @@
 **方案**：
 
 - **`resolveSupportedEffort` 重规约（dsh 侧）**：回落语义改为**最近支持档**（D-裁决-2）。算法：按档位序 `off < low < medium < high < max` 在目标模型 `reasoningEfforts` 列表中查找；命中→保持；未命中→序距离最近的档；**等距 tie-break 向上取**（DP-2，保推理质量）。元数据不可得（resolveModelInfo 缺失/抛错）→ **fail-open 透传 + 响亮告警**（「保证真正能用」原则：绝不因校验砖化）。回落/透传都带 note。
-- **新增 codex 侧 resolver**：`resolveCodexRowEffort(deps, runner, effort)` —— 数据源为 `discoverCodexModels` catalog（**不是** `llm.resolveModelInfo`，审计判定点 ③）。dsh 档位 → codex 档位：先按同名校验是否在模型 `supported_reasoning_levels` 内；不在→最近档（同 tie-break）；`off` → `null`（不传，codex 无 off）。catalog 未命中该模型 → fail-open 透传 + 告警。
+- **新增 codex 侧 resolver**：`resolveCodexRowEffort(deps, runner, effort)` —— 数据源为 `discoverCodexModels` catalog（**不是** `llm.resolveModelInfo`，审计判定点 ③）。dsh 档位 → codex 档位：先按同名校验是否在模型 `supported_reasoning_levels` 内；不在→最近档（同 tie-break）；`off` → `null`（不传，codex 无 off）。catalog 未命中该模型 → fail-open 透传 + 告警。**档位规范域（有意取舍）**：dsh 五档（off/low/medium/high/max）为唯一配置域，codex 专属档（xhigh/ultra）不可直达——单一规范档位域防配置面分裂；xhigh 级别需求按运行数据另立决策。
 - **收口点接线（消灭逐点漂移）**：
   - dsh 行：`consult.mjs:165`、`escalate.mjs:207` 按**行自身**的 provider/model 调 `resolveSupportedEffort`（不是父代理路由）；
   - codex 行：`consult` codex 行、`escalate` codex runner、`eng.mjs:399`、advisor 的 `runner.effort`（`resolveAdvisorRoute` 输出 → `buildCodexArgs` 之前）统一走 `resolveCodexRowEffort`；
@@ -74,7 +76,7 @@ advisor 单次 LLM 输出预算 `LLM_MAX_TOKENS` 由硬编码改为可配置：�
 ### 3.8 R1 验收标准
 
 1. 矩阵 9 消费点全部转绿：每点 ≥1 回归用例（非法档 → 最近档回落 + note 断言；元数据缺失 → 透传 + 告警断言）；
-2. tie-break 用例：medium 缺失且 low/high 皆支持 → 取 high（DP-2 过评审后锁定）；
+2. tie-break 用例：medium 缺失且 low/high 皆支持 → 取 high（DP-2 已终裁：向上取，2026-09-05 用户裁决，已实施）；
 3. codex 行用例：catalog 命中/未命中/off→null 三形态；
 4. 空响应文本含分类行与观测字段；
 5. dsh 超限预算钳制告警用例；版本 0.7.0 入库；
@@ -137,7 +139,7 @@ escalate codex（首次 + **followup**，D-04 一并修）与 eng_coder codex �
 - `codexFailureCount.delete` 移到**回落轮结果之后**（修正 :1015 顺序错误）；
 - 新增 `fallbackFailureCount`（会话内存态）：回落轮失败 +1、成功清零；
 - **连续 2 次回落失败 → 硬停**：返回「双路由皆不可用」+ 配置诊断（codex 路由与 dsh 路由各自状态、最近失败码、修正指引：网络/代理/runner 切换/provider 检查）；
-- 失败序列封顶：`codexFailStreak + fallbackFailStreak` 独立于 advisorRound 计数，任何组合的零进度循环在硬停处终止。
+- **计数器语义（精确）**：`codexFailureCount`（既有 Map）——codex 路由失败 +1、**任一路由成功清零**、回落轮结果产出后才执行 delete（顺序修正）；`fallbackFailureCount`（新增）——回落轮失败 +1、任一路由成功清零。两计数器独立于 advisorRound（失败不烧轮次），任何组合的零进度循环在「连续 2 次回落失败」硬停处终止。
 
 ### 5.2 D-01 重试与分类（D-裁决-1）
 
@@ -187,11 +189,11 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 
 ## 8. 设计决策点（评审时请用户裁定）
 
-| # | 问题 | 推荐 | 备选 |
-|---|---|---|---|
-| DP-1 | D-21 dsh 子代理路径处置 | **方案 A：本轮钳制告警，jobs 迁移另立项**（协议级重构超治理范畴；历史无 >600s 死亡记录） | 方案 B：一并迁 jobs（工程流程协议改为通知驱动，范围显著扩大） |
-| DP-2 | 最近支持档等距 tie-break | **向上取**（保推理质量：medium 缺失取 high） | 向下取（保成本） |
-| DP-3 | 全局 codex 并发上限默认值 | **8**（consult 5 + advisor job 1 + 余量；可配） | 更保守 6 / 更宽 10 |
+| # | 问题 | 终裁 |
+|---|---|---|
+| DP-1 | D-21 dsh 子代理路径处置 | **已终裁（2026-09-05，全按推荐）：方案 A 钳制告警，jobs 迁移另立项**；备选 B 作废 |
+| DP-2 | 最近支持档等距 tie-break | **已终裁（2026-09-05）：向上取**（R1 已实施） |
+| DP-3 | 全局 codex 并发上限默认值 | **已终裁（2026-09-05）：8**（可配，UI-4） |
 
 ## 9. 验收标准（项目级，映射需求 §5）
 
@@ -199,6 +201,23 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 2. 单测全绿且每修复 ≥1 回归用例（R1-R4 各节验收条款即用例清单）；
 3. 真机验证：advisor（jobs 派发 + 回落链 + token 签发）、eng_coder（一次交付）、escalate（含 followup）、consult（含 codex 行）各一次成功；复测「空响应」「effort 秒死」两受害场景（前者给出可归因诊断或重试后成功；后者不再秒死）；
 4. git：R1-R4 每轮独立提交 + 版本 0.7.0→0.8.0 推进 + 文档登记与 METHODOLOGY 历史记入。
+
+### 9.1 用户故事-测试映射（METHODOLOGY 纪律，每故事 ≥1 用例）
+
+| 用户故事 | 测试映射 |
+|---|---|
+| US-1 可预测回落 | R3 验收①②（活锁封顶双路由诊断 / delete-after-result 顺序） |
+| US-2 空响应可诊断 | R1 已交付（空响应四形态分类+观测用例组）；R3 验收③④（重试语义） |
+| US-3 token 可恢复 | R2 验收⑧（job_output 保尾截断下 token 完整可提取） |
+| US-4 后台单飞 | R2 验收②（复合键：同机制拒绝含 job id / 异机制不受阻） |
+| US-5 长任务完整执行 | R2 验收①（escalate/eng 迁移 + 簿记 done 内成功分支） |
+| US-6 写任务安全 | R2 验收④⑥（D-20 失败不簿记 / 回滚指引·清扫·卫生） |
+| US-7 池行能力校验 | R1 已交付（9 消费点逐点用例）；R2 D-02 遗留接通用例 |
+| US-8 保存时拦截 | R1 已交付（L2 目录化下拉）；R4 验收①（竞态） |
+| US-9 进程卫生 | R2 验收⑥（fail-fast/清扫/三项卫生）；**边界**：宿主硬死孤儿=文档化边界（B9），启动清扫缓解——2026-09-05 二次评审确认该差距被正式接受 |
+| US-10 配置单一事实源 | R1 已交付（maxOutputTokens 三面同步用例）；R4 验收②（runner 三面往返） |
+| US-11 工程过程 | 各轮独立提交 + 版本推进（本节第 4 条）+ 登记表状态核对（R4 验收⑤） |
+| US-12 失败可读 | R1 已交付（stream observation + codex usage/stderr 保尾用例） |
 
 ## 10. 风险与边界
 
