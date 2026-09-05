@@ -1,7 +1,7 @@
 # 设计文档：机制缺陷分轮修复设计（R1-R4）
 
 - 日期：2026-09-05
-- 状态：APPROVED（2026-09-05 二次评审通过——5🟡+3🔵 全部折入；DP-1/2/3 已全部终裁〔全按推荐〕；**R1 已交付**〔155/155 绿，提交 95af758〕，本设计未决实施范围 = R2-R4）
+- 状态：REVISED（2026-09-05 三次评审 1🔴+2🟡+3🔵 全部折入；DP-1/2/3 已终裁〔全按推荐〕；**R1 已交付**〔155/155，`95af758`〕**R2 已交付**〔185/185，`dbbb6c9`〕，本设计未决实施范围 = **R3-R4**）
 - 上游：[需求文档](2026-09-05-defect-remediation-requirements.md)（含三项用户裁决 D-裁决-1/2/3）· [缺陷登记表](2026-09-05-defect-registry.md)（D-01…D-24，全部条目带证据行号）· 审计报告（thorough 子代理，2026-09-05）
 - 平台契约依据：登记表「平台契约要点」五条（jobs 返回 branded string / 通知只含指针 / cancel→abort / run() 无墙钟 / job_output wait 上限 600s）
 
@@ -17,7 +17,7 @@
 |---|---|---|---|
 | **R1** | 诊断与校验层 | D-01(观测)、D-02、D-17、D-18、D-23(版本/注释部分) | 先让失败可读、effort 真正能用——后续轮依赖 R1 的观测与收口点 |
 | **R2** | 执行架构与进程生命周期 | D-03、D-04、D-05、D-06、D-09、D-10、D-11、D-14、D-16、D-20、D-21、D-22 | 长任务不再静默死亡：jobs 迁移 + 单飞 + 代际检查 + 进程卫生 |
-| **R3** | 回落与失败语义完备化 | D-07、D-01(重试/分类)、D-19 | 自愈可预测：回落封顶 + 空响应重试分类 + prior 纯净 |
+| **R3** | 回落与失败语义完备化 | D-07、D-01(重试/分类)、D-19、**D-06(同步路径单飞扩展)** | 自愈可预测：回落封顶 + 空响应重试分类 + prior 纯净 + 单飞语义补全 |
 | **R4** | 一致性与 UX 收口 | D-12、D-13、D-15、D-24 + 文档/测试收尾 | 配置三面同步 + 设置页竞态 + 测量定档 + 评审欠账 |
 
 轮次依赖：R2 的迁移设计消费 R1 的 codex effort 收口（迁移后的 escalate/eng 复用同一 resolver）；R3 的空响应分类消费 R1 的观测字段；R4 的 D-15 测量消费 R2 的 idle 间隙日志。四轮按序执行，每轮一个 eng_coder 任务（stages 化）+ 偏离审计 + 交付 code review + 独立提交。
@@ -43,7 +43,7 @@
 - **新增 codex 侧 resolver**：`resolveCodexRowEffort(deps, runner, effort)` —— 数据源为 `discoverCodexModels` catalog（**不是** `llm.resolveModelInfo`，审计判定点 ③）。dsh 档位 → codex 档位：先按同名校验是否在模型 `supported_reasoning_levels` 内；不在→最近档（同 tie-break）；`off` → `null`（不传，codex 无 off）。catalog 未命中该模型 → fail-open 透传 + 告警。**档位规范域（有意取舍）**：dsh 五档（off/low/medium/high/max）为唯一配置域，codex 专属档（xhigh/ultra）不可直达——单一规范档位域防配置面分裂；xhigh 级别需求按运行数据另立决策。
 - **收口点接线（消灭逐点漂移）**：
   - dsh 行：`consult.mjs:165`、`escalate.mjs:207` 按**行自身**的 provider/model 调 `resolveSupportedEffort`（不是父代理路由）；
-  - codex 行：`consult` codex 行、`escalate` codex runner、`eng.mjs:399`、advisor 的 `runner.effort`（`resolveAdvisorRoute` 输出 → `buildCodexArgs` 之前）统一走 `resolveCodexRowEffort`；
+  - codex 行：`consult` codex 行、`escalate` codex runner、`eng.mjs:399`、advisor 的 `runner.effort`（`resolveAdvisorRoute` 输出 → `buildCodexArgs` 之前）统一走 `resolveCodexRowEffort`（〔归属注记〕consult codex 行的 **row.effort 接通**完成于 R2——R1 完成 runner.effort 链，row.effort 死配置遗留至 R2 收口，见登记表 D-02）；
   - `eng.mjs:385` 的 dsh 解析只在 dsh 分支执行（codex 分支跳过，消除误导告警）。
 - **L2 设置页预检**（UI 决策 UI-1）：池行 effort 下拉按行动态取档位——dsh 行用 `/catalog` 的 provider+model `reasoningEfforts`；codex 行用 codex models catalog；`engCard` 的 EffortInput 补 provider/model 上下文（client.js:1057 现无）。静态枚举下拉全部替换。
 - 修正 `effort-resolve.mjs:6` 虚假注释。
@@ -84,6 +84,8 @@ advisor 单次 LLM 输出预算 `LLM_MAX_TOKENS` 由硬编码改为可配置：�
 7. maxOutputTokens 配置化验收：非法值回落缺省 + 告警用例；三面白名单同步断言（PUT 接受 ⊕ merge 保留 ⊕ 运行时生效）。
 
 ## 4. R2 — 执行架构与进程生命周期
+
+> 〔时态说明：本节为**已实施记录**（2026-09-05 交付，185/185 绿）——验收条款即已验证事实；未决实施范围为 §5-§6（R3-R4）〕
 
 ### 4.1 codex 写路径 jobs 迁移（D-03 / D-04 / T2.1b 收口）
 
@@ -150,10 +152,14 @@ escalate codex（首次 + **followup**，D-04 一并修）与 eng_coder codex �
 
 finalize 区分 `body`（评审正文）与 `body + 机制性后缀`（回落告警/effort note/截断提示）：`lastAdvisorOutput` 只存 body；返回文本照常带后缀（可见性不变）。收敛轮 prior 注入因此不再携带插件杂讯。
 
-### 5.4 R3 受影响文件与验收
+### 5.4 D-06 同步路径单飞扩展（2026-09-05 R2 审计裁决折入，三次评审 🔴 补全）
 
-文件：`lib/advisor.mjs`、`test/codex-runner.test.mjs`。
-验收：① 活锁封顶用例（codex 败×2 → 回落败×2 → 硬停文本含双路由诊断）；② delete-after-result 顺序用例；③ 空响应重试一次→仍空→前缀失败不烧轮次用例；④ 重试后成功不重复计轮用例；⑤ prior 纯净用例（后缀不进 lastAdvisorOutput）。
+R2 交付的在飞表检查仅覆盖 jobs 派发入口；同机制 >cap job 在飞期间，≤cap 同步调用仍会并行执行（轮次/prior 双写窗口）。本节将 `checkInFlightJob` 扩展到三机制**全部入口**（含同步路径）：同机制在飞时任何新调用被拒（含在飞 job id 与接续指引），settle 双分支清除不变。
+
+### 5.5 R3 受影响文件与验收
+
+文件：`lib/advisor.mjs`、`lib/escalate.mjs`（仅注释）、`test/codex-runner.test.mjs`。
+验收：① 活锁封顶用例（codex 败×2 → 回落败×2 → 硬停文本含双路由诊断）；② delete-after-result 顺序用例；③ 空响应重试一次→仍空→前缀失败不烧轮次用例；④ 重试后成功不重复计轮用例；⑤ prior 纯净用例（后缀不进 lastAdvisorOutput）；⑥ **正向清零用例**——回落轮成功后 codexFailureCount/fallbackFailureCount 归零（单次未来失败不触发硬停）；⑦ **同步路径单飞用例**——同机制 >cap job 在飞时 ≤cap 调用被拒（D-06 扩展）。
 
 ## 6. R4 — 一致性与 UX 收口
 
@@ -171,7 +177,7 @@ busy 期间禁用全部表单输入（非仅按钮）；保存成功后的 refre
 
 ### 6.4 D-24 + 收尾
 
-eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠账）；全部登记条目状态核对；METHODOLOGY 文档历史记入 R0-R4；版本号推进至 0.8.0。**R1 审计 🔵 遗留收口**：① per-point fail-open（元数据缺失）补 1-2 个接线级用例（或接受 resolver 级覆盖并记录）；② 登记表 D-02 用例数 17→19 更正；③ 登记表 D-18「TIMEOUT 信封补 usage」措辞收窄（仅 idle-watchdog 信封带结构化 usage，墙钟信封在诊断串内——设计 §3.2 本就只要求诊断）；④ `discoverCodexModels` 缓存无 refresh 通道（R1 评审 #3）——加 refresh 参数或注释缓存语义。
+eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠账）；全部登记条目状态核对；METHODOLOGY 文档历史记入 R0-R4；版本号推进至 0.8.0。**R1 审计 🔵 遗留收口**：① per-point fail-open（元数据缺失）补 1-2 个接线级用例（或接受 resolver 级覆盖并记录）；② 登记表 D-18「TIMEOUT 信封补 usage」措辞收窄（仅 idle-watchdog 信封带结构化 usage，墙钟信封在诊断串内——设计 §3.2 本就只要求诊断）；③ `discoverCodexModels` 缓存无 refresh 通道（R1 评审 #3）——加 refresh 参数或注释缓存语义；④ 验证 docs/README.md 三份新文档登记在案（收尾核对）。〔D-02 用例数 17→19 已随二次评审落盘，原 ② 项关闭〕
 
 ### 6.5 R4 受影响文件与验收
 
@@ -209,7 +215,7 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 | US-1 可预测回落 | R3 验收①②（活锁封顶双路由诊断 / delete-after-result 顺序） |
 | US-2 空响应可诊断 | R1 已交付（空响应四形态分类+观测用例组）；R3 验收③④（重试语义） |
 | US-3 token 可恢复 | R2 验收⑧（job_output 保尾截断下 token 完整可提取） |
-| US-4 后台单飞 | R2 验收②（复合键：同机制拒绝含 job id / 异机制不受阻） |
+| US-4 后台单飞 | R2 验收②（复合键：同机制拒绝含 job id / 异机制不受阻）+ R3 验收⑦（同步路径扩展——全部入口单飞） |
 | US-5 长任务完整执行 | R2 验收①（escalate/eng 迁移 + 簿记 done 内成功分支） |
 | US-6 写任务安全 | R2 验收④⑥（D-20 失败不簿记 / 回滚指引·清扫·卫生） |
 | US-7 池行能力校验 | R1 已交付（9 消费点逐点用例）；R2 D-02 遗留接通用例 |
