@@ -141,11 +141,11 @@ escalate codex（首次 + **followup**，D-04 一并修）与 eng_coder codex �
 - `codexFailureCount.delete` 移到**回落轮结果之后**（修正 :1015 顺序错误）；
 - 新增 `fallbackFailureCount`（会话内存态）：回落轮失败 +1、成功清零；
 - **连续 2 次回落失败 → 硬停**：返回「双路由皆不可用」+ 配置诊断（codex 路由与 dsh 路由各自状态、最近失败码、修正指引：网络/代理/runner 切换/provider 检查）；
-- **计数器语义（精确）**：`codexFailureCount`（既有 Map）——codex 路由失败 +1、**任一路由成功清零**、回落轮结果产出后才执行 delete（顺序修正）；`fallbackFailureCount`（新增）——回落轮失败 +1、任一路由成功清零。两计数器独立于 advisorRound（失败不烧轮次），任何组合的零进度循环在「连续 2 次回落失败」硬停处终止。
+- **计数器语义（精确）**：`codexFailureCount`（既有 Map）——codex 路由失败 +1、**任一路由成功清零**、回落轮结果产出后才执行 delete（顺序修正）；`fallbackFailureCount`（新增）——回落轮失败 +1、任一路由成功清零。两计数器独立于 advisorRound（失败不烧轮次），任何组合的零进度循环在「连续 2 次回落失败」硬停处终止。〔实现语义（R3 交付采纳，2026-09-05 架构确认）：delete 仅在回落轮**成功**时执行——回落失败不清零 codex 计数，下一调用直接再进回落轮（不交替），连败 2 次硬停 = 4 次调用封顶；依据 D-裁决-3「不再交替重试」〕
 
 ### 5.2 D-01 重试与分类（D-裁决-1）
 
-- 空响应（R1 分类为非基础设施形态）→ **自动重试一次**（复用 messages，同 stall 重试通道语义但独立计数）；再空 → 返回 **"Advisor:" 前缀**的可归因失败（分类 + 观测字段 + 「重试一次仍空」），不烧轮次、不写 prior（现状空响应会被当 completed 烧轮次——一并修正）；
+- 空响应（R1 分类为非基础设施形态）→ **自动重试一次**（复用 messages，同 stall 重试通道语义但独立计数）；再空 → 返回 **"Advisor:" 前缀**的可归因失败（分类 + 观测字段 + 「重试一次仍空」），不烧轮次、不写 prior。〔勘误（R3 交付 probe 证实）：基线空响应占位文本本就带 Advisor: 前缀、不烧轮次——本节交付的是终态语义，属措辞收敛而非行为修正〕；
 - 分类为基础设施形态（error 无 message / stall）→ 走既有失败路径，不空重试。
 
 ### 5.3 D-19 prior 纯净化
@@ -158,7 +158,7 @@ R2 交付的在飞表检查仅覆盖 jobs 派发入口；同机制 >cap job 在�
 
 ### 5.5 R3 受影响文件与验收
 
-文件：`lib/advisor.mjs`、`lib/escalate.mjs`（仅注释）、`test/codex-runner.test.mjs`。
+文件：`lib/advisor.mjs`、`lib/escalate.mjs`、`lib/eng.mjs`、`test/codex-runner.test.mjs`。〔2026-09-05 R3 交付勘误：原清单漏 eng.mjs 且误限 escalate 仅注释，与 §5.4 三机制全入口要求冲突——以 §5.4 契约为准修正；escalate/eng 入口检查随补丁轮交付〕
 验收：① 活锁封顶用例（codex 败×2 → 回落败×2 → 硬停文本含双路由诊断）；② delete-after-result 顺序用例；③ 空响应重试一次→仍空→前缀失败不烧轮次用例；④ 重试后成功不重复计轮用例；⑤ prior 纯净用例（后缀不进 lastAdvisorOutput）；⑥ **正向清零用例**——回落轮成功后 codexFailureCount/fallbackFailureCount 归零（单次未来失败不触发硬停）；⑦ **同步路径单飞用例**——同机制 >cap job 在飞时 ≤cap 调用被拒（D-06 扩展）。
 
 ## 6. R4 — 一致性与 UX 收口

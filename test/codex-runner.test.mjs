@@ -1157,15 +1157,17 @@ async function runDshReview(sid, llm, config, deps = {}) {
 
 test("R1 D-01 观测: 空响应形态一 finish-null —— 分类行 + 观测字段（finish/blocks/usage）+ console.warn 留档", async () => {
   const sid = "r1-empty-null"
-  const llm = reviewLlm([]) // 流直接结束：零块、零 finish
+  const llm = reviewLlm([]) // 流直接结束：零块、零 finish（重试一次同样空——R3 D-01 后 stream 被调两次）
   const r = await captureWarn(() => runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } }))
   const out = r.value
-  assert.ok(out.startsWith("Advisor: (empty response"), "返回语义不变（R1 不重试不烧轮次——留 R3）: " + out.slice(0, 80))
+  assert.ok(out.startsWith("Advisor: review failed (empty response"), "R3 语义：重试一次仍空 → 前缀失败: " + out.slice(0, 80))
+  assert.ok(out.includes("重试一次仍空"), "重试标记可见（D-裁决-1）")
   assert.ok(out.includes("empty-response classification: finish-null"), "三形态之一：finish null")
   assert.ok(out.includes("stream observation: finish=null"), "观测字段：finish kind")
   assert.ok(out.includes("blocks(text=0,tool-call=0)"), "观测字段：block 计数")
   assert.ok(out.includes("usage=none"), "观测字段：usage")
   assert.ok(r.warnings.some((w) => w.includes("stream observation: finish=null")), "console.warn 留档（D-18）")
+  assert.ok(r.warnings.some((w) => w.includes("自动重试一次")), "重试 console.warn 留档（R3 D-01）")
   dropSession(sid)
 })
 
@@ -1175,7 +1177,8 @@ test("R1 D-01 观测: 空响应形态二 stop 零文本块 —— 分类行 + fi
     { type: "finish", reason: { kind: "stop" }, usage: { inputTokens: 5, outputTokens: 0 } },
   ])
   const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } })
-  assert.ok(out.startsWith("Advisor: (empty response"))
+  assert.ok(out.startsWith("Advisor: review failed (empty response"), "R3 语义：重试一次仍空 → 前缀失败")
+  assert.ok(out.includes("重试一次仍空"), "重试标记可见")
   assert.ok(out.includes("empty-response classification: stop-zero-text-blocks"), "三形态之二：stop 零块")
   assert.ok(out.includes("stream observation: finish=stop"))
   assert.ok(out.includes('"inputTokens":5'), "finish 携带的 usage 入观测字段")
@@ -1200,7 +1203,8 @@ test("R1 D-01 观测: finish=length 显式分类（生产复现根因：推理�
     { type: "finish", reason: { kind: "length" } },
   ])
   const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } })
-  assert.ok(out.startsWith("Advisor: (empty response"))
+  assert.ok(out.startsWith("Advisor: review failed (empty response"), "R3 语义：重试一次仍空 → 前缀失败")
+  assert.ok(out.includes("重试一次仍空"), "重试标记可见")
   assert.ok(out.includes("empty-response classification: length"), "length 显式分类（登记表 D-01 修复要求）")
   assert.ok(out.includes("advisor.maxOutputTokens"), "maxTokens 不足的独立诊断指引")
   dropSession(sid)
@@ -2200,3 +2204,635 @@ function bigReviewHead(output) {
   const first = output.split("\n")[0]
   return first
 }
+
+// ————————————— R3 §5.1（D-07 / D-裁决-3）：回落封顶与硬停 —————————————
+// 计数器语义（设计 §5.1 精确版）：codexFailureCount——codex 失败 +1、任一路由成功清零、
+// delete 移到回落轮结果之后（失败不清零）；fallbackFailureCount——回落失败 +1、任一路由
+// 成功清零；连续 2 次回落失败硬停（双路由诊断 + 修正指引）；硬停 armed 后同会话后续
+// advisor 调用持续返回硬停指引（不静默重试）——配置变更（路由指纹失配）或会话重置解除。
+
+/** R3 D-07 测试共用：codex 必败 spawn（PROCESS_ERROR；execCalls 只数真实 exec 不数 --version probe）。 */
+function r3FailingCodexSpawn() {
+  let execCalls = 0
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    execCalls++
+    return { events: [], exitCode: 1 } // 非零退出无输出 → PROCESS_ERROR
+  })
+  return { spawn, execCalls: () => execCalls }
+}
+
+/** R3 D-07 测试共用：dsh 回落轮 agent 构造。 */
+function r3Agent(sid) {
+  return { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+}
+
+test("R3 D-07 活锁封顶: codex 败×2 → 回落败×2 → 硬停（双路由诊断 + 修正指引，不再交替重试）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { spawn, execCalls } = r3FailingCodexSpawn()
+  const llmCalls = { n: 0 }
+  const llm = { // 回落必败：stream 抛错 → "Advisor: review failed (unknown)"（确定性失败形态）
+    stream() { llmCalls.n++; return (async function* () { throw new Error("fb route down") })() },
+  }
+  const sid = "r3-d07-livelock"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const run = (cfg) => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: {} },
+    { agent, config: cfg ?? config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+
+  const r1 = await run()
+  assert.ok(r1.includes("Advisor: review failed (codex-cli PROCESS_ERROR"), "codex 失败 #1")
+  assert.equal(llmCalls.n, 0, "codex 路径不触碰 llm")
+  const r2 = await run()
+  assert.ok(r2.includes("下一轮 advisor start 将自动回落"), "codex 失败 #2 → 回落预告（fallbackNote）")
+  assert.equal(execCalls(), 2, "codex 恰好跑两次")
+
+  const r3 = await run() // 回落失败 #1
+  assert.ok(r3.includes("自动回落 dsh 路由"), "第 3 轮触发智能回落")
+  assert.ok(r3.includes("review failed (unknown) — fb route down"), "回落轮失败可归因")
+  assert.equal(execCalls(), 2, "delete-after-result：回落失败不清零 codex 计数——codex 不被重试（顺序修正）")
+  assert.ok(!r3.includes("回落硬停"), "回落失败 1/2——未硬停")
+
+  const r4 = await run() // 回落失败 #2 → 硬停
+  assert.ok(r4.startsWith("Advisor: 回落硬停"), "连续 2 次回落失败 → 硬停文本（不经 finalize——无 warnPrefix）")
+  assert.ok(r4.includes("双路由皆不可用"), "硬停声明：双路由皆不可用")
+  assert.ok(r4.includes("不再交替重试"), "D-裁决-3：终止自愈循环")
+  assert.ok(r4.includes("codex 路由: runner=codex-cli model=gpt-5.6-sol"), "codex 路由诊断（配置状态）")
+  assert.ok(r4.includes("最近失败码: PROCESS_ERROR"), "codex 最近失败码")
+  assert.ok(r4.includes("dsh 回落路由: qax:glm-5.3"), "dsh 回落路由诊断（配置状态）")
+  assert.ok(r4.includes("fb route down"), "dsh 回落最近失败原因可见")
+  assert.ok(r4.includes("网络/代理"), "修正指引：网络/代理")
+  assert.ok(r4.includes("runner 切换"), "修正指引：runner 切换")
+  assert.ok(r4.includes("provider 检查"), "修正指引：provider 检查")
+  assert.ok(r4.includes("硬停解除"), "解除方式指引（配置变更 / 会话重置）")
+  assert.equal(execCalls(), 2, "硬停前 codex 未再重试（codex↔dsh 无界交替就此终止）")
+  assert.equal(llmCalls.n, 2, "两轮回落各调一次 llm（失败确定性）")
+  dropSession(sid)
+})
+
+test("R3 D-07 硬停持续: armed 后同会话后续调用持续返回硬停指引（零 LLM/零 codex 活动）——配置变更 → 自动解除", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { spawn, execCalls } = r3FailingCodexSpawn()
+  const llmCalls = { n: 0 }
+  const llm = { stream() { llmCalls.n++; return (async function* () { throw new Error("fb route down") })() } }
+  const sid = "r3-d07-held"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const run = (cfg) => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: {} },
+    { agent, config: cfg ?? config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  for (let i = 0; i < 4; i++) await run() // codex×2 → 回落×2 → 硬停 armed
+  const llmBefore = llmCalls.n
+  const execBefore = execCalls()
+
+  const r5 = await run() // held：不重试
+  assert.ok(r5.startsWith("Advisor: 回落硬停"), "held：继续返回硬停指引（而非静默重试）")
+  assert.equal(llmCalls.n, llmBefore, "零 LLM 调用")
+  assert.equal(execCalls(), execBefore, "零 codex 调用")
+  assert.equal(sessionState(sid).advisorRound, 0, "held 不烧轮次")
+
+  // 配置变更（round1.provider 变化 → 路由指纹失配）→ 硬停自动解除 → 常规执行恢复
+  const cfg2 = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax-fixed", model: "glm-5.3", timeoutMs: 300000 } } }
+  const r6 = await run(cfg2)
+  assert.ok(!r6.includes("回落硬停"), "配置变更 → 硬停解除")
+  assert.ok(r6.includes("codex-cli PROCESS_ERROR"), "恢复常规执行（codex 重试——计数已随解除清零）")
+  assert.equal(execCalls(), execBefore + 1, "恢复后 codex 实际被调用一次")
+  dropSession(sid)
+})
+
+test("R3 D-07 硬停解除（会话重置）: clearCodexFailureCount 清双计数器/最近失败码/硬停状态（D-22 清理组扩展）", async () => {
+  const { runAdvisorReview, clearCodexFailureCount } = await import("../lib/advisor.mjs")
+  const { spawn, execCalls } = r3FailingCodexSpawn()
+  const llm = { stream() { return (async function* () { throw new Error("fb route down") })() } }
+  const sid = "r3-d07-reset"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const run = () => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: {} },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  for (let i = 0; i < 4; i++) await run() // 硬停 armed
+  const held = await run()
+  assert.ok(held.startsWith("Advisor: 回落硬停"), "armed 后 held 生效")
+  clearCodexFailureCount(sid) // 模拟 session/disposed 清理组（index.mjs 既有挂点）
+  const r = await run()
+  assert.ok(!r.includes("回落硬停"), "会话销毁清理 → 硬停解除")
+  assert.ok(r.includes("codex-cli PROCESS_ERROR"), "恢复常规执行（codex 重试）")
+  assert.equal(execCalls(), 3, "解除后 codex 被调用（2 次硬停前 + 1 次解除后）")
+  dropSession(sid)
+})
+
+test("R3 D-07 delete-after-result 顺序（正向）: 回落成功 → 结果产出后计数清零 → 下一轮重试 codex（单次失败不回落）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { spawn, execCalls } = r3FailingCodexSpawn()
+  const llmCalls = { n: 0 }
+  const llm = { // 回落成功（确定性：一次 stream 调用产出正文）
+    stream() {
+      llmCalls.n++
+      return (async function* () {
+        yield { type: "block-end", block: { type: "text", text: "FB REVIEW OK — fallback delivered" } }
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const sid = "r3-d07-reset-pos"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const run = () => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: {} },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  await run() // codex 失败 #1
+  await run() // codex 失败 #2
+  const r3 = await run() // 回落成功 → 计数在结果产出后清零（finalize completed 分支）
+  assert.ok(r3.includes("自动回落 dsh 路由") && r3.includes("FB REVIEW OK"), "回落轮成功交付")
+  assert.equal(execCalls(), 2, "回落轮不跑 codex")
+  const r4 = await run() // 计数已清 → codex 重试（失败 #1——不再回落）
+  assert.ok(r4.includes("codex-cli PROCESS_ERROR"), "回落成功后计数清零 → codex 重试")
+  assert.ok(!r4.includes("自动回落 dsh 路由"), "清零后单次 codex 失败不触发回落")
+  assert.equal(llmCalls.n, 1, "回落成功只调一次 llm（delete 在结果产出后执行——旧顺序也无重试歧义）")
+  dropSession(sid)
+})
+
+test("R3 D-07 回落路由不可达组合: codex 败×2 + 回落不可达×2 → 硬停（任何零进度组合同经硬停终止）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { spawn, execCalls } = r3FailingCodexSpawn()
+  const sid = "r3-d07-noroute"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" } } } } // 无 dsh 回落路由
+  const run = () => runAdvisorReview(
+    { llm: { stream: () => { throw new Error("llm must not be called") } }, spawn, platform: "linux", env: {} },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  await run()
+  await run()
+  const r3 = await run() // 回落不可达 #1
+  assert.ok(r3.includes("回落 dsh 路由不可用"), "回落路由不可达 = 回落失败（组内未配 provider/model）")
+  assert.ok(r3.includes("回落失败 1/2"), "回落失败计数可见（响亮预告）")
+  assert.ok(!r3.includes("回落硬停"), "1/2 未硬停")
+  const r4 = await run() // 回落不可达 #2 → 硬停
+  assert.ok(r4.startsWith("Advisor: 回落硬停"), "回落不可达 #2 → 硬停")
+  assert.ok(r4.includes("dsh 回落路由: 不可用"), "诊断：dsh 回落路由不可用")
+  assert.ok(r4.includes("codex 路由: runner=codex-cli"), "诊断：codex 路由")
+  assert.equal(execCalls(), 2, "不可达组合同样不再交替重试 codex")
+  dropSession(sid)
+})
+
+// ————————————— R3 §5.2（D-01 / D-裁决-1）：空响应重试与分类 —————————————
+// 非基础设施形态空响应（finish-null / stop 零块 / length / 非预期形态）自动重试一次
+//（复用 messages、独立计数）；再空 → "Advisor:" 前缀可归因失败（不烧轮次/不写 prior）；
+// 基础设施形态（error 无 message / stall）走既有失败路径，不空重试。
+
+test("R3 D-01 重试语义: 空响应自动重试一次 → 仍空 → \"Advisor:\" 前缀失败（不烧轮次/不写 prior/旧 prior 保留）", async () => {
+  const sid = "r3-d01-retry-fail"
+  const st = sessionState(sid)
+  st.advisorRound = 2 // 有 prior 的收敛轮（路由走 convergence 组）
+  st.lastAdvisorOutput = "prior review body"
+  let llmCalls = 0
+  const llm = { // 每次调用都 stop 零文本块（非基础设施空形态）
+    stream() {
+      llmCalls++
+      return (async function* () { yield { type: "finish", reason: { kind: "stop" } } })()
+    },
+  }
+  const out = await runDshReview(sid, llm, {
+    advisor: {
+      round1: { provider: "p", model: "m", timeoutMs: 300000 },
+      convergence: { provider: "p", model: "m", timeoutMs: 300000 },
+    },
+  })
+  assert.equal(llmCalls, 2, "自动重试恰好一次（首次空 + 重试空）")
+  assert.ok(out.startsWith("Advisor: review failed (empty response"), "前缀失败语义（finalize 判定不 completed）")
+  assert.ok(out.includes("重试一次仍空"), "「重试一次仍空」标记")
+  assert.ok(out.includes("empty-response classification: stop-zero-text-blocks"), "分类行保留（R1 观测不回退）")
+  assert.ok(out.includes("stream observation: finish=stop"), "观测字段保留")
+  const st2 = sessionState(sid)
+  assert.equal(st2.advisorRound, 2, "不烧轮次（advisorRound 不变）")
+  assert.equal(st2.lastAdvisorOutput, "prior review body", "不写 prior（旧 prior 原样保留——空响应不进 lastAdvisorOutput）")
+  dropSession(sid)
+})
+
+test("R3 D-01 重试语义: 首次空响应 → 重试成功交付（轮次恰好推进一次，不重复计轮）", async () => {
+  const sid = "r3-d01-retry-ok"
+  let llmCalls = 0
+  const llm = {
+    stream() {
+      llmCalls++
+      const first = llmCalls === 1
+      return (async function* () {
+        if (first) { yield { type: "finish", reason: { kind: "stop" } }; return } // 首次：stop 零文本块
+        yield { type: "block-end", block: { type: "text", text: "| # | I | D |\n|---|---|---|\n| 1 | a | b |" } }
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } })
+  assert.equal(llmCalls, 2, "空响应重试一次后成功")
+  assert.ok(out.includes("| 1 | a | b |"), "重试轮的评审正文交付")
+  assert.ok(!out.includes("重试一次仍空"), "成功交付无失败标记")
+  assert.ok(!out.startsWith("Advisor:"), "成功交付不带失败前缀")
+  const st = sessionState(sid)
+  assert.equal(st.advisorRound, 1, "完成恰好推进一轮（重试不重复计轮）")
+  assert.ok(st.lastAdvisorOutput.includes("| 1 | a | b |"), "重试轮正文进 prior（收敛轮注入源）")
+  dropSession(sid)
+})
+
+test("R3 D-01 分类护栏: 基础设施形态（error 无 message）不走空重试——既有失败路径直返", async () => {
+  const sid = "r3-d01-infra"
+  let llmCalls = 0
+  const llm = {
+    stream() {
+      llmCalls++
+      return (async function* () { yield { type: "finish", reason: { kind: "error", failure: {} } } })()
+    },
+  }
+  const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } })
+  assert.equal(llmCalls, 1, "基础设施形态不空重试（设计 §5.2：error 无 message / stall 走既有失败路径）")
+  assert.ok(out.startsWith("Advisor: review failed — unknown provider error"), "既有失败路径语义不变")
+  dropSession(sid)
+})
+
+test("R3 D-01×D-07 交互: 回落轮空响应（重试后仍空）= 回落失败——计入回落连败至硬停（非静默）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { spawn, execCalls } = r3FailingCodexSpawn()
+  let llmCalls = 0
+  const llm = { // 每次都 stop 零文本块（回落轮空响应形态）
+    stream() {
+      llmCalls++
+      return (async function* () { yield { type: "finish", reason: { kind: "stop" } } })()
+    },
+  }
+  const sid = "r3-d01x07"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const run = () => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: {} },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  await run() // codex 失败 #1
+  await run() // codex 失败 #2
+  const r3 = await run() // 回落轮：空 → 重试 → 仍空 → 前缀失败 → 回落失败 #1
+  assert.equal(llmCalls, 2, "回落轮空响应重试一次（两次 stream 调用）")
+  assert.ok(r3.includes("review failed (empty response — 重试一次仍空)"), "空响应失败文本可见")
+  assert.ok(r3.includes("自动回落 dsh 路由"), "回落告警可见")
+  assert.equal(execCalls(), 2, "回落失败不清零 codex 计数（delete-after-result）")
+  const r4 = await run() // 回落失败 #2 → 硬停
+  assert.ok(r4.startsWith("Advisor: 回落硬停"), "空响应形态的回落连败同经硬停终止")
+  dropSession(sid)
+})
+
+// ————————————— R3 §5.3（D-19）：prior 纯净化 —————————————
+// finalize 区分 body（评审正文）与机制性后缀（回落告警/effort note/截断提示）：
+// lastAdvisorOutput 只存 body（收敛轮 prior 注入不再携带插件杂讯）；返回文本照常带后缀。
+
+test("R3 D-19 prior 纯净化: 回落成功轮 lastAdvisorOutput 只存评审正文（回落告警/effort note 后缀不进 prior）；返回文本仍含后缀", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const emptyHome = mkdtempSync(join(tmpdir(), "codex-empty-"))
+  const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args) : { events: [], exitCode: 1 })
+  const llm = { // 回落模型 efforts [off,high]：effort medium → 最近档 high + note（后缀可断言）
+    ...ladderLlm(["off", "high"]),
+    stream() {
+      return (async function* () {
+        yield { type: "block-end", block: { type: "text", text: "| # | I | D |\n|---|---|---|\n| 1 | a | b |" } }
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const sid = "r3-d19-prior"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", effort: "medium" } } }
+  const run = () => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: { CODEX_HOME: emptyHome } },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  await run() // codex 失败 #1
+  await run() // codex 失败 #2
+  const r3 = await run() // 回落成功（effort 回落 note + 回落告警均为机制后缀）
+  // 返回文本照常带后缀（可见性不变）
+  assert.ok(r3.includes("自动回落 dsh 路由"), "返回文本仍含回落告警后缀")
+  assert.ok(r3.includes("falling back to nearest supported effort"), "返回文本仍含 effort note 后缀")
+  assert.ok(r3.includes("| 1 | a | b |"), "评审正文交付")
+  // prior 纯净：lastAdvisorOutput 只存正文
+  const prior = sessionState(sid).lastAdvisorOutput
+  assert.ok(prior, "回落成功轮正文进 prior（looksLikeReview 命中）")
+  assert.ok(prior.includes("| 1 | a | b |"), "prior 含评审正文")
+  assert.ok(!prior.includes("[thincoder-suite]"), "prior 不含任何机制性后缀（D-19）")
+  assert.ok(!prior.includes("自动回落"), "prior 不含回落告警")
+  assert.ok(!prior.includes("falling back"), "prior 不含 effort note")
+  dropSession(sid)
+})
+
+test("R3 D-19 prior 纯净化（dsh 主路径）: effort note 后缀不进 lastAdvisorOutput；返回文本仍含 note", async () => {
+  const sid = "r3-d19-dsh"
+  const llm = {
+    ...ladderLlm(["off", "high"]),
+    stream() {
+      return (async function* () {
+        yield { type: "block-end", block: { type: "text", text: "| # | I | D |\n|---|---|---|\n| 1 | a | b |" } }
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "qax", model: "glm-5.3", effort: "medium", timeoutMs: 300000 } } })
+  assert.ok(out.includes("falling back to nearest supported effort"), "返回文本仍含 effort note 后缀")
+  assert.ok(out.includes("| 1 | a | b |"), "正文交付")
+  const prior = sessionState(sid).lastAdvisorOutput
+  assert.ok(prior && prior.includes("| 1 | a | b |"), "正文进 prior")
+  assert.ok(!prior.includes("[thincoder-suite]"), "prior 不含机制后缀（D-19）")
+  dropSession(sid)
+})
+
+test("R3 D-19 prior 纯净化（codex 同步路径）: effort note 后缀不进 lastAdvisorOutput", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const cat = catalogSpawn([{ slug: "m-d19", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] }], { events: [], exitCode: 0, outText: "| # | Issue | Detail |\n|---|---|---|\n| 1 | x | y |" })
+  const sid = "r3-d19-codex"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "m-d19", effort: "medium" }, timeoutMs: 300000 } }, codexCli: { executable: "t-d19-1" } }
+  const out = await runAdvisorReview(
+    { llm: { stream: () => { throw new Error("must not be used") } }, spawn: cat.spawn, platform: "linux", env: {} },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  assert.ok(out.includes("falling back to nearest supported effort"), "返回文本仍含 effort note 后缀")
+  assert.ok(out.includes("| 1 | x | y |"), "正文交付")
+  const prior = sessionState(sid).lastAdvisorOutput
+  assert.ok(prior && prior.includes("| 1 | x | y |"), "正文进 prior")
+  assert.ok(!prior.includes("[thincoder-suite]"), "prior 不含 effort note（D-19）")
+  dropSession(sid)
+})
+
+test("R3 D-19 prior 纯净化（codex 同步降级路径）: 截断告警/effort note 后缀不进 lastAdvisorOutput", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const cat = catalogSpawn([{ slug: "m-d19b", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] }], { events: [], exitCode: 0, outText: "| # | Issue | Detail |\n|---|---|---|\n| 1 | x | y |" })
+  const sid = "r3-d19-degraded"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "m-d19b", effort: "medium" }, timeoutMs: 900000 } }, codexCli: { executable: "t-d19-2" } }
+  const out = await runAdvisorReview(
+    { llm: { stream: () => { throw new Error("must not be used") } }, spawn: cat.spawn, platform: "linux", env: {} }, // 无 ctx.jobs → 同步降级
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  assert.ok(out.includes("budgetCapMs=540000ms"), "返回文本仍含截断告警后缀（可见性不变）")
+  assert.ok(out.includes("falling back to nearest supported effort"), "返回文本仍含 effort note 后缀")
+  const prior = sessionState(sid).lastAdvisorOutput
+  assert.ok(prior && prior.includes("| 1 | x | y |"), "正文进 prior")
+  assert.ok(!prior.includes("[thincoder-suite]"), "prior 不含截断告警/effort note（D-19）")
+  dropSession(sid)
+})
+
+test("R3 D-19 looksLikeReview 阈值修正: 短正文 + 长机制后缀 → prior 不再被后缀推过 200 字符阈值", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const emptyHome = mkdtempSync(join(tmpdir(), "codex-empty-"))
+  const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args) : { events: [], exitCode: 1 })
+  const llm = {
+    stream() {
+      return (async function* () {
+        yield { type: "block-end", block: { type: "text", text: "FB SHORT" } } // 8 字符短正文（无表格）
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const sid = "r3-d19-threshold"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3" } } }
+  const run = () => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: { CODEX_HOME: emptyHome } },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  await run() // codex 失败 #1
+  await run() // codex 失败 #2
+  const r3 = await run() // 回落成功：短正文 + 长回落告警后缀
+  assert.ok(r3.includes("自动回落 dsh 路由"), "返回文本带回落告警后缀")
+  assert.equal(sessionState(sid).lastAdvisorOutput, null, "短正文不进 prior（后缀不参与 looksLikeReview 判定——D-19 前长告警会把 8 字符正文推过 200 阈值）")
+  dropSession(sid)
+})
+
+// ————————————— R3 §5.4（D-06 同步路径单飞扩展）+ §5.1 验收⑥ 正向清零 —————————————
+
+test("R3 D-07 正向清零（验收⑥）: 回落成功后双计数器归零——单次未来回落失败不触发硬停", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { spawn, execCalls } = r3FailingCodexSpawn()
+  let fbCall = 0
+  const llm = { // 回落轮调用序：#1 成功交付（触发正向清零），其后失败
+    stream() {
+      fbCall++
+      if (fbCall === 1) {
+        return (async function* () {
+          yield { type: "block-end", block: { type: "text", text: "FB REVIEW OK — fallback delivered" } }
+          yield { type: "finish", reason: { kind: "stop" } }
+        })()
+      }
+      return (async function* () { throw new Error("fb route down") })()
+    },
+  }
+  const sid = "r3-d07-reset-six"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const run = () => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: {} },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  await run() // codex 失败 #1
+  await run() // codex 失败 #2
+  await run() // 回落成功 → codexFailureCount/fallbackFailureCount 双清零（正向清零）
+  await run() // codex 失败 #1（重新计数）
+  await run() // codex 失败 #2
+  const r6 = await run() // 回落失败 #1——若未清零此处已是 #2（硬停）；清零后应为 1/2
+  assert.ok(r6.includes("自动回落 dsh 路由"), "回落轮触发")
+  assert.ok(r6.includes("review failed (unknown) — fb route down"), "回落失败可归因")
+  assert.ok(!r6.includes("回落硬停"), "单次未来回落失败不触发硬停（计数器已随回落成功归零）")
+  const r7 = await run() // 回落失败 #2 → 硬停
+  assert.ok(r7.startsWith("Advisor: 回落硬停"), "清零后仍需连败 2 次才硬停")
+  dropSession(sid)
+})
+
+test("R3 D-06 同步路径单飞（验收⑦）: advisor >cap job 在飞期间 ≤cap 同步调用/dsh 路由调用均被拒（全部入口单飞）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return { events: [], exitCode: 0, outText: "| # | Issue | Detail |\n|---|---|---|\n| 1 | x | y |" }
+  })
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r3-d06-sync"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 900000 } } } // >cap → jobs 派发
+  const deps = {
+    llm: { stream: () => { throw new Error("must not be used") } },
+    spawn, platform: "linux", env: {},
+    ctx: { get: (svc) => (svc === "jobs" ? jobs : null) },
+  }
+  const out1 = await runAdvisorReview(deps, { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
+  assert.ok(out1.includes("advisor-codex-1"), ">cap 预算派发后台 job")
+  assert.equal(specs.length, 1)
+
+  // 在飞期间：≤cap 同步预算调用（codex 路由）被拒——R2 只覆盖派发入口，本检查提前到全部入口
+  //（组配 round1+convergence 同形：首个 jobs 评审 completed 烧轮后路由键转 convergence 组）
+  const configSync = {
+    advisor: {
+      round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 300000 },
+      convergence: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 300000 },
+    },
+  }
+  const r2 = await runAdvisorReview(deps, { agent, config: configSync, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
+  assert.ok(r2.startsWith("Error"), "≤cap 同步调用在飞期间被拒（D-06 扩展：全部入口单飞）")
+  assert.ok(r2.includes("advisor-codex-1"), "拒绝文本含在飞 job id")
+  assert.ok(r2.includes("job_output"), "拒绝文本含接续方式")
+  assert.ok(r2.includes("未派发"), "明确本次未派发")
+  assert.equal(specs.length, 1, "无第二个 job 派发")
+
+  // 在飞期间：dsh 主路径调用同样被拒（同机制任意路由——无入口例外；若未拒会调用 llm 抛错）
+  const configDsh = { advisor: { round1: { provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const rDsh = await runAdvisorReview(deps, { agent, config: configDsh, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
+  assert.ok(rDsh.startsWith("Error"), "dsh 主路径调用在飞期间同样被拒（机制级单飞）")
+  assert.ok(rDsh.includes("advisor-codex-1"), "拒绝文本含在飞 job id")
+
+  // settle → 槽位清除 → ≤cap 同步调用正常执行
+  const outcome = await specs[0].hooks.done
+  assert.equal(outcome.status, "completed")
+  const r3 = await runAdvisorReview(deps, { agent, config: configSync, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
+  assert.ok(r3.includes("| 1 | x | y |"), "settle 后槽位清除，≤cap 同步调用正常执行")
+  dropSession(sid)
+})
+
+// ————————————— R3 §5.4 补丁轮（D-06）：escalate/eng 全入口单飞（≤cap 同步 + dsh 子代理路径） —————————————
+// R3 主轮已交付 advisor 机制全入口检查（上方验收⑦）；本节补齐 escalate/eng 两机制全部入口：
+// >cap job 在飞（占位）期间，≤cap 同步调用与 dsh 子代理路径调用一律在机制入口被拒（R2 同款
+// 拒绝文本：Error 前缀 + 在飞 job id + 接续指引）；settle 双分支清除复用 R2 既有
+// clearInFlightJob（done 回调内，零新代码）。
+
+test("R3 D-06 补丁轮 escalate: >cap job 在飞期间 ≤cap codex 同步调用/followup 续轮被拒（含 job id），settle 后恢复", async () => {
+  let execCalls = 0
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    execCalls++ // 行不带 effort → codex 目录发现零触发，只数真实 exec 任务（计数确定）
+    return { events: [], exitCode: 0, outText: "ok\n\nTouched files: none" }
+  })
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r3-d06-esc-sync"
+  // 首次：>cap 预算（900000 > 默认 budgetCap 540000）→ jobs 后台派发并占位 escalate 槽位
+  const cfgOver = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const deps1 = makeEscDeps(sid, spawn, cfgOver)
+  deps1.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
+  const out1 = await runEscalate(deps1, "first long task", undefined)
+  assert.ok(out1.includes("escalate-codex-1"), ">cap 首次派发后台 job（占位 escalate 槽位）")
+  assert.equal(specs.length, 1)
+  // 在飞期间：≤cap 同步预算调用（codex 行 300000 ≤ cap）被拒——R2 只覆盖派发入口，补丁轮提前到机制入口
+  const cfgSync = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 300000 } }], codexCli: { executable: process.execPath } }
+  const deps2 = makeEscDeps(sid, spawn, cfgSync)
+  deps2.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
+  const out2 = await runEscalate(deps2, "short task while in flight", undefined)
+  assert.ok(out2.startsWith("Error"), "≤cap 同步调用在飞期间被拒（D-06 扩展：escalate 全入口单飞）")
+  assert.ok(out2.includes("escalate-codex-1"), "拒绝文本含在飞 job id")
+  assert.ok(out2.includes("job_output"), "拒绝文本含接续方式")
+  assert.ok(out2.includes("未派发"), "明确本次未派发")
+  assert.equal(specs.length, 1, "无第二个 job 派发")
+  // 在飞期间：followup 续轮入口同样被拒（全入口无例外——先于线程查找即拒）
+  const outF = await runEscalate(deps2, "followup while in flight", undefined, true)
+  assert.ok(outF.startsWith("Error") && outF.includes("escalate-codex-1"), "followup 续轮入口同样被拒（机制级单飞）")
+  // settle → 槽位清除（done 双分支 clearInFlightJob）→ ≤cap 同步调用恢复执行。
+  // execCalls===1 证明被拒的 ≤cap/followup 调用零 exec（若走同步路径会各多一次且文本断言已先行失败）
+  const outcome = await specs[0].hooks.done
+  assert.equal(outcome.status, "completed")
+  assert.equal(execCalls, 1, "被拒调用零 exec——在飞窗口内仅后台 job 恰好一次")
+  const out3 = await runEscalate(deps2, "short task after settle", undefined)
+  assert.ok(out3.includes("post-op report"), "settle 后槽位清除，≤cap 同步调用正常执行")
+  assert.equal(specs.length, 1, "同步执行不派 job")
+  assert.equal(execCalls, 2, "同步路径恢复执行（恰好一次 runCodexTask）")
+  dropSession(sid)
+})
+
+test("R3 D-06 补丁轮 escalate: >cap job 在飞期间 dsh 子代理路径调用被拒（llm/subagents 零触碰）", async () => {
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return { events: [], exitCode: 0, outText: "ok\n\nTouched files: none" }
+  })
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r3-d06-esc-dsh"
+  const cfgOver = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const deps1 = makeEscDeps(sid, spawn, cfgOver)
+  deps1.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
+  const out1 = await runEscalate(deps1, "first long task", undefined)
+  assert.ok(out1.includes("escalate-codex-1"), ">cap 首次派发后台 job（占位 escalate 槽位）")
+  // 在飞期间：dsh 行（非 codex runner）调用同样被拒——若未拒将走 dsh 分支触碰 llm/subagents
+  let dshTouched = false
+  const cfgDsh = { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "medium" }] }
+  const deps2 = makeEscDeps(sid, spawn, cfgDsh)
+  deps2.ctx = {
+    get: (svc) => (svc === "jobs" ? jobs : null),
+    llm: { resolveModelInfo: async () => { dshTouched = true; throw new Error("llm must not be touched while in flight") } },
+    subagents: { start: () => { dshTouched = true; throw new Error("dsh spawn must not run while in flight") } },
+  }
+  const out2 = await runEscalate(deps2, "dsh row task while in flight", undefined)
+  assert.ok(out2.startsWith("Error"), "dsh 子代理路径调用在飞期间被拒（D-06 扩展：escalate 全入口单飞）")
+  assert.ok(out2.includes("escalate-codex-1"), "拒绝文本含在飞 job id")
+  assert.ok(out2.includes("未派发"), "明确本次未派发")
+  assert.equal(specs.length, 1, "无第二个 job 派发")
+  assert.equal(dshTouched, false, "dsh 分支零触碰（effort 解析/subagents.start 均未执行——入口即拒）")
+  await specs[0].hooks.done // settle 清槽位（测试隔离）
+  dropSession(sid)
+})
+
+test("R3 D-06 补丁轮 eng: >cap job 在飞期间 ≤cap codex 同步调用被拒（含 job id），settle 后恢复", async () => {
+  let execCalls = 0
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    execCalls++ // engCoderEffort=off → codex 目录发现零触发，只数真实 exec 任务（计数确定）
+    return { events: [], exitCode: 0, outText: "implemented\n\nTouched files: none" }
+  })
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r3-d06-eng-sync"
+  // 首次：默认 30min 预算（1800000 > 默认 budgetCap 540000）→ jobs 后台派发并占位 eng 槽位
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath }, engCoderEffort: "off" })
+  const out1 = await runEngCoder(deps, { task: "implement a (long)", designToken: token, docs: [] })
+  assert.ok(out1.includes("eng-codex-1"), ">cap 首次派发后台 job（占位 eng 槽位）")
+  assert.equal(specs.length, 1)
+  // 在飞期间：≤cap 同步预算（defaultTimeoutMs=300000 ≤ cap）调用被拒——入口即拒，runCodexTask 未被触碰
+  const { deps: deps2, token: token2 } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath, defaultTimeoutMs: 300000 }, engCoderEffort: "off" })
+  const out2 = await runEngCoder(deps2, { task: "implement b (short) while in flight", designToken: token2, docs: [] })
+  assert.ok(out2.startsWith("Error"), "≤cap 同步调用在飞期间被拒（D-06 扩展：eng 全入口单飞）")
+  assert.ok(out2.includes("eng-codex-1"), "拒绝文本含在飞 job id")
+  assert.ok(out2.includes("job_output"), "拒绝文本含接续方式")
+  assert.ok(out2.includes("未派发"), "明确本次未派发")
+  assert.equal(specs.length, 1, "无第二个 job 派发")
+  // settle → 槽位清除（done 双分支 clearInFlightJob）→ ≤cap 同步调用恢复执行。
+  // execCalls===1 证明被拒的 ≤cap 调用零 exec（若走同步路径会多一次且文本断言已先行失败）
+  const outcome = await specs[0].hooks.done
+  assert.equal(outcome.status, "completed")
+  assert.equal(execCalls, 1, "被拒调用零 exec——在飞窗口内仅后台 job 恰好一次")
+  const out3 = await runEngCoder(deps2, { task: "implement c (short) after settle", designToken: token2, docs: [] })
+  assert.ok(out3.includes("eng_coder delivery (codex-cli)"), "settle 后槽位清除，≤cap 同步调用正常执行")
+  assert.equal(specs.length, 1, "同步执行不派 job")
+  assert.equal(execCalls, 2, "同步路径恢复执行（恰好一次 runCodexTask）")
+  dropSession(sid)
+})
+
+test("R3 D-06 补丁轮 eng: >cap job 在飞期间 dsh 子代理路径调用被拒（subagents 零触碰）", async () => {
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return { events: [], exitCode: 0, outText: "implemented\n\nTouched files: none" }
+  })
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r3-d06-eng-dsh"
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath }, engCoderEffort: "off" })
+  const out1 = await runEngCoder(deps, { task: "implement a (long)", designToken: token, docs: [] })
+  assert.ok(out1.includes("eng-codex-1"), ">cap 首次派发后台 job（占位 eng 槽位）")
+  // 在飞期间：dsh 后端（engCoderRunner 未配）调用同样被拒——若未拒将走 dsh 分支触碰 subagents
+  let dshTouched = false
+  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: {} }
+  const depsDsh = {
+    ctx: {
+      get: (svc) => (svc === "jobs" ? jobs : null),
+      subagents: { start: () => { dshTouched = true; throw new Error("dsh spawn must not run while in flight") } },
+    },
+    agent, config: {}, signal: undefined, configDefaultEngineering: false, spawn, platform: "linux", env: {},
+  }
+  const out2 = await runEngCoder(depsDsh, { task: "implement b (dsh) while in flight", designToken: token, docs: [] })
+  assert.ok(out2.startsWith("Error"), "dsh 子代理路径调用在飞期间被拒（D-06 扩展：eng 全入口单飞）")
+  assert.ok(out2.includes("eng-codex-1"), "拒绝文本含在飞 job id")
+  assert.ok(out2.includes("未派发"), "明确本次未派发")
+  assert.equal(specs.length, 1, "无第二个 job 派发")
+  assert.equal(dshTouched, false, "dsh 分支零触碰（subagents.start 未执行——入口即拒）")
+  await specs[0].hooks.done // settle 清槽位（测试隔离）
+  dropSession(sid)
+})
