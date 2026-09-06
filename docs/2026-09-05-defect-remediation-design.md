@@ -11,7 +11,7 @@
 
 ## 2. 总体方案
 
-### 2.1 四轮结构
+### 2.1 轮次结构
 
 | 轮 | 主题 | 覆盖缺陷 | 一句话目标 |
 |---|---|---|---|
@@ -19,8 +19,9 @@
 | **R2** | 执行架构与进程生命周期 | D-03、D-04、D-05、D-06、D-09、D-10、D-11、D-14、D-16、D-20、D-21、D-22 | 长任务不再静默死亡：jobs 迁移 + 单飞 + 代际检查 + 进程卫生 |
 | **R3** | 回落与失败语义完备化 | D-07、D-01(重试/分类)、D-19、**D-06(同步路径单飞扩展)** | 自愈可预测：回落封顶 + 空响应重试分类 + prior 纯净 + 单飞语义补全 |
 | **R4** | 一致性与 UX 收口 | D-12、D-13、D-15、D-24 + 文档/测试收尾 | 配置三面同步 + 设置页竞态 + 测量定档 + 评审欠账 |
+| **R5** | dsh 路径后台化（DP-1 方案 B） | D-27 | dsh 路径同样免墙钟：advisor 自动判定 + escalate/eng 显式 background 参数 |
 
-轮次依赖：R2 的迁移设计消费 R1 的 codex effort 收口（迁移后的 escalate/eng 复用同一 resolver）；R3 的空响应分类消费 R1 的观测字段；R4 的 D-15 测量消费 R2 的 idle 间隙日志。四轮按序执行，每轮一个 eng_coder 任务（stages 化）+ 偏离审计 + 交付 code review + 独立提交。
+轮次依赖：R2 的迁移设计消费 R1 的 codex effort 收口（迁移后的 escalate/eng 复用同一 resolver）；R3 的空响应分类消费 R1 的观测字段；R4 的 D-15 测量消费 R2 的 idle 间隙日志；R5 复用 R2 的整套 jobs 模式（单飞/代际/簿记-done/通知接续）。每轮一个 eng_coder 任务（stages 化）+ 偏离审计 + 交付 code review + 独立提交。
 
 ### 2.2 跨切原则（全部轮次共同遵守）
 
@@ -192,7 +193,28 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 
 验收：① 竞态用例（保存期间编辑被保留 + 提示）〔**交付形态勘误（2026-09-05 R4）**：本仓库无 client 测试面（client.js 为浏览器 CJS bundle，node --test 无法驱动 DOM/React）——① 按 §6.1 验收为代码级实现 + node --check 通过（登记表 D-12 终态如实标注）；后端可测面（runner 往返）照常带用例〕；② runner 往返用例；③ 测量数据登记〔登记表 D-15 标注判定规则与执行阶段——测量本身属真机验证阶段〕；④ eng.mjs 评审报告落档〔架构会话收尾阶段补跑——非 eng_coder 任务面，登记表 D-24 已裁决处置〕；⑤ 登记表全条目终态核对。〔R1 审计 🔵 ①② 交付记录：① per-point fail-open 接线级用例 ×2（escalate dsh 行 + advisor dsh 主路径——元数据不可得 → 原样透传 + note 入尾部 + 响亮告警）；② 缓存语义注释落地 codex-adapter.mjs（refresh 通道一期已有——注释补「快照随首次发现、UI 刷新才更新」语义）；③ D-18 措辞收窄经代码核对**前提不成立**（墙钟 TIMEOUT 信封同样带结构化 usage 字段，codex-adapter.mjs 两处 envelope 构造均传 usage、R1 用例即墙钟路径断言 env.usage 深等）——按 §9 验收第 1 条「终态与代码一致」维持原措辞并登记核对结论（见登记表 D-18）；④ docs/README.md 三文档登记核验 ✓〕
 
-## 7. UI/交互决策汇总（METHODOLOGY 要求集中呈现）
+## 7. R5 — dsh 路径后台化（DP-1 方案 B，2026-09-06 立项）
+
+> 〔背景与终裁修订〕R4 交付后的真机使用中，用户裁定**复活 DP-1 方案 B 并全量三路径**：不改 DSH 平台默认（maxWallMs 600s 保持），由插件自建后台机制让 dsh 路径同样免墙钟。DP-1 终裁更新见 §8。登记表 D-27。
+
+### 7.1 advisor dsh 循环（自动判定，与 codex 完全对称）
+
+dsh 路由的评审预算 `route.timeoutMs > budgetCapMs` 且 ctx.jobs 可用 → 派后台 job：run() 内执行完整 `runAdvisorToolLoop`（纯进程内 llm.stream 调用，无子进程），finalize 在 done 内恰好一次（R2 codex 模式全套复用：单飞槽位 advisor、代际捕获校验、prior/token 语义不变）；≤cap 或 jobs 缺失 → 同步执行（D-17 钳制与告警保留——它保护的就是同步路径）。
+
+### 7.2 escalate/eng dsh 子代理（显式 `background` 参数）
+
+- 工具契约新增可选参数 `background`（默认 false）：**不传** = 现状（同步执行 + budgetCap 内部截止——短任务的快路径体验不变，今日全部任务 <540s）；**传 true** = 派后台 job：run() 闭包内 `ctx.subagents.start` + `await run.result`（ctx 引用在 job 生命周期内有效——与 advisor jobs 先例同假设；session 优雅销毁 → job cancel → abort 传递），交付文本/失败诊断经完成通知送达；簿记（escalate touchedFiles、eng 交付簿记）在 done 成功分支恰好一次（D-20 模式复用）。
+- 返回文本 = job 句柄 + UI-2 接续指令（复用共享 dispatch reply helper，机制名泛化）。
+- **挂死兜底**：后台 dsh 任务有兜底 deadline（防子代理挂起导致 job 永悬）——新全局配置 `dshBackgroundTimeoutMs`（缺省 1_800_000=30min，合法 60_000..3_600_000；三面白名单 + 设置页字段 + 非法回落缺省告警）；到点 abort 子代理 + 超时信封（partial 保留）。
+- eng_coder 流程契约变更（架构师侧）：background 任务返回句柄 → **等完成通知后再发起发散审计/交付评审**（与 codex 长任务同纪律）。
+
+### 7.3 R5 受影响文件与验收
+
+文件：`lib/advisor.mjs`（dsh 循环派发 + reply 泛化）、`lib/escalate.mjs`、`lib/eng.mjs`（background 参数）、`lib/index.mjs` + `lib/config-store.mjs` + `lib/client.js`（dshBackgroundTimeoutMs 三面 + 设置页）、`test/codex-runner.test.mjs`、登记表。
+
+验收：① advisor dsh >cap 自动派发用例（假 jobs：run() 内跑循环、finalize 恰好一次、句柄含接续指令；≤cap 同步不变断言）；② escalate background=true 派发 + 子代理在 run() 内执行 + 簿记 done 内成功分支 + 兜底 deadline abort 用例；③ eng background 同款 + 失败不簿记（D-20 断言复用）；④ 三路径单飞槽位互不阻塞断言；⑤ dshBackgroundTimeoutMs 三面同步 + 非法回落用例；⑥ 全量 ≥215 绿；⑦ 真机：一次 background eng_coder 全链（句柄→通知→交付→审计接续）。
+
+## 8. UI/交互决策汇总（METHODOLOGY 要求集中呈现）
 
 | # | 决策 | 轮次 |
 |---|---|---|
@@ -200,23 +222,24 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 | UI-2 | 后台派发返回文本 = job 句柄 + 「等完成通知再继续；勿用 job_output wait 阻塞等长任务」显式指令 | R2 |
 | UI-3 | 保存期间全表单禁用；保存后草稿不被未触碰字段的刷新覆盖，触碰字段保留 + 提示条 | R4 |
 | UI-4 | 设置页新增 `codexCli.maxConcurrent` 字段（默认 8，提示全局 codex 进程上限） | R2 |
+| UI-5 | 设置页新增 `dshBackgroundTimeoutMs` 字段（默认 30min，提示 dsh 后台任务挂死兜底）；escalate/eng 工具的 background 参数说明进工具描述 | R5 |
 
-## 8. 设计决策点（评审时请用户裁定）
+## 9. 设计决策点（评审时请用户裁定）
 
 | # | 问题 | 终裁 |
 |---|---|---|
-| DP-1 | D-21 dsh 子代理路径处置 | **已终裁（2026-09-05，全按推荐）：方案 A 钳制告警，jobs 迁移另立项**；备选 B 作废 |
+| DP-1 | D-21 dsh 子代理路径处置 | **初裁（2026-09-05）：方案 A 钳制告警**；**修订终裁（2026-09-06，用户裁定）：方案 B 全量三路径**——advisor dsh 自动按 timeoutMs 判定、escalate/eng 显式 background 参数、同步快路径与钳制保留（R5 实施，见 §7） |
 | DP-2 | 最近支持档等距 tie-break | **已终裁（2026-09-05）：向上取**（R1 已实施） |
 | DP-3 | 全局 codex 并发上限默认值 | **已终裁（2026-09-05）：8**（可配，UI-4） |
 
-## 9. 验收标准（项目级，映射需求 §5）
+## 10. 验收标准（项目级，映射需求 §5）
 
-1. 缺陷登记表**全部在册条目**（动态上界——2026-09-05 收尾时为 D-01…D-26）终态 ∈ {已修, 已裁决处置, 已驳回(附证据), 待测量(附数据)}；
-2. 单测全绿且每修复 ≥1 回归用例（R1-R4 各节验收条款即用例清单）；
-3. 真机验证：advisor（jobs 派发 + 回落链 + token 签发）、eng_coder（一次交付）、escalate（含 followup）、consult（含 codex 行）各一次成功；复测「空响应」「effort 秒死」两受害场景（前者给出可归因诊断或重试后成功；后者不再秒死）。**回退规则**：受害场景自然复现失败时，以故障注入验证对应诊断/重试/回落路径作为等效验收——生产复现实录已在登记表 D-01/D-02 留证；
-4. git：R1-R4 每轮独立提交 + 版本 0.7.0→0.8.0 推进 + 文档登记与 METHODOLOGY 历史记入。
+1. 缺陷登记表**全部在册条目**（动态上界——2026-09-06 立项 R5 时为 D-01…D-27）终态 ∈ {已修, 已裁决处置, 已驳回(附证据), 待测量(附数据)}；
+2. 单测全绿且每修复 ≥1 回归用例（R1-R5 各节验收条款即用例清单）；
+3. 真机验证：advisor（jobs 派发 + 回落链 + token 签发）、eng_coder（一次交付 + 一次 background 全链）、escalate（含 followup）、consult（含 codex 行）各一次成功；复测「空响应」「effort 秒死」两受害场景（前者给出可归因诊断或重试后成功；后者不再秒死）。**回退规则**：受害场景自然复现失败时，以故障注入验证对应诊断/重试/回落路径作为等效验收——生产复现实录已在登记表 D-01/D-02 留证；
+4. git：R1-R5 每轮独立提交 + 版本 0.7.0→0.9.0 推进 + 文档登记与 METHODOLOGY 历史记入。
 
-### 9.1 用户故事-测试映射（METHODOLOGY 纪律，每故事 ≥1 用例）
+### 10.1 用户故事-测试映射（METHODOLOGY 纪律，每故事 ≥1 用例）
 
 | 用户故事 | 测试映射 |
 |---|---|
@@ -224,7 +247,7 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 | US-2 空响应可诊断 | R1 已交付（空响应四形态分类+观测用例组）；R3 验收③④（重试语义） |
 | US-3 token 可恢复 | R2 验收⑧（job_output 保尾截断下 token 完整可提取） |
 | US-4 后台单飞 | R2 验收②（复合键：同机制拒绝含 job id / 异机制不受阻）+ R3 验收⑦（同步路径扩展——全部入口单飞） |
-| US-5 长任务完整执行 | R2 验收①（escalate/eng 迁移 + 簿记 done 内成功分支） |
+| US-5 长任务完整执行 | R2 验收①（escalate/eng codex 迁移 + 簿记 done 内成功分支）+ R5 验收①②③（dsh 路径后台化：advisor 自动判定 / escalate·eng background 参数 + 兜底 deadline） |
 | US-6 写任务安全 | R2 验收④⑥（D-20 失败不簿记 / 回滚指引·清扫·卫生） |
 | US-7 池行能力校验 | R1 已交付（9 消费点逐点用例）；R2 D-02 遗留接通用例 |
 | US-8 保存时拦截 | R1 已交付（L2 目录化下拉）；R4 验收①（竞态） |
