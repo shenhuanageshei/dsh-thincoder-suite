@@ -24,7 +24,7 @@
 | D-12 | 设置页 UX | 保存竞态：busy 只禁按钮，表单可编辑；成功后 refreshView 整体替换草稿，保存期间编辑被静默覆盖 | 已定位 client.js:697/:552 | 🟡 | R4 | **已修**（2026-09-05 R4 交付，UI-3 双面防护：① busy 期间禁用**全部表单输入**（非仅按钮——六个输入组件增 disabled 透传，input/select/checkbox/池行删/添加/全按钮；`.tc-field:disabled` 样式可见）；② 保存成功后 refreshView 不整体替换——busy 窗口内（enterBusy 起算）触碰的字段保留用户值、未触碰字段重放新值 + 提示条「保存期间有编辑，已保留你的修改」（busyRef 同步镜像消除 state 闭包陈旧窗口；组字段派生重置一并记触碰维持 provider→model 联动不变式；池按整池保留〔行结构互相关联 + 保存侧净化可能重排索引〕；保留 codexCli/池字段时同步置 dirty 保证下次保存发出；restoreGlobal 同语义）。**验证形态**：本仓库无 client 测试面（浏览器 CJS bundle）——node --check 通过 + 逻辑代码级可读复核，登记如实标注（设计 §6.5 验收①交付形态勘误同步落盘）） |
 | D-13 | 配置一致性 | advisorOverride.runner 三面不对称：apply-session 接受、advisor_config 工具拒收、持久化白名单丢弃（重启即失）；client.js:726 注释与事实相反 | 已定位 advisor.mjs:84 / index.mjs:283-286 / session-store.mjs:84 | 🟡 | R4 | **已修**（2026-09-05 R4 交付，三面同步：① ADVISOR_OVERRIDE_GROUP_PATHS + advisor_config coerceValue 增 runner——校验走 normalizeRunnerValue〔字符串简写 "dsh"/"codex-cli" 或对象，归一化存储；"dsh" = 回落硬停修正指引 2 的显式回切通道〕，set/reset 路径用例 + 非法值拒收 N4 不变式用例；② session-store sanitizeAdvisorOverride 组字段白名单加 runner〔此前重启即失〕——往返用例：set runner → 落盘 → 模拟重启恢复 → 仍在且 resolveAdvisorRoute 继续生效；③ client.js applySession 注释修正〔原「sanitizeSessionAdvisor 不收 runner」与事实相反——真实语义为有意的 UX 取舍：runner 配置属全局面，会话级 runner 走 advisor_config〕，登记表 D-23 残项一并收口。apply-session 面一期已接受〔validateAdvisorGroup/sanitizeGroup〕零改动——三面全通。resolve 链一期即消费 runner〔resolveAdvisorRoute 组环合并含 runner〕，缺的只是入口与持久化两道白名单） |
 | D-14 | 进程卫生 | codex 全局并发无准入控制：consult ≤5 仅 per-consult，多机制叠加可 6+ 进程 | 已定位（缺失） | 🟡 | R2 | **已修**（2026-09-05 R2 交付：adapter 全局活跃计数 + 准入〔runCodexTask 包装层：检查与占位同一同步块、finally 释放〕，上限 codexCli.maxConcurrent〔DP-3 终裁默认 8，可配 1..64〕；超限 CONCURRENCY_LIMIT envelope fail-fast 并明确报错〔不排队——简单诚实〕；三面白名单同步〔index.mjs PUT 校验 ⊕ config-store merge 白名单 ⊕ resolveCodexCliGlobals 运行时解析〕+ 设置页字段 UI-4〕） |
-| D-15 | 进程卫生 | idle 300s 默认值无健康流证据（研究文档附录的停滞都是网络退化；240s 是选择不是测量） | 未定位（需测量） | 🔵 | R4（测量任务） | 待测量（**标注（2026-09-05 R4）**：测量待真机验证阶段执行，非代码修复轮任务——真机跑 ≥3 次高 effort codex 任务，消费 R2 交付的 maxSilentGapMs 间隙日志；**判定规则（设计 §6.3 显式）**：任一健康高 effort 运行出现 >240s 静默间隙 → 附数据提议 idleTimeoutMs 默认上调或 effort 感知；全部 ≤240s → 维持 300s 默认并记录测量结论。数据登记入研究文档附录，默认值是否改动由数据说话） |
+| D-15 | 进程卫生 | idle 300s 默认值无健康流证据（研究文档附录的停滞都是网络退化；240s 是选择不是测量） | 已测量（2026-09-06 真机验证阶段完成） | 🔵 | R4（测量任务） | **已修（测量完成，结论=维持 300s 默认）**：3 次 high-effort 真实 codex 任务（读登记表选三条最险缺陷；wallMs 168237/203022/215274；事件行 16/14/16），**最大静默间隙 36.1s / 46.7s / 50.1s——全部 ≤240s 阈值**（判定规则 §6.3），健康流静默窗口对 300s 默认有 ~6 倍安全余量。测量方法：pwsh 时间戳逐行记录 codex exec --json 事件到达间隔（与插件消费的同一事件流）。结论：维持 idleTimeoutMs=300s 默认，无需上调或 effort 感知。 |
 | D-16 | 执行架构 | budgetCap < maxWallMs 不变式只在文档：插件读不到 maxWallMs，运行时无检查无警告 | 已定位（平台唯一消费者 dsh-code-runtime-worker-thread:651/:919，无注入面） | 🟡 | R2（ mitigation：钳制时警告已有 + 设置页提示已有 + 派发时不变式提醒 + 标注为不可完全强制） | **已修**（2026-09-05 R2 交付〔mitigation 收口〕：派发时 budgetCapMs ≥ 600000 输出一次不变式提醒——共享 codexJobsDispatchReply〔句柄文本附带 + console.warn 留档：「确认已同步提高平台 run_code maxWallMs 且 budgetCap < maxWallMs；否则 jobs 缺失时的同步降级路径仍会在平台墙钟处被截断」〕；钳制告警与设置页提示此前已有；插件读不到 maxWallMs 的不可完全强制边界维持登记〔设计 §4.5〕） |
 | D-17 | 执行架构 | advisor dsh 主路径 + 回落轮 timeoutMs 不钳制（最高 3.6M），与 codex 路径不对称 | 已定位 advisor.mjs:1023/:1119 | 🟡 | R1 | **已修**（2026-09-05 R1 交付：dsh 主路径 + 回落轮 effective=min(timeoutMs, budgetCapMs) + 结果尾部截断告警〔finalize 之后追加——插件元数据不污染 completed 判定/prior〕+ 钳制用例） |
 | D-18 | 失败语义 | 结构化观测缺失三件套：finish.reason / usage（codex 捕获了但从不上浮）/ blocks 计数；stderr 只留头部 4K（可用错误通常在尾部）；exit code 单独依赖 | 已定位 | 🟡 | R1 | **已修**（2026-09-05 R1 交付：advisor 流结束 stream observation〔finish.kind/failure.message/block 计数/usage〕console.warn 留档 + 并入失败/空响应文本；codex TIMEOUT/PROCESS_ERROR 诊断上浮 usage + TIMEOUT 信封补 usage 字段；stderr 保留改尾部 4K + 保尾断言。〔措辞核对（2026-09-05 R4 收尾，§6.4 ② 折入）：设计建议的收窄前提「仅 idle-watchdog 信封带结构化 usage，墙钟信封在诊断串内」与代码事实**不符**——墙钟 TIMEOUT 信封同样带结构化 usage 字段（codex-adapter.mjs 墙钟 watchdog 与 idle watchdog 两处 envelope 构造均传 usage，R1 `95af758` 交付；R1 用例 timeoutMs=300 + idle off 驱动的正是墙钟路径且断言 env.usage 深等）——按 §9 验收第 1 条「终态与代码一致」维持原措辞不收窄：§3.2 本就只要求诊断层，信封字段属超交付而非欠交付，收窄将引入与代码相反的登记〕） |
@@ -50,3 +50,17 @@
 3. cancel → hooks.cancel → 插件 ctrl.abort → killTree；owner/session 优雅销毁会 cancel+await；**宿主硬死无任何 dispose**（B9 边界保持）。
 4. `job_output wait:true` 平台侧上限 600s（与墙钟同值竞速）——等长 job 必须事件驱动接续。
 5. maxWallMs 对已注册插件工具 execute() 的精确绑定路径未在平台源码中钉死（唯一实现于 dsh-code-runtime-worker-thread）；经验事实（本插件 D.1 实测 600s 截断 + 两个会话 15+ 次同形截断）作为设计依据，R2 加断言观测留证。
+
+## 真机验证记录（2026-09-06，设计 §9 第 3 条收口）
+
+| 验证项 | 结果 | 证据 |
+|---|---|---|
+| advisor 主路径 + token 签发（D-25 新 secret） | ✅ | glm-5.3-flash/off（最近档回落链）完成三轮完整评审并签发 token `3c2b9011…`（有效至次日 10:49） |
+| eng_coder 全链 | ✅ | 新 secret token 校验 → dsh 后端执行 → 冒烟交付 1/1 pass → 脚手架即时清理 |
+| consult | ✅ | 单模型（glm-5.3）会诊回复到达（内容诚实：拒绝编造时间戳） |
+| 受害场景② effort 秒死 | ✅ **活体治愈** | `zai:glm-5.3-flash + effort=low`（mal-analyze 会话三连败同款组合）→ 尾部出现 `[thincoder-suite] effort "low" is not supported … falling back to nearest supported effort "off"（D-裁决-2 最近支持档，等距向上取）` + 评审完整交付 |
+| 受害场景① 空响应 | ✅ 按回退规则核销 | 自然复现不可求（需推理烧光 16384）；等效验收 = 215 套件空响应重试/分类/观测用例组（R1+R3 交付）；生产复现实录本表 D-01 留证 |
+| escalate（含 followup） | ⏸ 结构性约束 + 单测覆盖 | 工程模式禁用 escalate（「实现归 eng_coder」纪律，拦截实测工作正常）；R2 迁移路径/deadline/单飞/followup 预算均有专项用例；真机冒烟可在非工程会话 30 秒补做 |
+| D-15 idle 测量 | ✅ 完成 | 见 D-15 行：3 次 high-effort 真实任务，最大静默间隙 50.1s << 240s 阈值，维持 300s 默认 |
+| D-13 runner 配置面 | ✅ 活体 | `advisor_config set round1.runner` 接受并生效（R4 前被拒） |
+| 工程模式写锁 | ✅ 活体 | 基线期拦下 package.json 直改（热修走用户授权例外）；escalate 拦截工作正常 |
