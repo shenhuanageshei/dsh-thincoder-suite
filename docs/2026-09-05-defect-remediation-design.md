@@ -1,8 +1,8 @@
-# 设计文档：机制缺陷分轮修复设计（R1-R4）
+# 设计文档：机制缺陷分轮修复设计（R1-R5）
 
-- 日期：2026-09-05
-- 状态：REVISED（2026-09-05 四次评审 1🔴+1🟡+4🔵 全部折入；DP-1/2/3 已终裁〔全按推荐〕；**R1 已交付**〔155/155，`95af758`〕**R2 已交付**〔185/185，`dbbb6c9`〕**R3 已交付〔含补丁轮〕**〔205/205，`4d33cf8`+`7222811`〕**R4 已交付**〔2026-09-05，211/211——提交由架构会话执行；代码轮次全部交付完毕，余项 = 真机验证（§9 第 3 条）+ D-15 测量 + D-24 eng.mjs 评审补跑（收尾阶段任务，登记表终态标注）〕）
-- 上游：[需求文档](2026-09-05-defect-remediation-requirements.md)（含三项用户裁决 D-裁决-1/2/3）· [缺陷登记表](2026-09-05-defect-registry.md)（D-01…D-24，全部条目带证据行号）· 审计报告（thorough 子代理，2026-09-05）
+- 日期：2026-09-05（R5 立项 2026-09-06）
+- 状态：R5-READY（2026-09-06 五次评审通过，4🟡+6🔵 全部折入；**R1-R4 已全部交付**〔155/185/205/215 测试，真机验证+D-15 测量+D-24 补跑均已收口——见登记表「真机验证记录」〕；**未决实施范围 = R5**〔D-27 dsh 路径后台化，DP-1 修订终裁方案 B，§7〕）
+- 上游：[需求文档](2026-09-05-defect-remediation-requirements.md)（含三项用户裁决 D-裁决-1/2/3）· [缺陷登记表](2026-09-05-defect-registry.md)（D-01…D-27，全部条目带证据行号）· 审计报告（thorough 子代理，2026-09-05）
 - 平台契约依据：登记表「平台契约要点」五条（jobs 返回 branded string / 通知只含指针 / cancel→abort / run() 无墙钟 / job_output wait 上限 600s）
 
 ## 1. 问题陈述
@@ -199,20 +199,20 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 
 ### 7.1 advisor dsh 循环（自动判定，与 codex 完全对称）
 
-dsh 路由的评审预算 `route.timeoutMs > budgetCapMs` 且 ctx.jobs 可用 → 派后台 job：run() 内执行完整 `runAdvisorToolLoop`（纯进程内 llm.stream 调用，无子进程），finalize 在 done 内恰好一次（R2 codex 模式全套复用：单飞槽位 advisor、代际捕获校验、prior/token 语义不变）；≤cap 或 jobs 缺失 → 同步执行（D-17 钳制与告警保留——它保护的就是同步路径）。
+dsh 路由的评审预算 `route.timeoutMs > budgetCapMs` 且 ctx.jobs 可用 → 派后台 job：run() 内执行完整 `runAdvisorToolLoop`（纯进程内 llm.stream 调用，无子进程），finalize 在 done 内恰好一次（R2 codex 模式全套复用：单飞槽位 advisor、代际捕获校验、prior/token 语义不变）；≤cap 或 jobs 缺失 → 同步执行（D-17 钳制与告警保留——它保护的就是同步路径）。**job 内预算不钳制**（run() 无墙钟，D-17 钳制只适用于同步路径——route.timeoutMs 在 job 内全额生效）。**派发降级**：jobs.start 抛错或派发失败 → 同步 + 钳制 + 响亮告警（advisor codex 先例同款 try/catch 降级）；ctx.llm 在 run() 内不可用属同类失败形态，经同一降级路径回收（验收⑦真机全链为该假设的硬门禁）。**兜底覆盖**：本路径同样受 `dshBackgroundTimeoutMs` 兜底（见 §7.2——挂起的 llm.stream 不会永悬 job）。
 
 ### 7.2 escalate/eng dsh 子代理（显式 `background` 参数）
 
-- 工具契约新增可选参数 `background`（默认 false）：**不传** = 现状（同步执行 + budgetCap 内部截止——短任务的快路径体验不变，今日全部任务 <540s）；**传 true** = 派后台 job：run() 闭包内 `ctx.subagents.start` + `await run.result`（ctx 引用在 job 生命周期内有效——与 advisor jobs 先例同假设；session 优雅销毁 → job cancel → abort 传递），交付文本/失败诊断经完成通知送达；簿记（escalate touchedFiles、eng 交付簿记）在 done 成功分支恰好一次（D-20 模式复用）。
+- 工具契约新增可选参数 `background`（默认 false）：**不传** = 现状（同步执行 + budgetCap 内部截止——短任务的快路径体验不变，今日全部任务 <540s）；**传 true** = 派后台 job：run() 闭包内 `ctx.subagents.start` + `await run.result`（ctx 引用在 job 生命周期内有效——与 advisor jobs 先例同假设；session 优雅销毁 → job cancel → abort 传递），交付文本/失败诊断经完成通知送达；簿记（escalate touchedFiles、eng 交付簿记）在 done 成功分支恰好一次（D-20 模式复用）。**单飞契约**：background 派发与同步入口共用同一复合键槽位（setInFlightJob 于派发同步块、settle 双分支清除——R3 全入口检查之上，派发点二次检查保留）。**followup 续轮**：escalate followup 同样接受 background 参数（续轮任务往往更长，语义一致）。**派发降级**：jobs.start 抛错/ctx.subagents 在 run() 内不可用 → 同步 + 钳制 + 响亮告警（与 §7.1 同款 try/catch 降级）。
 - 返回文本 = job 句柄 + UI-2 接续指令（复用共享 dispatch reply helper，机制名泛化）。
-- **挂死兜底**：后台 dsh 任务有兜底 deadline（防子代理挂起导致 job 永悬）——新全局配置 `dshBackgroundTimeoutMs`（缺省 1_800_000=30min，合法 60_000..3_600_000；三面白名单 + 设置页字段 + 非法回落缺省告警）；到点 abort 子代理 + 超时信封（partial 保留）。
+- **挂死兜底（覆盖全部三条后台路径，含 §7.1）**：后台 dsh 任务有兜底 deadline（防子代理挂起/llm.stream 挂起导致 job 永悬）——新全局配置 `dshBackgroundTimeoutMs`（缺省 1_800_000=30min，合法 60_000..3_600_000；三面白名单 + 设置页字段 + 非法回落缺省告警）；到点 abort（子代理 abort / 流 abort）+ 超时信封（partial 保留）。
 - eng_coder 流程契约变更（架构师侧）：background 任务返回句柄 → **等完成通知后再发起发散审计/交付评审**（与 codex 长任务同纪律）。
 
 ### 7.3 R5 受影响文件与验收
 
 文件：`lib/advisor.mjs`（dsh 循环派发 + reply 泛化）、`lib/escalate.mjs`、`lib/eng.mjs`（background 参数）、`lib/index.mjs` + `lib/config-store.mjs` + `lib/client.js`（dshBackgroundTimeoutMs 三面 + 设置页）、`test/codex-runner.test.mjs`、登记表。
 
-验收：① advisor dsh >cap 自动派发用例（假 jobs：run() 内跑循环、finalize 恰好一次、句柄含接续指令；≤cap 同步不变断言）；② escalate background=true 派发 + 子代理在 run() 内执行 + 簿记 done 内成功分支 + 兜底 deadline abort 用例；③ eng background 同款 + 失败不簿记（D-20 断言复用）；④ 三路径单飞槽位互不阻塞断言；⑤ dshBackgroundTimeoutMs 三面同步 + 非法回落用例；⑥ 全量 ≥215 绿；⑦ 真机：一次 background eng_coder 全链（句柄→通知→交付→审计接续）。
+验收：① advisor dsh >cap 自动派发用例（假 jobs：run() 内跑循环、finalize 恰好一次、句柄含接续指令；≤cap 同步不变断言；**job 内预算不钳制断言**）；② escalate background=true 派发 + 子代理在 run() 内执行 + 簿记 done 内成功分支 + 兜底 deadline abort 用例（**含 cancel 传播用例：job kill → 子代理 abort**）；③ eng background 同款 + 失败不簿记（D-20 断言复用）；④ 三路径单飞槽位互不阻塞断言（含 background 派发占位/清除）；⑤ dshBackgroundTimeoutMs 三面同步 + 非法回落用例；⑥ 全量 ≥215 绿；⑦ 真机：一次 background eng_coder 全链（句柄→通知→交付→审计接续）——ctx 服务在 run() 内可用的假设硬门禁。
 
 ## 8. UI/交互决策汇总（METHODOLOGY 要求集中呈现）
 
@@ -234,7 +234,7 @@ dsh 路由的评审预算 `route.timeoutMs > budgetCapMs` 且 ctx.jobs 可用 �
 
 ## 10. 验收标准（项目级，映射需求 §5）
 
-1. 缺陷登记表**全部在册条目**（动态上界——2026-09-06 立项 R5 时为 D-01…D-27）终态 ∈ {已修, 已裁决处置, 已驳回(附证据), 待测量(附数据)}；
+1. 缺陷登记表**全部在册条目**（动态上界——2026-09-06 立项 R5 时为 D-01…D-27）终态 ∈ {已修, 已裁决处置, 已驳回(附证据), 待测量(附数据), **延期至后续轮(附理由)**——D-26 适用末类：2026-09-05 用户知情、待后续维护轮}；
 2. 单测全绿且每修复 ≥1 回归用例（R1-R5 各节验收条款即用例清单）；
 3. 真机验证：advisor（jobs 派发 + 回落链 + token 签发）、eng_coder（一次交付 + 一次 background 全链）、escalate（含 followup）、consult（含 codex 行）各一次成功；复测「空响应」「effort 秒死」两受害场景（前者给出可归因诊断或重试后成功；后者不再秒死）。**回退规则**：受害场景自然复现失败时，以故障注入验证对应诊断/重试/回落路径作为等效验收——生产复现实录已在登记表 D-01/D-02 留证；
 4. git：R1-R5 每轮独立提交 + 版本 0.7.0→0.9.0 推进 + 文档登记与 METHODOLOGY 历史记入。
@@ -260,5 +260,5 @@ dsh 路由的评审预算 `route.timeoutMs > budgetCapMs` 且 ctx.jobs 可用 �
 
 - **宿主硬死孤儿**（B9）：jobs 只护优雅销毁；R2 的启动清扫缓解陈旧目录，进程级清扫无可靠属主标记——保持文档化边界。
 - **maxWallMs 绑定路径未在平台源码钉死**：设计依据 = 本插件 D.1 实测 + 两会话 15+ 次同形截断；R2 钳制告警本身不依赖该绑定成立（绑定不成立时钳制只是多余但无害）。
-- **DP-1 方案 A 的残余风险**：eng dsh 超长轮（>600s）在钳制下被终止——数据不足以下结论迁移必要性，钳制 + 告警 + 观测是本轮诚实边界。
+- **dsh 路径残余风险（R5 后）**：仅剩默认同步快路径（background=false / 预算 ≤cap / jobs 缺失降级）——该路径钳制+告警**按设计保留**（它保护的就是墙钟内的同步执行）；长任务经自动判定或显式 background 进入后台后无墙钟。〔原「方案 A 数据不足」措辞已被 2026-09-06 方案 B 终裁取代〕
 - **平台契约依赖**：jobs 契约五条由审计钉死于当前部署版本；DSH 升级若变更契约，登记表「平台契约要点」需复核。
