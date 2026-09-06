@@ -3128,3 +3128,445 @@ test("R4 收尾 #4: advisor jobs 派发路径 warnPrefix 并入派发文本—�
   await specs[0].hooks.done // settle（finalize 轮次推进）后再清理会话
   dropSession(sid)
 })
+
+// ————————————— R5（D-27，设计 §7）：dsh 路径后台化 —— Stage 1：dshBackgroundTimeoutMs 三面落地 —————————————
+// 三面白名单同步（N-5/US-10，防 D-13 类漂移）：PUT 校验（index.mjs）⊕ merge 白名单
+//（config-store.mjs）⊕ 运行时解析（resolveDshBackgroundTimeoutMs——config-store.mjs 导出，
+// advisor/escalate/eng 三机制消费的单一事实源）。缺省 1800000（30min）；合法 60000..3600000。
+
+test("R5 dshBackgroundTimeoutMs 三面同步: PUT 接受合法值 ⊕ merge 保留 ⊕ 运行时解析生效", async () => {
+  // 面 1：PUT 校验（index.mjs validateGlobalUserConfig 经 makeApiHandler 真实 PUT 路径）
+  const { makeApiHandler } = await import("../lib/index.mjs")
+  const handler = makeApiHandler({}, { baseConfig: {}, dshHomeOverride: mkdtempSync(join(tmpdir(), "dshbg-")) })
+  const req = { method: "PUT", url: "/thincoder-suite/api/config", [Symbol.asyncIterator]: function* () { yield Buffer.from(JSON.stringify({ config: { dshBackgroundTimeoutMs: 720000 } })) } }
+  const res = { statusCode: 0, body: "", writeHead(code) { this.statusCode = code }, end(b) { this.body = b } }
+  await handler(req, res)
+  assert.equal(res.statusCode, 200, "PUT 接受合法值: " + res.body)
+  assert.equal(JSON.parse(res.body).user.dshBackgroundTimeoutMs, 720000, "sanitized 保留")
+  // 面 2：配置合并（config-store.mjs mergeGlobalConfig 白名单透传）
+  const merged = mergeGlobalConfig({}, { dshBackgroundTimeoutMs: 720000 })
+  assert.equal(merged.dshBackgroundTimeoutMs, 720000, "merge 保留（user 层覆盖 base）")
+  assert.equal(mergeGlobalConfig({ dshBackgroundTimeoutMs: 900000 }, {}).dshBackgroundTimeoutMs, 900000, "无 user 层保留 base")
+  // 面 3：运行时解析（config-store resolveDshBackgroundTimeoutMs——三条后台 dsh 路径共享的兜底 deadline 读取）
+  const { resolveDshBackgroundTimeoutMs, DSHS_BACKGROUND_TIMEOUT_DEFAULT_MS } = await import("../lib/config-store.mjs")
+  assert.equal(resolveDshBackgroundTimeoutMs({ dshBackgroundTimeoutMs: 720000 }), 720000, "运行时收配置值")
+  assert.equal(resolveDshBackgroundTimeoutMs({}), DSHS_BACKGROUND_TIMEOUT_DEFAULT_MS, "未配 → 缺省 1800000（30min）")
+  assert.equal(DSHS_BACKGROUND_TIMEOUT_DEFAULT_MS, 1800000)
+})
+
+test("R5 dshBackgroundTimeoutMs: PUT 拒绝区间外/非整数（B12 字段级错误，越界值不落盘）", () => {
+  for (const bad of [0, 59999, 3600001, 1.5, -100, "many"]) {
+    const v = validateGlobalUserConfig({ dshBackgroundTimeoutMs: bad }, [])
+    assert.equal(v.ok, false, "PUT 拒绝非法值 " + JSON.stringify(bad))
+    assert.ok(v.errors.some((e) => e.includes("dshBackgroundTimeoutMs") && e.includes("60000..3600000")), "错误信息含合法区间: " + v.errors.join("|"))
+    assert.equal(v.sanitized.dshBackgroundTimeoutMs, undefined, "非法值不进 sanitized（不落盘）")
+  }
+  const ok = validateGlobalUserConfig({ dshBackgroundTimeoutMs: 60000 }, [])
+  assert.equal(ok.ok, true, "下边界 60000 接受")
+  assert.equal(ok.sanitized.dshBackgroundTimeoutMs, 60000)
+  const ok2 = validateGlobalUserConfig({ dshBackgroundTimeoutMs: 3600000 }, [])
+  assert.equal(ok2.ok, true, "上边界 3600000 接受")
+})
+
+test("R5 dshBackgroundTimeoutMs: 运行时非法值（手编 config）→ 回落缺省 1800000 + 响亮告警", async () => {
+  const { resolveDshBackgroundTimeoutMs, DSHS_BACKGROUND_TIMEOUT_DEFAULT_MS } = await import("../lib/config-store.mjs")
+  for (const bad of ["many", -5, 0, 1.5]) {
+    const r = await captureWarn(() => resolveDshBackgroundTimeoutMs({ dshBackgroundTimeoutMs: bad }))
+    assert.equal(r.value, DSHS_BACKGROUND_TIMEOUT_DEFAULT_MS, "非法值回落缺省（绝不砖化后台派发）: " + JSON.stringify(bad))
+    assert.ok(r.warnings.some((w) => w.includes("dshBackgroundTimeoutMs") && w.includes("1800000")), "非法值告警 console.warn 留档: " + r.warnings.join("|"))
+  }
+  // 运行时宽容正整数值（对齐 resolveCodexBudgetCapMs 先例：测试/手编小值可驱动兜底 deadline）
+  assert.equal(resolveDshBackgroundTimeoutMs({ dshBackgroundTimeoutMs: 400 }), 400, "正整数值运行时生效（PUT 面仍收口 60000..3600000）")
+})
+
+// ————————————— R5（D-27，设计 §7.1/§7.2）：advisor dsh 循环后台化 —— Stage 2 —————————————
+// route.timeoutMs > budgetCapMs 且 ctx.jobs 可用 → 自动派后台 job（与 codex 分支完全对称）：
+// run() 内跑完整 runAdvisorToolLoop（job 内预算不钳制——D-17 只护同步路径，route.timeoutMs
+// 在 job 内全额生效）、finalize 在 done 内恰好一次（单飞 advisor 槽位 / 代际捕获校验 /
+// prior·token 语义全套复用 R2 codex 模式）；≤cap / jobs 缺失 / 派发抛错 → 同步 + 钳制 +
+// 响亮告警（D-17 现状——钳制保护的就是墙钟内的同步路径）。挂死兜底 dshBackgroundTimeoutMs
+//（§7.2，Stage 1 三面落地后）：到点 abort 挂起的 llm.stream + 超时信封（job 不永悬）。
+// 假 jobs（fakeJobsFactory——平台契约：start 返回 branded string + run() 产出 { cancel, done }）
+// 假 llm（stream 注入，零出网）；dshBackgroundTimeoutMs 运行时宽容小值驱动兜底 deadline。
+
+test("R5 §7.1 dsh 自动派发: >cap + ctx.jobs → job 内跑完整 runAdvisorToolLoop + finalize 恰好一次 + UI-2 接续指令 + settle 后槽位清除", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  let streamCalls = 0
+  const llm = {
+    stream() {
+      streamCalls++
+      return (async function* () {
+        yield REVIEW_TABLE
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r5-adv-dsh-dispatch"
+  const agent = r3Agent(sid)
+  const config = { advisor: { round1: { provider: "p", model: "m", timeoutMs: 900000 } } } // > 默认 budgetCap 540000
+  const deps = { llm, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } }
+  const out = await runAdvisorReview(deps, { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
+  assert.ok(out.includes("advisor-dsh-1"), "job 句柄（branded string 直接渲染——D-05）: " + out)
+  assert.ok(!out.includes("job ?"), "job id 不恒显 ?（D-05）")
+  assert.ok(out.includes("等待完成通知后再继续") && out.includes("job_output"), "UI-2/D-09 接续指令（勿 job_output wait 阻塞）")
+  assert.ok(!out.includes("含评审全文"), "D-09：不承诺「通知含评审全文」（通知只含一行指针）")
+  assert.ok(out.includes("预算 900s"), "全额预算可见（非钳制后数值）")
+  assert.ok(out.includes("job 内预算不钳制"), "派发文案明示 job 内预算不钳制（D-17 只护同步路径）")
+  assert.equal(specs.length, 1)
+  assert.equal(specs[0].payload.kind, "advisor-dsh")
+  assert.equal(specs[0].payload.owner, agent, "owner 绑定会话 agent")
+  assert.ok(specs[0].payload.label.includes("dsh review (p:m, 900s)"), "label 含路由与预算")
+  assert.ok(streamCalls >= 1, "run() 内 llm.stream 已被消费（job 启动即跑完整循环——纯进程内调用，无子进程）")
+  // done settle → finalize 恰好一次：轮次推进恰好 1、prior 只存评审正文（D-19：机制后缀不进 prior）
+  const outcome = await specs[0].hooks.done
+  assert.equal(outcome.status, "completed")
+  assert.ok(outcome.output.includes("| 1 | a | b |"), "评审全文进 job output")
+  const st = sessionState(sid)
+  assert.equal(st.advisorRound, 1, "finalize 轮次推进恰好一次")
+  assert.ok(st.lastAdvisorOutput && st.lastAdvisorOutput.includes("| 1 | a | b |"), "正文进 prior")
+  assert.ok(!st.lastAdvisorOutput.includes("[thincoder-suite]"), "prior 不含机制后缀（D-19）")
+  // settle 清槽位 → ≤cap 后续调用走同步（不再派发；首轮完成烧轮后路由键转 convergence 组）
+  const cfgSync = {
+    advisor: {
+      round1: { provider: "p", model: "m", timeoutMs: 300000 },
+      convergence: { provider: "p", model: "m", timeoutMs: 300000 },
+    },
+  }
+  const out2 = await runAdvisorReview(deps, { agent, config: cfgSync, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
+  assert.ok(out2.includes("| 1 | a | b |"), "settle 后 ≤cap 同步执行")
+  assert.equal(specs.length, 1, "同步执行不派 job")
+  dropSession(sid)
+})
+
+test("R5 §7.1 ≤cap 同步不变: jobs 可用也不派发（D-17 现状——≤cap 即同步快路径）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r5-adv-dsh-sync"
+  const agent = r3Agent(sid)
+  const llm = {
+    stream() {
+      return (async function* () {
+        yield REVIEW_TABLE
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const config = { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } } // ≤cap 540000
+  const out = await runAdvisorReview(
+    { llm, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  assert.ok(out.includes("| 1 | a | b |"), "同步路径交付评审")
+  assert.ok(!out.includes("background job"), "未派发后台 job")
+  assert.equal(specs.length, 0, "≤cap 不派发")
+  assert.equal(sessionState(sid).advisorRound, 1, "同步 finalize 轮次推进")
+  dropSession(sid)
+})
+
+test("R5 §7.1 jobs 缺失降级: >cap 且 ctx 无 jobs → 同步 + 钳制 + 响亮告警（D-17 现状保护同步路径）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const sid = "r5-adv-dsh-nojobs"
+  const agent = r3Agent(sid)
+  const llm = {
+    stream() {
+      return (async function* () {
+        yield REVIEW_TABLE
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const config = { advisor: { round1: { provider: "p", model: "m", timeoutMs: 900000 } } }
+  const r = await captureWarn(() => runAdvisorReview(
+    { llm }, // 无 ctx → getJobsService 返回 null
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  ))
+  const out = r.value
+  assert.ok(r.warnings.some((w) => w.includes("ctx.jobs 不可用") && w.includes("900000") && w.includes("540000")), "jobs 缺失响亮告警: " + r.warnings.join("|"))
+  assert.ok(out.includes("| 1 | a | b |"), "同步降级仍交付评审")
+  assert.ok(out.includes("已按 codexCli.budgetCapMs=540000ms 截断执行"), "D-17 钳制尾部告警（同步路径可见）")
+  dropSession(sid)
+})
+
+test("R5 §7.1 派发抛错降级: jobs.start throw → 同步 + 钳制 + 响亮告警（降级不静默吞——§7.1 同款 try/catch）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const sid = "r5-adv-dsh-throw"
+  const agent = r3Agent(sid)
+  const llm = {
+    stream() {
+      return (async function* () {
+        yield REVIEW_TABLE
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const jobs = { start() { throw new Error("boom") } }
+  const config = { advisor: { round1: { provider: "p", model: "m", timeoutMs: 900000 } } }
+  const r = await captureWarn(() => runAdvisorReview(
+    { llm, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  ))
+  const out = r.value
+  assert.ok(r.warnings.some((w) => w.includes("派发失败") && w.includes("boom")), "派发失败响亮告警: " + r.warnings.join("|"))
+  assert.ok(out.includes("| 1 | a | b |"), "同步降级仍交付评审")
+  assert.ok(out.includes("已按 codexCli.budgetCapMs=540000ms 截断执行"), "钳制告警（D-17 同步路径）")
+  assert.equal(sessionState(sid).advisorRound, 1, "同步 finalize 轮次推进")
+  dropSession(sid)
+})
+
+test("R5 §7.1 job 内预算不钳制: budgetCap=250ms 而 job 内流跨过 250ms 存活完成（route.timeoutMs 在 job 内全额生效）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r5-adv-dsh-noclamp"
+  const agent = r3Agent(sid)
+  const llm = {
+    stream() {
+      return (async function* () {
+        yield { type: "block-end", block: { type: "text", text: "FIRST PART " } }
+        await sleep(800) // 第二块晚于 budgetCap=250ms 钳制窗口——job 内若被钳制会在 250ms 被杀
+        yield { type: "block-end", block: { type: "text", text: "SECOND PART" } }
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const config = {
+    advisor: { round1: { provider: "p", model: "m", timeoutMs: 900000 } },
+    codexCli: { budgetCapMs: 250 },
+  }
+  const out = await runAdvisorReview(
+    { llm, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  assert.ok(out.includes("advisor-dsh-1"), "900000 > 250 → 自动派发")
+  const t0 = Date.now()
+  const outcome = await specs[0].hooks.done
+  const elapsed = Date.now() - t0
+  assert.equal(outcome.status, "completed", "job 内跑满 route.timeoutMs——流跨过钳制窗口后正常完成")
+  assert.ok(outcome.output.includes("FIRST PART") && outcome.output.includes("SECOND PART"),
+    "两块正文都收齐（第二块晚于 budgetCap=250ms 钳制窗口——钳制未在 job 内生效）")
+  assert.ok(!outcome.output.includes("review timeout after"), "job 内未被 budgetCap 截断（无 250ms timeout 信封）")
+  assert.ok(elapsed >= 400 && elapsed < 5000, "存活过钳制窗口（流自身 ~800ms）: " + elapsed + "ms")
+  assert.equal(sessionState(sid).advisorRound, 1, "完成恰好一次")
+  dropSession(sid)
+})
+
+test("R5 §7.2 兜底 deadline: 挂起 llm.stream 到点 abort（dshBackgroundTimeoutMs）+ 超时信封（job 不永悬、槽位清除、不烧轮次）", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r5-adv-dsh-backstop"
+  const agent = r3Agent(sid)
+  let calls = 0
+  const llm = {
+    stream(opts) {
+      calls++
+      return (async function* () {
+        if (calls === 1) {
+          // 第一调用（job 内）：产出部分内容后挂死，直到 signal abort（模拟 provider 流挂起）
+          yield REVIEW_TABLE
+          await new Promise((resolve, reject) => {
+            const s = opts.signal
+            if (!s) return setTimeout(resolve, 100000)
+            const onAbort = () => reject((s.reason instanceof Error) ? s.reason : new Error(String(s.reason ?? "aborted")))
+            if (s.aborted) onAbort()
+            else s.addEventListener("abort", onAbort, { once: true })
+          })
+        } else {
+          yield REVIEW_TABLE
+          yield { type: "finish", reason: { kind: "stop" } }
+        }
+      })()
+    },
+  }
+  const config = {
+    advisor: { round1: { provider: "p", model: "m", timeoutMs: 900000 } },
+    dshBackgroundTimeoutMs: 300, // 运行时宽容小值驱动兜底 deadline（PUT 面仍收口 60000..3600000）
+  }
+  const warnings = []
+  const origWarn = console.warn
+  console.warn = (m) => { warnings.push(String(m)) }
+  try {
+    const out = await runAdvisorReview(
+      { llm, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
+      { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+    )
+    assert.ok(out.includes("advisor-dsh-1"), "挂起任务先派发（主调用不被挂起阻塞）")
+    const t0 = Date.now()
+    const outcome = await specs[0].hooks.done // job settle 由兜底 abort 驱动（不依赖平台 cancel）
+    const elapsed = Date.now() - t0
+    assert.ok(elapsed >= 250 && elapsed < 5000, "兜底 deadline（~300ms）到点即 abort，job 不永悬: " + elapsed + "ms")
+    assert.equal(outcome.status, "failed", "超时信封：评审未完成 → failed（partial 保留）")
+    assert.ok(outcome.output.includes("超 dshBackgroundTimeoutMs=300ms 兜底截止"), "超时信封注明兜底截止: " + outcome.output.slice(0, 200))
+    assert.ok(warnings.some((w) => w.includes("超兜底截止") && w.includes("dshBackgroundTimeoutMs=300")), "abort 响亮告警留档: " + warnings.join("|"))
+    const st = sessionState(sid)
+    assert.equal(st.advisorRound, 0, "超时信封不烧轮次")
+    assert.equal(st.lastAdvisorOutput, null, "超时信封不写 prior")
+    // 槽位清除（settle 双分支）：后续 ≤cap 同步调用不再被拒、正常交付
+    const cfgSync = { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } }
+    const out2 = await runAdvisorReview(
+      { llm, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
+      { agent, config: cfgSync, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+    )
+    assert.ok(out2.includes("| 1 | a | b |"), "settle 后同步路径恢复（槽位已清）")
+  } finally {
+    console.warn = origWarn
+  }
+  dropSession(sid)
+})
+
+test("R5 §7.1 单飞（D-06）: dsh job 在飞期间二次 advisor 调用被拒（含 job id 与接续指引），cancel → settle 后槽位清除恢复", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r5-adv-dsh-inflight"
+  const agent = r3Agent(sid)
+  let calls = 0
+  const llm = {
+    stream(opts) {
+      calls++
+      return (async function* () {
+        if (calls === 1) {
+          yield REVIEW_TABLE
+          await new Promise((resolve, reject) => {
+            const s = opts.signal
+            if (!s) return setTimeout(resolve, 100000)
+            const onAbort = () => reject((s.reason instanceof Error) ? s.reason : new Error(String(s.reason ?? "aborted")))
+            if (s.aborted) onAbort()
+            else s.addEventListener("abort", onAbort, { once: true })
+          })
+        } else {
+          yield REVIEW_TABLE
+          yield { type: "finish", reason: { kind: "stop" } }
+        }
+      })()
+    },
+  }
+  const config = { advisor: { round1: { provider: "p", model: "m", timeoutMs: 900000 } } }
+  const deps = { llm, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } }
+  const out1 = await runAdvisorReview(deps, { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
+  assert.ok(out1.includes("advisor-dsh-1"), ">cap 派发后台 job（advisor 槽位占位）")
+  assert.equal(specs.length, 1)
+  // 在飞期间：二次 advisor 调用（≤cap dsh 路由）在机制入口被拒——含在飞 job id 与接续方式
+  const cfgSync = { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } }
+  const out2 = await runAdvisorReview(deps, { agent, config: cfgSync, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
+  assert.ok(out2.startsWith("Error"), "在飞期间二次调用被拒（advisor 机制单飞——全部入口，D-06 扩展）")
+  assert.ok(out2.includes("advisor-dsh-1"), "拒绝文本含在飞 job id")
+  assert.ok(out2.includes("job_output") && out2.includes("未派发"), "接续指引 + 明确本次未派发")
+  assert.equal(specs.length, 1, "无第二个 job 派发")
+  // cancel → abort → done settle（双分支清除槽位）
+  specs[0].hooks.cancel("cancelled by test")
+  const outcome = await specs[0].hooks.done
+  assert.equal(outcome.status, "failed", "cancel 后 settle（中止形态）")
+  assert.ok(outcome.output.includes("Advisor: interrupted.") || outcome.output.includes("review failed"), "中止可归因: " + outcome.output.slice(0, 120))
+  const out3 = await runAdvisorReview(deps, { agent, config: cfgSync, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
+  assert.ok(out3.includes("| 1 | a | b |"), "settle 后槽位清除，同步调用恢复执行")
+  dropSession(sid)
+})
+
+test("R5 §7.1 代际（D-10）: dsh job 派发后 generation 变更 → 结果不并入（finalize 不执行——轮次/prior/token 丢弃）+ 完成通知注明", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r5-adv-dsh-gen"
+  const agent = r3Agent(sid)
+  let release
+  const gate = new Promise((r) => { release = r })
+  const llm = {
+    stream() {
+      return (async function* () {
+        await gate // 派发后、finalize 前由测试控制完成时机
+        yield REVIEW_TABLE
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const config = { advisor: { round1: { provider: "p", model: "m", timeoutMs: 900000 } } }
+  const deps = { llm, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } }
+  const out = await runAdvisorReview(deps, { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
+  assert.ok(out.includes("advisor-dsh-1"), "派发时捕获代际")
+  // 派发后、done settle 前：语义转换点 bump 代际（eng 交付重置同款）
+  bumpAdvisorGeneration(sessionState(sid))
+  release()
+  const outcome = await specs[0].hooks.done
+  assert.equal(outcome.status, "completed", "评审完成（代际不匹配不改变完成性——原文可读）")
+  assert.ok(outcome.output.includes("| 1 | a | b |"), "评审原文可读（不并入但可读）")
+  assert.ok(outcome.output.includes("状态代际已变更"), "完成通知注明代际变更")
+  assert.ok(outcome.output.includes("不并入"), "注明本轮结果不并入会话状态")
+  const st = sessionState(sid)
+  assert.equal(st.advisorRound, 0, "finalize 丢弃：轮次不推进（晚到完成不复活已重置状态——D-10）")
+  assert.equal(st.lastAdvisorOutput, null, "finalize 丢弃：prior 不写")
+  dropSession(sid)
+})
+
+test("R5 §7.2 escalate dsh background: run() 内启动子代理，成功簿记恰好一次，句柄只含接续指针", async () => {
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r5-esc-dsh-bg"
+  const st = sessionState(sid)
+  let starts = 0
+  const subagents = { async start(_kind, opts) {
+    starts++
+    assert.ok(opts.signal, "子代理接收 job controller signal")
+    return { result: Promise.resolve({ stopReason: "completed", output: [{ type: "text", text: "done\n\nTouched files: lib/bg.mjs" }] }), dispose: async () => {} }
+  } }
+  const deps = { ctx: { subagents, get: (s) => s === "jobs" ? jobs : null }, agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } }, config: { consultModels: [{ provider: "p", model: "m" }], dshBackgroundTimeoutMs: 1000 }, state: st, signal: undefined }
+  const out = await runEscalate(deps, "background work", undefined, false, true)
+  assert.ok(out.includes("escalate-dsh-1") && out.includes("job_output"), "返回句柄与接续指针")
+  assert.equal(starts, 1, "子代理仅在 run() 内启动一次")
+  const outcome = await specs[0].hooks.done
+  assert.equal(outcome.status, "completed")
+  assert.deepEqual(st.touchedFiles, ["lib/bg.mjs"], "成功分支簿记一次")
+  assert.equal(st.mutatedThisRun, true)
+  assert.equal(checkInFlightJob(sid, "escalate"), null, "settle 清除单飞槽位")
+  dropSession(sid)
+})
+
+test("R5 §7.2 escalate dsh background: 失败不簿记；jobs.start 抛错回落同步并告警", async () => {
+  const sid = "r5-esc-dsh-bg-fail"
+  const st = sessionState(sid)
+  const subagents = { async start() { return { result: Promise.resolve({ stopReason: "error", diagnostic: "nope", output: [{ type: "text", text: "partial\n\nTouched files: lib/nope.mjs" }] }), dispose: async () => {} } } }
+  const agent = { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } }
+  const base = { ctx: { subagents }, agent, config: { consultModels: [{ provider: "p", model: "m" }], codexCli: { budgetCapMs: 50 } }, state: st, signal: undefined }
+  const throwing = { start() { throw new Error("jobs boom") } }
+  const oldWarn = console.warn; const warnings = []; console.warn = (m) => warnings.push(String(m))
+  try {
+    const out = await runEscalate({ ...base, ctx: { ...base.ctx, get: (s) => s === "jobs" ? throwing : null } }, "fallback", undefined, false, true)
+    assert.ok(!out.includes("escalate-dsh-1"), "派发抛错回落同步（无 job 句柄）")
+    assert.ok(warnings.some(w => w.includes("派发失败")), "派发抛错响亮告警")
+    const sid2 = "r5-esc-dsh-bg-nojobs"
+    const st2 = sessionState(sid2)
+    const out2 = await runEscalate({ ...base, state: st2, agent: { session: { id: sid2, header: { delegationDepth: 0, cwd: tmpdir() } } }, ctx: { subagents } }, "fallback", undefined, false, true)
+    assert.ok(!out2.includes("escalate-dsh-1"), "jobs 缺失回落同步（无 job 句柄）")
+    assert.ok(warnings.some(w => w.includes("ctx.jobs 缺失")), "jobs 缺失响亮告警")
+    dropSession(sid2)
+  } finally { console.warn = oldWarn }
+  dropSession(sid)
+})
+
+test("R5 §7.2 eng dsh background: 成功簿记一次，cancel 传播到子代理 abort", async () => {
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r5-eng-dsh-bg"
+  const st = sessionState(sid); st.engineering = true
+  const token = makeEngToken(st)
+  let aborted = false
+  const subagents = { async start(_kind, opts) {
+    opts.signal.addEventListener("abort", () => { aborted = true }, { once: true })
+    return { result: new Promise((resolve) => setTimeout(() => resolve({ stopReason: "completed", output: [{ type: "text", text: "eng done\n\nTouched files: lib/eng-bg.mjs" }] }), 20)), dispose: async () => {} }
+  } }
+  const deps = { ctx: { subagents, get: (s) => s === "jobs" ? jobs : null }, agent: { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "p", model: "m" } }, config: { dshBackgroundTimeoutMs: 1000 }, signal: undefined }
+  const out = await runEngCoder(deps, { task: "eng background", designToken: token, docs: [], background: true })
+  assert.ok(out.includes("eng-dsh-1") && out.includes("job_output"), "后台句柄")
+  const outcome = await specs[0].hooks.done
+  assert.equal(outcome.status, "completed")
+  assert.ok(st.touchedFiles.includes("lib/eng-bg.mjs"), "成功交付簿记")
+  assert.equal(checkInFlightJob(sid, "eng"), null)
+  dropSession(sid)
+
+  const { jobs: jobs2, specs: specs2 } = fakeJobsFactory()
+  const sid2 = "r5-eng-dsh-cancel"; const st2 = sessionState(sid2); st2.engineering = true
+  const token2 = makeEngToken(st2)
+  const subagents2 = { async start(_kind, opts) {
+    return { result: new Promise((resolve, reject) => opts.signal.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")) }, { once: true })), dispose: async () => {} }
+  } }
+  const deps2 = { ctx: { subagents: subagents2, get: (s) => s === "jobs" ? jobs2 : null }, agent: { session: { id: sid2, header: { cwd: tmpdir() } }, options: { provider: "p", model: "m" } }, config: { dshBackgroundTimeoutMs: 1000 }, signal: undefined }
+  const out2 = await runEngCoder(deps2, { task: "cancel", designToken: token2, docs: [], background: true })
+  assert.ok(out2.includes("eng-dsh-1")); specs2[0].hooks.cancel("test cancel"); const outcome2 = await specs2[0].hooks.done
+  assert.equal(outcome2.status, "failed"); assert.equal(aborted, true, "job cancel 传播子代理 abort")
+  dropSession(sid2)
+})
