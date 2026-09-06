@@ -199,20 +199,20 @@ eng.mjs 独立 code review 补跑（advisor type=code，两轮环境阻塞的欠
 
 ### 7.1 advisor dsh 循环（自动判定，与 codex 完全对称）
 
-dsh 路由的评审预算 `route.timeoutMs > budgetCapMs` 且 ctx.jobs 可用 → 派后台 job：run() 内执行完整 `runAdvisorToolLoop`（纯进程内 llm.stream 调用，无子进程），finalize 在 done 内恰好一次（R2 codex 模式全套复用：单飞槽位 advisor、代际捕获校验、prior/token 语义不变）；≤cap 或 jobs 缺失 → 同步执行（D-17 钳制与告警保留——它保护的就是同步路径）。**job 内预算不钳制**（run() 无墙钟，D-17 钳制只适用于同步路径——route.timeoutMs 在 job 内全额生效）。**派发降级**：jobs.start 抛错或派发失败 → 同步 + 钳制 + 响亮告警（advisor codex 先例同款 try/catch 降级）；ctx.llm 在 run() 内不可用属同类失败形态，经同一降级路径回收（验收⑦真机全链为该假设的硬门禁）。**兜底覆盖**：本路径同样受 `dshBackgroundTimeoutMs` 兜底（见 §7.2——挂起的 llm.stream 不会永悬 job）。
+dsh 路由的评审预算 `route.timeoutMs > budgetCapMs` 且 ctx.jobs 可用 → 派后台 job：run() 内执行完整 `runAdvisorToolLoop`（纯进程内 llm.stream 调用，无子进程），finalize 在 done 内恰好一次（R2 codex 模式全套复用：单飞槽位 advisor、代际捕获校验、prior/token 语义不变）；≤cap 或 jobs 缺失 → 同步执行（D-17 钳制与告警保留——它保护的就是同步路径）。**job 内预算不钳制**（run() 无墙钟，D-17 钳制只适用于同步路径——route.timeoutMs 在 job 内全额生效）。**派发降级**：jobs.start 抛错或派发失败 → 同步 + 钳制 + 响亮告警（advisor codex 先例同款 try/catch 降级）；ctx.llm 在 run() 内不可用属同类失败形态，经同一降级路径回收（验收⑦真机全链为该假设的硬门禁）。**兜底覆盖与 deadline 合成**：本路径同样受 `dshBackgroundTimeoutMs` 兜底（挂起的 llm.stream 不会永悬 job）；**合成规则 = max(route.timeoutMs, dshBackgroundTimeoutMs)**——任务预算为主（预算更大的评审不被兜底误杀），兜底只捕获无进展挂死。**派发判定时点 = 入口路由解析时**：同步调用（≤cap）中途回落到 >cap dsh 轮的，回落轮仍按 D-17 钳制（N-1 合规的已接受残余——同步调用的回落轮不升级为后台）。**降级两段式**：(a) 派发前 ctx 可用性预检（jobs 服务缺失/派发抛错）→ 同步 + 钳制 + 响亮告警；(b) run() 内假设破裂（ctx.llm 不可用等）→ **不可恢复**，job 以诊断失败收场（句柄已返回，无法回退同步）——验收⑦真机全链为该假设的硬门禁（含 advisor dsh >cap 真机用例）。
 
 ### 7.2 escalate/eng dsh 子代理（显式 `background` 参数）
 
-- 工具契约新增可选参数 `background`（默认 false）：**不传** = 现状（同步执行 + budgetCap 内部截止——短任务的快路径体验不变，今日全部任务 <540s）；**传 true** = 派后台 job：run() 闭包内 `ctx.subagents.start` + `await run.result`（ctx 引用在 job 生命周期内有效——与 advisor jobs 先例同假设；session 优雅销毁 → job cancel → abort 传递），交付文本/失败诊断经完成通知送达；簿记（escalate touchedFiles、eng 交付簿记）在 done 成功分支恰好一次（D-20 模式复用）。**单飞契约**：background 派发与同步入口共用同一复合键槽位（setInFlightJob 于派发同步块、settle 双分支清除——R3 全入口检查之上，派发点二次检查保留）。**followup 续轮**：escalate followup 同样接受 background 参数（续轮任务往往更长，语义一致）。**派发降级**：jobs.start 抛错/ctx.subagents 在 run() 内不可用 → 同步 + 钳制 + 响亮告警（与 §7.1 同款 try/catch 降级）。
+- 工具契约新增可选参数 `background`（默认 false）：**不传** = 现状（同步执行 + budgetCap 内部截止——短任务的快路径体验不变，今日全部任务 <540s）；**传 true** = 派后台 job：run() 闭包内 `ctx.subagents.start` + `await run.result`（ctx 引用在 job 生命周期内有效——与 advisor jobs 先例同假设；session 优雅销毁 → job cancel → abort 传递），完成通知**只含指针**、交付文本/失败诊断经 job_output 读取（平台契约 #2，D-09 同语义）；簿记（escalate touchedFiles、eng 交付簿记）在 done 成功分支恰好一次（D-20 模式复用）。**单飞契约**：background 派发与同步入口共用同一复合键槽位（setInFlightJob 于派发同步块、settle 双分支清除——R3 全入口检查之上，派发点二次检查保留）。**followup 续轮**：escalate followup 同样接受 background 参数（续轮任务往往更长，语义一致）。**降级两段式（与 §7.1 同）**：(a) 派发前预检/派发抛错 → 同步 + 钳制 + 响亮告警；(b) run() 内 ctx.subagents 不可用 → job 以诊断失败收场（不可恢复——句柄已返回）。
 - 返回文本 = job 句柄 + UI-2 接续指令（复用共享 dispatch reply helper，机制名泛化）。
 - **挂死兜底（覆盖全部三条后台路径，含 §7.1）**：后台 dsh 任务有兜底 deadline（防子代理挂起/llm.stream 挂起导致 job 永悬）——新全局配置 `dshBackgroundTimeoutMs`（缺省 1_800_000=30min，合法 60_000..3_600_000；三面白名单 + 设置页字段 + 非法回落缺省告警）；到点 abort（子代理 abort / 流 abort）+ 超时信封（partial 保留）。
 - eng_coder 流程契约变更（架构师侧）：background 任务返回句柄 → **等完成通知后再发起发散审计/交付评审**（与 codex 长任务同纪律）。
 
 ### 7.3 R5 受影响文件与验收
 
-文件：`lib/advisor.mjs`（dsh 循环派发 + reply 泛化）、`lib/escalate.mjs`、`lib/eng.mjs`（background 参数）、`lib/index.mjs` + `lib/config-store.mjs` + `lib/client.js`（dshBackgroundTimeoutMs 三面 + 设置页）、`test/codex-runner.test.mjs`、登记表。
+文件：`lib/advisor.mjs`（dsh 循环派发 + reply 泛化）、`lib/escalate.mjs`、`lib/eng.mjs`（background 参数）、`lib/index.mjs` + `lib/config-store.mjs` + `lib/client.js`（dshBackgroundTimeoutMs 三面 + 设置页）、`test/codex-runner.test.mjs`、登记表、`METHODOLOGY.md`（R5 交付记录）、`package.json`（版本 0.9.0）——R4 清单先例。
 
-验收：① advisor dsh >cap 自动派发用例（假 jobs：run() 内跑循环、finalize 恰好一次、句柄含接续指令；≤cap 同步不变断言；**job 内预算不钳制断言**）；② escalate background=true 派发 + 子代理在 run() 内执行 + 簿记 done 内成功分支 + 兜底 deadline abort 用例（**含 cancel 传播用例：job kill → 子代理 abort**）；③ eng background 同款 + 失败不簿记（D-20 断言复用）；④ 三路径单飞槽位互不阻塞断言（含 background 派发占位/清除）；⑤ dshBackgroundTimeoutMs 三面同步 + 非法回落用例；⑥ 全量 ≥215 绿；⑦ 真机：一次 background eng_coder 全链（句柄→通知→交付→审计接续）——ctx 服务在 run() 内可用的假设硬门禁。
+验收：① advisor dsh >cap 自动派发用例（假 jobs：run() 内跑循环、finalize 恰好一次、句柄含接续指令；≤cap 同步不变断言；**job 内预算不钳制断言**；**deadline 合成 = max(预算, 兜底) 断言**）；② escalate background=true 派发 + 子代理在 run() 内执行 + 簿记 done 内成功分支 + 兜底 deadline abort 用例（**含 cancel 传播用例：job kill → 子代理 abort**）；③ eng background 同款 + 失败不簿记（D-20 断言复用）；④ 三路径单飞槽位互不阻塞断言（含 background 派发占位/清除）；⑤ dshBackgroundTimeoutMs 三面同步 + 非法回落用例；⑥ 全量 ≥215 绿 + **派发降级错误路径用例 ×2**（jobs.start 抛错 / jobs 缺失 → 同步 + 钳制 + 响亮告警断言，advisor 与 escalate/eng 各一）；⑦ 真机：一次 background eng_coder 全链（句柄→通知→交付→审计接续）+ **一次 advisor dsh >cap 真机评审**——ctx 服务在 run() 内可用的假设硬门禁。
 
 ## 8. UI/交互决策汇总（METHODOLOGY 要求集中呈现）
 
