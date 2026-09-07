@@ -261,4 +261,24 @@ dsh 路由的评审预算 `route.timeoutMs > budgetCapMs` 且 ctx.jobs 可用 �
 - **宿主硬死孤儿**（B9）：jobs 只护优雅销毁；R2 的启动清扫缓解陈旧目录，进程级清扫无可靠属主标记——保持文档化边界。
 - **maxWallMs 绑定路径未在平台源码钉死**：设计依据 = 本插件 D.1 实测 + 两会话 15+ 次同形截断；R2 钳制告警本身不依赖该绑定成立（绑定不成立时钳制只是多余但无害）。
 - **dsh 路径残余风险（R5 后）**：仅剩默认同步快路径（background=false / 预算 ≤cap / jobs 缺失降级）——该路径钳制+告警**按设计保留**（它保护的就是墙钟内的同步执行）；长任务经自动判定或显式 background 进入后台后无墙钟。〔原「方案 A 数据不足」措辞已被 2026-09-06 方案 B 终裁取代〕
+
+## 11. R6 — D-26 维护轮（2026-09-07 立项，打磨级小修批）
+
+> 〔定位〕D-26 登记的 10 项非阻塞打磨（3🟡+7🔵，全部来自已通过评审的跟进建议，file:line 与处方在登记表 D-26 行）——单轮清完，验收以既有测试面回归为主。
+
+| # | 修复（处方 = 评审建议） |
+|---|---|
+| ①🟡 | eng codex 分支捕获 resolveCodexCliGlobals 的 warnings 逐条 warn()；defaultTimeoutMs/idleTimeoutMs 本地校验回落补 warn（escalate 同款点一并核查） |
+| ②🔵 | engineeringToggle 移除未用参数 configDefaultEngineering（同步调用方） |
+| ③🔵 | eng 单飞拒绝返回补 warnPrefix() 前缀 |
+| ④🔵 | 空输出归类统一：codex ok+空文本按 dsh 同语义处理——交付 + 显式「(empty report)」标记（不静默翻转类别；两路径一致） |
+| ⑤🔵 | F10 盘回填文案区分两态：盘有记录但未传 token →「本会话已签发但本次未传」；无盘记录 →「从未签发」 |
+| ⑥⑦🟡 | eng dsh 同步路径（:710-723）内联簿记替换为 deliverBookkeeping 调用（四路单一实现落地为真，注释相符） |
+| ⑧🟡 | dsh 后台兜底超时信封 code 改 "ABORTED"（触发 codexFailureAdvisory 回滚指引，与 codex TIMEOUT 对称） |
+| ⑨🔵 | escalate codex jobs reject 分支补 codexThreads.delete（与失败分支对称） |
+| ⑩🔵 | eng 兜底文案空格/句读统一 |
+
+**受影响文件**：`lib/eng.mjs`、`lib/escalate.mjs`、`lib/index.mjs`（如 toggle 调用方）、`test/codex-runner.test.mjs`、登记表（D-26 → 已修）、`METHODOLOGY.md`（一行历史）、`package.json`（0.9.1）。
+
+**验收**：①③⑧⑨⑩ 各 ≥1 断言；④ 两路径空输出断言一致；⑤ 两态文案断言；⑥⑦ 行为等价替换（既有 dsh 成功路径断言核销）+ 四路径单一实现断言；全量 ≥229 绿；版本 0.9.1；登记表 D-26 → 已修。
 - **平台契约依赖**：jobs 契约五条由审计钉死于当前部署版本；DSH 升级若变更契约，登记表「平台契约要点」需复核。
