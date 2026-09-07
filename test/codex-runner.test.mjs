@@ -4,6 +4,9 @@
 // advisor 路由 codex 分支、config 合并、escalate codex 行剔除、runAdvisorReview codex 路径。
 // R4 收尾微修复轮（登记表 D-25 + code review 跟进）：TOKEN_SECRET 密钥源三形态/重启稳定性 +
 // advisor jobs 派发路径 warnPrefix 可见性。
+// R6 纯断言轮（登记表 D-26，设计 §12）：十项维护处方断言——①③④⑤⑥⑦⑧⑨⑩ 各 ≥1 断言
+//（②编译级核验 = node --check + 全量绿；④ codex ok+空文本经真实 adapter 不可达——唯一 OK
+// 出口要求 text !== ""，按「两路径一致」以 dsh 行为断言 + codex 分支源级一致性断言交付）。
 process.env.DSH_HOME = ""
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -23,6 +26,7 @@ import { validateGlobalUserConfig } from "../lib/index.mjs"
 import { runEscalate } from "../lib/escalate.mjs"
 import { runEngCoder } from "../lib/eng.mjs"
 import { saveSessionState, loadSessionState, normalizeRestored, resolveSessionStorePath } from "../lib/session-store.mjs"
+import { saveTokenRecord } from "../lib/token-store.mjs"
 import { createHmac } from "node:crypto"
 import { sessionState, dropSession } from "../lib/state.mjs"
 
@@ -3568,5 +3572,326 @@ test("R5 §7.2 eng dsh background: 成功簿记一次，cancel 传播到子代�
   const out2 = await runEngCoder(deps2, { task: "cancel", designToken: token2, docs: [], background: true })
   assert.ok(out2.includes("eng-dsh-1")); specs2[0].hooks.cancel("test cancel"); const outcome2 = await specs2[0].hooks.done
   assert.equal(outcome2.status, "failed"); assert.equal(aborted, true, "job cancel 传播子代理 abort")
+  dropSession(sid2)
+})
+
+// ————————————— R6（D-26 维护轮，设计 §12）：纯断言轮——十项实现已在库（WIP 9318826，经架构师逐项审计），本节只钉死行为 —————————————
+// ②（engineeringToggle 移除未用参数 configDefaultEngineering + index.mjs 两调用方同步）为编译级
+// 核验：node --check 三文件 + 全量测试绿即核销（纯无行为重构，无断言面）。
+
+test("R6 ①(D-26): eng codex 分支告警留痕——globals warnings 逐条 warn + defaultTimeoutMs/idleTimeoutMs 本地回落 warn；escalate 同款点一并断言", async () => {
+  // eng codex 同步路径（jobs 缺失 → 降级同步，交付文本带 warnPrefix——四路告警全部可见）
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return { events: [{ data: JSON.stringify({ type: "thread.started", thread_id: "r6-eng-warn-t1" }) + "\n" }], exitCode: 0, outText: "implemented\n\nTouched files: none" }
+  })
+  const sid = "r6-eng-warn"
+  const st = sessionState(sid)
+  st.engineering = true
+  const token = makeEngToken(st)
+  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: {} }
+  const config = {
+    engCoderEffort: "off", // off → codex resolver 零目录依赖（R1：off 不查 catalog——spawn 计数确定）
+    codexCli: {
+      engCoderRunner: "codex-cli", model: "m-r6", executable: process.execPath,
+      proxyMode: "sideway", defaultTimeoutMs: 5, idleTimeoutMs: 5, // 非法值：globals 两处 + eng 本地两处
+    },
+  }
+  const r = await captureWarn(() => runEngCoder(
+    {
+      ctx: { get: () => null, subagents: { start: () => { throw new Error("dsh must not run for codex backend") } } },
+      agent, config, signal: undefined, configDefaultEngineering: false, spawn, platform: "linux", env: {},
+    },
+    { task: "implement x", designToken: token, docs: [] },
+  ))
+  assert.ok(r.value.includes("eng_coder delivery (codex-cli)"), "同步降级路径照常交付（1800000 → 钳制 540000）")
+  assert.ok(r.value.includes("[thincoder-suite] warning: codexCli.proxyMode 忽略"), "globals warnings 逐条 warn()（proxyMode）")
+  assert.ok(r.value.includes("[thincoder-suite] warning: codexCli.defaultTimeoutMs 忽略"), "globals warnings 逐条 warn()（defaultTimeoutMs）")
+  assert.ok(r.value.includes("codexCli.defaultTimeoutMs 非法，回落 1800000ms"), "本地校验回落补 warn（defaultTimeoutMs，eng 回落档 1800000）")
+  assert.ok(r.value.includes("codexCli.idleTimeoutMs 非法，回落 300000ms"), "本地校验回落补 warn（idleTimeoutMs——globals 不校验此字段，此行只能来自本地 warn）")
+  assert.ok(r.warnings.some((w) => w.includes("codexCli.defaultTimeoutMs 非法，回落 1800000ms")), "console.warn 留痕（warn 通道）")
+  dropSession(sid)
+
+  // escalate 同款点（runEscalateCodex 预算链）：本地回落告警（600000 档）+ globals 捕获告警均入术后报告
+  const spawnE = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return { events: [], exitCode: 0, outText: "ok\n\nTouched files: none" }
+  })
+  const cfgE = {
+    consultModels: [{ runner: { kind: "codex-cli", model: "m-esc-r6" } }], // 行不带 effort → codex 目录零触发
+    codexCli: { executable: process.execPath, defaultTimeoutMs: 1, idleTimeoutMs: 7 },
+  }
+  const sidE = "r6-esc-warn"
+  const outE = await runEscalate(makeEscDeps(sidE, spawnE, cfgE), "x", undefined)
+  assert.ok(outE.includes("post-op report"), "escalate 同步路径照常交付（600000 → 钳制 540000）")
+  assert.ok(outE.includes("codexCli.defaultTimeoutMs 非法，回落 600000ms"), "escalate 同款：defaultTimeoutMs 本地回落告警（600000 档）")
+  assert.ok(outE.includes("codexCli.idleTimeoutMs 非法，回落 300000ms"), "escalate 同款：idleTimeoutMs 本地回落告警")
+  assert.ok(outE.includes("codexCli.defaultTimeoutMs 忽略"), "escalate 同款：resolveCodexCliGlobals 捕获告警并入报告")
+  dropSession(sidE)
+})
+
+test("R6 ③⑤(D-26): eng 单飞拒绝返回带 warnPrefix 前缀 + F10 盘回填两态文案（已签发未传 vs 从未签发）", async () => {
+  // ③：>cap 首次派发占位 eng 槽位 → 二次调用任务文本命中 F13 漂移正则（stages 缺省）先积 warn
+  //    → 入口单飞拒绝 = warnPrefix() + 拒绝文本（前缀先于 Error 可见）
+  const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args) : { events: [], exitCode: 0, outText: "implemented\n\nTouched files: none" })
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r6-eng-sf-prefix"
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath }, engCoderEffort: "off" })
+  const out1 = await runEngCoder(deps, { task: "implement a (long)", designToken: token, docs: [] })
+  assert.ok(out1.includes("eng-codex-1"), ">cap 首次派发（占位 eng 槽位）")
+  const out2 = await runEngCoder(deps, { task: "tweak stage 2 logic while in flight", designToken: token, docs: [] })
+  assert.ok(out2.startsWith("[thincoder-suite] warning:"), "③：单飞拒绝返回补 warnPrefix 前缀（不再裸 Error 开头）")
+  assert.ok(out2.includes("task text mentions stages"), "前缀内容 = 入口检查前积累的 F13 漂移告警")
+  assert.ok(out2.includes("Error") && out2.includes("eng-codex-1"), "拒绝主体保留（Error + 在飞 job id）")
+  assert.ok(out2.includes("未派发"), "明确本次未派发")
+  await specs[0].hooks.done // settle 清槽位（测试隔离）
+  dropSession(sid)
+
+  // ⑤：F10 盘回填两态——同一 store 内：sidA 有签发记录但未传 token；sidB 无任何记录
+  const home = mkdtempSync(join(tmpdir(), "r6-f10-"))
+  try {
+    assert.ok(saveTokenRecord("r6-f10-issued", { token: "tok-issued-once", expiresAt: Date.now() + 3600_000 }, home), "预置盘上签发记录")
+    const mkDeps = (sidX) => ({
+      ctx: {}, agent: { session: { id: sidX, header: { cwd: tmpdir() } }, options: {} },
+      config: {}, signal: undefined, configDefaultEngineering: false, storPathOverride: home,
+      spawn: () => { throw new Error("must not spawn before token gate") }, platform: "linux", env: {},
+    })
+    const outA = await runEngCoder(mkDeps("r6-f10-issued"), { task: "implement without passing token" }) // designToken 缺省未传
+    assert.ok(outA.includes("本会话已签发但本次未传"), "⑤：盘有记录+未传 →「本会话已签发但本次未传」: " + outA.slice(0, 100))
+    assert.ok(!outA.includes("从未签发"), "两态区分：不误落「从未签发」")
+    dropSession("r6-f10-issued")
+    const outB = await runEngCoder(mkDeps("r6-f10-never"), { task: "implement with no record at all" })
+    assert.ok(outB.includes("从未签发"), "⑤：无盘记录 →「从未签发」")
+    assert.ok(!outB.includes("本会话已签发"), "两态区分：不误落「已签发未传」")
+    dropSession("r6-f10-never")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("R6 ④⑥⑦(D-26): 空输出归类统一（交付行共用 (empty report) 显式标记）+ eng dsh 同步簿记等价 + deliverBookkeeping 四路单一实现（源级断言）", async () => {
+  const src = readFileSync(new URL("../lib/eng.mjs", import.meta.url), "utf8")
+  // ⑥⑦ 单一实现（grep 级——deliverBookkeeping 未导出，spy 不可行，择简）：
+  // 定义 1 处 + 四路调用 4 处；内联簿记残留清零（轮次重置/代际 bump 写点唯一）
+  assert.equal((src.match(/deliverBookkeeping\(/g) ?? []).length, 5, "⑥⑦：deliverBookkeeping 定义 1 处 + 四路调用（codex/dsh × 同步/后台）")
+  assert.equal((src.match(/state\.advisorRound = 0/g) ?? []).length, 1, "⑥⑦：轮次重置只在 deliverBookkeeping 内（dsh 同步内联簿记已替换）")
+  assert.equal((src.match(/bumpAdvisorGeneration\(state\)/g) ?? []).length, 1, "⑥⑦：代际 bump 写点唯一")
+  // ④ 两路径一致（源级）：codex deliveryText 与 dsh 交付行（后台+同步）共用空文本显式标记表达式；
+  // 分类只看 env.ok（不再叠加 env.text 条件）。注：adapter 唯一 OK 出口要求 text !== ""，
+  // eng codex ok+空文本是防御性一致分支——行为面经下方 dsh 空输出路径断言（两路径同表达式）。
+  assert.equal((src.match(/\(outputText \|\| "\(empty report\)"\)/g) ?? []).length, 3, "④：三处交付行共用 (outputText || \"(empty report)\") 表达式（codex deliveryText + dsh 后台 + dsh 同步）")
+  assert.ok(!src.includes("env.ok && env.text"), "④：成功分类不再叠加 env.text 条件（空 OK 不静默翻转失败类别）")
+  assert.equal((src.match(/if \(env\.ok\) \{/g) ?? []).length, 2, "④：codex 两路（jobs done 回调 + 同步）均按 env.ok 单条件分类")
+
+  // 行为面 ⑥⑦（dsh 同步成功路径簿记等价——既有断言核销 + 本块显式复核全套字段）：
+  const subOf = (output) => ({
+    async start() {
+      return { result: Promise.resolve({ stopReason: "completed", output }), dispose: async () => {} }
+    },
+  })
+  const sid = "r6-dsh-sync-book"
+  const st = sessionState(sid)
+  st.engineering = true
+  st.advisorRound = 2
+  st.lastAdvisorOutput = "prior review"
+  const gen0 = advisorGenerationOf(st)
+  const token = makeEngToken(st)
+  const out = await runEngCoder(
+    { ctx: { subagents: subOf([{ type: "text", text: "implemented\n\nTouched files: src/r6.ts" }]) }, agent: { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "glm-5.3" } }, config: {}, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
+    { task: "implement x", designToken: token, docs: [] },
+  )
+  assert.ok(out.includes("eng_coder delivery:") && out.includes("implemented"), "dsh 同步交付")
+  const st2 = sessionState(sid)
+  assert.equal(st2.advisorRound, 0, "簿记等价：轮次重置（deliverBookkeeping 单一实现路径）")
+  assert.equal(st2.lastAdvisorOutput, null, "簿记等价：prior 清除")
+  assert.ok(st2.touchedFiles.includes("src/r6.ts"), "簿记等价：touched 合并")
+  assert.equal(st2.mutatedThisRun, true, "簿记等价：mutated 置位")
+  assert.ok(advisorGenerationOf(st2) > gen0, "簿记等价：代际 bump（D-10 语义转换点）")
+  dropSession(sid)
+
+  // 行为面 ④（dsh 空输出 → 仍按交付归类 + "(empty report)" 显式标记 + completed 簿记照常）：
+  const sid2 = "r6-dsh-sync-empty"
+  const st3 = sessionState(sid2)
+  st3.engineering = true
+  st3.advisorRound = 1
+  const token2 = makeEngToken(st3)
+  const out2 = await runEngCoder(
+    { ctx: { subagents: subOf([]) }, agent: { session: { id: sid2, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "glm-5.3" } }, config: {}, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
+    { task: "implement y (empty delivery)", designToken: token2, docs: [] },
+  )
+  assert.ok(out2.includes("eng_coder delivery:"), "空输出仍按交付归类（不翻转为失败类别）")
+  assert.ok(out2.includes("(empty report)"), "④：空文本显式 (empty report) 标记（与 codex deliveryText 同表达式）")
+  assert.ok(!out2.includes("eng_coder ended"), "不落失败类别文案")
+  const st4 = sessionState(sid2)
+  assert.equal(st4.advisorRound, 0, "completed 簿记照常（轮次重置）")
+  assert.equal(st4.mutatedThisRun, true, "completed 簿记照常（mutated 置位）")
+  dropSession(sid2)
+})
+
+test("R6 ⑧⑨⑩(D-26): dsh 后台兜底超时信封 ABORTED 触发回滚指引（eng+escalate）+ escalate codex jobs reject 后 codexThreads 无残留 + 兜底文案句读统一", async () => {
+  // ⑧+⑩（eng）：挂起子代理超兜底截止 → failed 信封含回滚指引（ABORTED 码）+ 统一句读（abort—— 后空格）
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r6-eng-backstop"
+  const st = sessionState(sid)
+  st.engineering = true
+  st.advisorRound = 2
+  const token = makeEngToken(st)
+  const subagents = {
+    async start(_kind, opts) {
+      return {
+        result: new Promise((resolve) => {
+          opts.signal.addEventListener("abort", () => resolve({
+            stopReason: "aborted",
+            output: [{ type: "text", text: "halfway\n\nTouched files: src/r6-half.ts" }],
+            diagnostic: "deadline abort",
+          }), { once: true })
+        }),
+        dispose: async () => {},
+      }
+    },
+  }
+  const deps = { ctx: { subagents, get: (s) => s === "jobs" ? jobs : null }, agent: { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "p", model: "m" } }, config: { dshBackgroundTimeoutMs: 150 }, signal: undefined }
+  const out = await runEngCoder(deps, { task: "long background work", designToken: token, docs: [], background: true })
+  assert.ok(out.includes("eng-dsh-1"), "后台句柄先返回")
+  const outcome = await specs[0].hooks.done
+  assert.equal(outcome.status, "failed", "兜底截止 → failed（partial 保留）")
+  assert.ok(outcome.output.includes("超兜底截止"), "超时信封注明兜底截止")
+  assert.ok(outcome.output.includes("半途写入可能残留") && outcome.output.includes("git 回滚"), "⑧：ABORTED 码触发 codexFailureAdvisory 回滚指引")
+  assert.ok(outcome.output.includes("src/r6-half.ts"), "partial 内 Touched 行 advisory 解析（可见不并入）")
+  assert.ok(outcome.output.includes("abort—— Partial output"), "⑩：兜底文案句读统一（abort—— 后空格）")
+  assert.equal(sessionState(sid).advisorRound, 2, "失败不簿记（D-20 保持——轮次不重置）")
+  dropSession(sid)
+
+  // ⑧（escalate 同款）：dsh background 兜底信封同带 ABORTED 回滚指引（与 codex TIMEOUT 对称）
+  const { jobs: jobs2, specs: specs2 } = fakeJobsFactory()
+  const sid2 = "r6-esc-backstop"
+  const subagents2 = {
+    async start(_kind, opts) {
+      return {
+        result: new Promise((resolve) => opts.signal.addEventListener("abort", () => resolve({
+          stopReason: "aborted",
+          output: [{ type: "text", text: "partial work" }],
+        }), { once: true })),
+        dispose: async () => {},
+      }
+    },
+  }
+  const deps2 = { ctx: { subagents: subagents2, get: (s) => s === "jobs" ? jobs2 : null }, agent: { session: { id: sid2, header: { delegationDepth: 0, cwd: tmpdir() } } }, config: { consultModels: [{ provider: "p", model: "m" }], dshBackgroundTimeoutMs: 150 }, state: sessionState(sid2), signal: undefined }
+  const out2 = await runEscalate(deps2, "background work", undefined, false, true)
+  assert.ok(out2.includes("escalate-dsh-1"), "escalate 后台句柄先返回")
+  const outcome2 = await specs2[0].hooks.done
+  assert.equal(outcome2.status, "failed", "兜底截止 → failed")
+  assert.ok(outcome2.output.includes("半途写入可能残留") && outcome2.output.includes("git 回滚"), "escalate 同款：ABORTED 码触发回滚指引")
+  dropSession(sid2)
+
+  // ⑨：escalate codex jobs reject 分支 codexThreads.delete（与失败分支对称）——
+  //   成功交付保存线程 → followup 派发后 runCodexTask reject（poisoned config 的 maxConcurrent
+  //   getter 第 2 次被 resolveCodexCliGlobals 访问时抛错：第 1 次 = runCodexTask 准入 :527，
+  //   第 2 次 = runCodexTaskInner :550）→ done 链 reject 分支清线程 → 再次 followup 报「无线程」
+  const spawn9 = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return { events: [{ data: JSON.stringify({ type: "thread.started", thread_id: "r6-esc-tid" }) + "\n" }], exitCode: 0, outText: "first delivery\n\nTouched files: none" }
+  })
+  const cfg9 = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const sid9 = "r6-esc-reject-cleanup"
+  const { jobs: jobs9, specs: specs9 } = fakeJobsFactory()
+  const deps9 = makeEscDeps(sid9, spawn9, cfg9)
+  deps9.ctx = { get: (svc) => (svc === "jobs" ? jobs9 : null) }
+  const out9a = await runEscalate(deps9, "first task", undefined)
+  assert.ok(out9a.includes("escalate-codex-1"), "首次 >cap 派发")
+  const oc9a = await specs9[0].hooks.done
+  assert.equal(oc9a.status, "completed", "首次交付成功 → codexThreads.set(threadId)")
+  let mcAccess = 0
+  const poisoned = {
+    consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }],
+    codexCli: {
+      executable: process.execPath,
+      get maxConcurrent() { if (++mcAccess >= 2) throw new Error("boom-r6"); return undefined },
+    },
+  }
+  const { jobs: jobs9b, specs: specs9b } = fakeJobsFactory()
+  const deps9b = makeEscDeps(sid9, spawn9, poisoned)
+  deps9b.ctx = { get: (svc) => (svc === "jobs" ? jobs9b : null) }
+  const out9b = await runEscalate(deps9b, "followup that rejects", undefined, true)
+  assert.ok(out9b.includes("escalate-codex-1"), "followup 续轮派发（resume）")
+  const oc9b = await specs9b[0].hooks.done
+  assert.equal(oc9b.status, "failed", "runCodexTask reject → failed settle")
+  assert.ok(oc9b.output.includes("error: boom-r6"), "reject 分支诊断可见: " + oc9b.output.slice(0, 120))
+  assert.equal(checkInFlightJob(sid9, "escalate"), null, "reject settle 清单飞槽位")
+  const deps9c = makeEscDeps(sid9, spawn9, cfg9) // ctx: {} — followup 无线程时在入口即拒，零 spawn
+  const out9c = await runEscalate(deps9c, "followup after reject", undefined, true)
+  assert.ok(out9c.includes("no codex escalate thread"), "⑨：reject 分支 codexThreads.delete——线程无残留（与失败分支对称）")
+  dropSession(sid9)
+})
+
+// ————————————— R6 code review 微修轮：① reject-race 兜底回滚指引 + ③ 派发返回并入配置告警 —————————————
+
+test("R6 微修①: eng dsh 后台兜底 reject-race 分支（catch 内 if(timedOut)）同带 ABORTED 回滚指引——与 resolve-race 对称", async () => {
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "r6-eng-backstop-reject"
+  const st = sessionState(sid)
+  st.engineering = true
+  st.advisorRound = 2
+  const token = makeEngToken(st)
+  // 假 subagents reject 形态：abort 信号触发 result promise reject（await sub.result 抛出 → 落
+  // catch 分支；timedOut=true → 兜底信封。e.name=AbortError 也不走 aborted 分支——timedOut 检查在前）
+  const subagents = {
+    async start(_kind, opts) {
+      return {
+        result: new Promise((_resolve, reject) => {
+          opts.signal.addEventListener("abort", () => {
+            const e = new Error("subagent aborted by backstop deadline")
+            e.name = "AbortError"
+            reject(e)
+          }, { once: true })
+        }),
+        dispose: async () => {},
+      }
+    },
+  }
+  const deps = { ctx: { subagents, get: (s) => s === "jobs" ? jobs : null }, agent: { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "p", model: "m" } }, config: { dshBackgroundTimeoutMs: 150 }, signal: undefined }
+  const out = await runEngCoder(deps, { task: "long background work (reject form)", designToken: token, docs: [], background: true })
+  assert.ok(out.includes("eng-dsh-1"), "后台句柄先返回")
+  const outcome = await specs[0].hooks.done
+  assert.equal(outcome.status, "failed", "兜底截止 → failed（reject 形态同样 settle）")
+  assert.ok(outcome.output.includes("超兜底截止"), "超时信封注明兜底截止")
+  assert.ok(outcome.output.includes("半途写入可能残留") && outcome.output.includes("git 回滚"),
+    '①：reject-race 分支输出含回滚指引（codexFailureAdvisory({ text: "", code: "ABORTED" })——escalate timeoutEnvelope("") 先例）')
+  assert.ok(!outcome.output.includes("Partial output") && !outcome.output.includes("Touched 行"), "catch 作用域无 outputText → 空串形态（无 partial 块、无 Touched advisory 行）")
+  assert.ok(!outcome.output.includes("eng_coder aborted."), "timedOut 检查先于 AbortError 分支（reject-race 语义）")
+  assert.equal(sessionState(sid).advisorRound, 2, "失败不簿记（D-20 保持——轮次不重置）")
+  dropSession(sid)
+})
+
+test("R6 微修③: eng/escalate codex jobs 派发返回并入配置告警（warnPrefix 先于句柄文本——对齐 advisor R4 收尾 #4 先例）", async () => {
+  // eng：非法 codexCli.defaultTimeoutMs → 警告即时并入派发返回（此前只在 job 完成文本可见）
+  const spawn = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return { events: [{ data: JSON.stringify({ type: "thread.started", thread_id: "eng-wp-r6" }) + "\n" }], exitCode: 0, outText: "done\n\nTouched files: none" }
+  })
+  const { jobs, specs } = fakeJobsFactory()
+  const sid = "eng-dispatch-warn-r6"
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath, defaultTimeoutMs: "bad" } })
+  const out = await runEngCoder(deps, { task: "implement x", designToken: token, docs: [] })
+  assert.ok(out.includes("eng-codex-1"), "派发正常（非法 defaultTimeoutMs 回落 1800000ms > cap）")
+  assert.ok(out.includes("[thincoder-suite] warning: codexCli.defaultTimeoutMs 非法，回落 1800000ms"), "③：配置告警并入派发文本")
+  assert.ok(out.indexOf("codexCli.defaultTimeoutMs 非法") < out.indexOf("eng-codex-1"), "告警先于句柄文本（warnPrefix() + codexJobsDispatchReply）")
+  await specs[0].hooks.done // settle（交付簿记完成）后再清理会话
+  dropSession(sid)
+
+  // escalate 同款：timeoutWarnings（defaultTimeoutMs 非法）+ >cap → 派发返回带告警前缀
+  const spawn2 = fakeSpawnFactory((args) => {
+    if (args.includes("--version")) return probeScript(args)
+    return { events: [{ data: JSON.stringify({ type: "thread.started", thread_id: "esc-wp-r6" }) + "\n" }], exitCode: 0, outText: "done\n\nTouched files: none" }
+  })
+  const { jobs: jobs2, specs: specs2 } = fakeJobsFactory()
+  const sid2 = "esc-dispatch-warn-r6"
+  const deps2 = makeEscDeps(sid2, spawn2, { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol" } }], codexCli: { executable: process.execPath, defaultTimeoutMs: "bad" } })
+  deps2.ctx = { get: (svc) => (svc === "jobs" ? jobs2 : null) }
+  const out2 = await runEscalate(deps2, "fix the bug", undefined)
+  assert.ok(out2.includes("escalate-codex-1"), "派发正常（非法 defaultTimeoutMs 回落 600000ms > cap）")
+  assert.ok(out2.includes("[thincoder-suite] codexCli.defaultTimeoutMs 非法，回落 600000ms"), "③：配置告警并入派发文本")
+  assert.ok(out2.indexOf("codexCli.defaultTimeoutMs 非法") < out2.indexOf("escalate-codex-1"), "告警先于句柄文本（warnPrefix + codexJobsDispatchReply）")
+  await specs2[0].hooks.done // settle 后清理
   dropSession(sid2)
 })
