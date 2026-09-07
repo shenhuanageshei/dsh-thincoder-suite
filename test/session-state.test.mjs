@@ -154,7 +154,7 @@ test("T1: eng enter persists engineering=true; restart sim (drop memory) + resto
   const sid = "f12-t1-" + randomUUID()
   try {
     const agent = makeAgent(sid)
-    const out = engineeringToggle(agent, false, "enter", { storPathOverride: home })
+    const out = engineeringToggle(agent, "enter", { storPathOverride: home })
     assert.match(out, /Engineering mode ON/)
     const path = resolveSessionStorePath(home)
     assert.ok(path && existsSync(path))
@@ -183,7 +183,7 @@ test("T1: eng enter persists engineering=true; restart sim (drop memory) + resto
     state.engSection()
     assert.equal(disposed, true, "disposer wired")
     // exit 也落盘（翻转写点，§2.3）
-    engineeringToggle(agent, false, "exit", { storPathOverride: home })
+    engineeringToggle(agent, "exit", { storPathOverride: home })
     const file2 = JSON.parse(readFileSync(path, "utf8"))
     assert.equal(file2.sessions[sid].engineering, false)
   } finally {
