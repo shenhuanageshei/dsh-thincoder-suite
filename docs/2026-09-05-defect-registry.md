@@ -65,3 +65,4 @@
 | D-15 idle 测量 | ✅ 完成 | 见 D-15 行：3 次 high-effort 真实任务，最大静默间隙 50.1s << 240s 阈值，维持 300s 默认 |
 | D-13 runner 配置面 | ✅ 活体 | `advisor_config set round1.runner` 接受并生效（R4 前被拒） |
 | 工程模式写锁 | ✅ 活体 | 基线期拦下 package.json 直改（热修走用户授权例外）；escalate 拦截工作正常 |
+| **R5 终验（2026-09-07）：dsh >cap 自动后台化** | ✅ **活体** | dsh 路由（deepseek-official:deepseek-v4-pro/high）+ 900s 预算 → **自动派后台 job `advisor-dsh-1`，job 内预算不钳制、挂死兜底提示齐备、钳制告警零出现**——用户原始投诉场景（D-27 生产复现）结构性根治；background 全链在 R5 实施期间活体验证（codex 后端 eng_coder 派发即句柄→通知→交付，虽 30min 看门狗杀于报告阶段但实现完整交付 229/229——失败告警与回滚指引同时正确触发） |
