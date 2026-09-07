@@ -14,6 +14,20 @@
 
 > 本项目基于开源项目 [thincoder](https://gitee.com/shanghai-xinbo/thincoder) 移植改造（上游 MIT 协议），向 ThinCoder 贡献者致谢。
 
+## v0.7+ 架构能力总览
+
+在四机制之上，本插件已内置一套执行/自愈基础设施（全部插件自建，DSH 平台零修改）：
+
+| 能力 | 一句话 |
+|------|--------|
+| **codex-cli runner** | 四机制均可路由到本地 codex CLI（`runner: codex-cli` 行）——advisor/consult 只读沙箱、escalate/eng_coder 写沙箱，followup 线程续轮 |
+| **长任务后台化** | 预算 > `budgetCapMs`（默认 540s）自动派 `ctx.jobs` 后台 job——免平台 600s 墙钟、预算全额生效、完成通知送达；escalate/eng dsh 路径可显式 `background: true`；挂死兜底 `dshBackgroundTimeoutMs`（默认 30min） |
+| **失败可归因** | 空响应四形态分类（finish/stop/length/error）+ 流观测（finish.kind/usage/blocks）；codex 信封上浮 usage、stderr 保尾；从不静默截断——同步路径钳制必响亮告警 |
+| **自愈与封顶** | codex 连续 2 次失败自动回落 dsh 一轮；回落连败 2 次硬停并输出双路由诊断；空响应重试一次；任何零进度循环有界 |
+| **并发与状态安全** | 三机制 per-session single-flight（复合键）；后台完成代际检查（晚到结果不复活已重置状态）；全局 codex 并发准入 `maxConcurrent`（默认 8） |
+| **effort 智能校验** | 全部消费点按目标模型实际档位回落到**最近支持档**（等距向上取，绝不秒死）；设置页下拉目录化（dsh 行 /catalog、codex 行 codex catalog） |
+| **安全加固** | design token 以 `$DSH_HOME/.thincoder/token-secret` 持久化随机密钥签发（HMAC；无持久化面时响亮告警）；token/会话状态分文件落盘、回滚独立 |
+
 ## 为什么 advisor 不是又一个 code review
 
 普通 AI review 的真实循环是 `while (true) { 找问题 }`：
@@ -208,6 +222,17 @@ engCoderEffort 输入。**保存全局默认** → 写 user 层（`config.json`�
         # F9：eng_coder 子代理资源（缺省即安全值，一般无需配置）
         engCoderMaxTokens: 65536       # eng_coder 子代理输出预算（可选；缺省 65536）
         engCoderEffort: low            # eng_coder 子代理推理档（可选 off|low|medium|high|max；缺省 low；非法值忽略并警告）
+        # dsh 后台任务挂死兜底（R5；可选；缺省 1800000=30min，合法 60000..3600000）
+        dshBackgroundTimeoutMs: 1800000
+        # codex-cli runner 全局节（可选；配了任何 codex 行/后端才需要）
+        codexCli:
+          executable: codex            # 可执行名或完整路径（缺省 PATH 上的 codex）
+          model: gpt-5.6-sol           # codex 默认模型（可选）
+          engCoderRunner: codex-cli    # eng_coder 走 codex 后端（可选；缺省 dsh 子代理）
+          defaultTimeoutMs: 600000     # codex 任务默认预算（缺省 600s）
+          budgetCapMs: 540000          # 同步执行预算上限——超过则派后台 job（缺省 540s，须低于平台 maxWallMs）
+          maxConcurrent: 8             # 全局 codex 并发上限（fail-fast 不排队；缺省 8）
+          idleTimeoutMs: 300000        # 写任务假死判定（事件流静默窗口；缺省 300s）
         # 可选：其余开关
         engineering: false              # 所有会话默认进工程模式（默认 false）
         engTokenTtlMs: 3600000          # design token 有效期
@@ -291,8 +316,15 @@ MIT —— 见 [LICENSE](./LICENSE)。基于 [thincoder](https://gitee.com/shang
 
 ## 变更记录
 
+完整变更历史见 [CHANGELOG.md](./CHANGELOG.md)。近期版本：
+
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v0.9.1 | 2026-09-07 | **R6 维护轮**：D-26 十项打磨全清（告警对称/签名清理/空输出统一/簿记单一实现/回滚指引/派发告警可见）——登记表 27/27 终态，235 测试全绿 |
+| v0.9.0 | 2026-09-06 | **R5 dsh 路径后台化（DP-1 方案 B）**：advisor dsh 自动按预算派后台 job、escalate/eng 显式 `background` 参数、`dshBackgroundTimeoutMs` 挂死兜底——四机制全部免墙钟，平台零修改 |
+| v0.8.0 | 2026-09-05/06 | **R1-R4 机制缺陷治理**：effort 最近档收口、流观测/空响应分类、codex 三路径 jobs 迁移、single-flight+代际检查、回落硬停+空响应重试、保存竞态+runner 三面同步、token-secret 安全加固（26 项登记缺陷收口） |
+| v0.7.0 | 2026-09-05 | **codex-cli runner 集成**：四机制 codex 路由（读/写沙箱、followup 续轮）、ctx.jobs 后台派发、智能回落、设置页目录化 |
+| v0.6 | 2026-09-03 | F12 会话级状态持久化 + F13 eng_coder 阶段化任务书（stages） |
 | v0.6 | 2026-09-03 | **F12 会话级状态持久化**：`$DSH_HOME/.thincoder/session-state.json`（与 design-tokens.json 分文件、回滚独立、原子写 tmp+rename）——engineering/评审轮次+prior/lastReviewType/mutatedThisRun/touchedFiles(去重封顶 200)/advisorOverride 跨重启恢复（`agent/session-start` 预载、只填空槽、engineering=true 重挂人格 section、7d TTL 写时清扫、session/disposed 删除、**绝不含 designToken**）；公共路径解析抽 `lib/dsh-home.mjs`（token-store/config-store 两处单一化 + token-store 顺带升级原子写，行为零变化）。**F13 eng_coder 阶段化任务书**：可选 `stages` 结构化参数（schema maxItems 10 + 渲染前防御校验）——统一编号四段渲染、阶段纪律（自查不过不进下一阶段/两败 STOP）、stage 状态表前置（max-tokens 掐断生存性）、预算将尽条款、漂移探测前缀警告；stages 缺省时 brief 逐字节等于现行（fixture 回归锁死）。**D 复核**：评审工具输出预算确认已对齐上游 64K（readonly-tools 不动，新增 T17 截断阈值+续读指针回归锁）；compactMessages keyFiles 去重 + 上限 15（防中段压缩后评审重复读已查文件）；测试 50 → 78 全绿 |
 | v0.5 | 2026-09-02 | **设置页 UI 打磨（code review 收敛）**：样式全量换宿主语义 token（`--dsw-alias-*` 深浅色主题随动、不透明卡片表面、字号提升至正文 13.5/提示 12）；code review 2 轮收敛 11 项修复（stateOf 接线/记忆开关显示路径/模型池 poolDirty 语义/草稿从 user 层播种/错误可见可重试等）+ 分歧审计 D1（池保存丢失）/D2（cwdHint 形态）修复；交互与文案（组卡用途说明、字段中文标签、池列头、恢复默认二次确认、术语白话化）；测试 50/50 全绿 |
 | v0.4 | 2026-09-02 | **二期设置页 UI（config.json user 层）**：全局默认配置分层（entry base ⊕ `$DSH_HOME/.thincoder/config.json` user 层，字段级白名单合并）；DSH 设置面板「Thincoder」页（手写 CJS client 免构建；round1/收敛组 + 记忆开关 + consult/escalate 池 + engCoder 项；保存即生效）；host config API（`/thincoder-suite/api`：GET/PUT/DELETE config、GET/DELETE session、POST apply-session；webServer 缺失降级仅 warn）；advisor/eng_coder 的 config 消费点统一合并 user 层（每次调用时读，U5）；导出校验 helper 供 host API 复用（评审 #5） |
