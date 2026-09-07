@@ -257,6 +257,7 @@ dsh 路由的评审预算 `route.timeoutMs > budgetCapMs` 且 ctx.jobs 可用 �
 | US-10 配置单一事实源 | R1 已交付（maxOutputTokens 三面同步用例）；R4 验收②（runner 三面往返） |
 | US-11 工程过程 | 各轮独立提交 + 版本推进（本节第 4 条）+ 登记表状态核对（R4 验收⑤） |
 | US-12 失败可读 | R1 已交付（stream observation + codex usage/stderr 保尾用例） |
+| （R6 追溯映射） | ⑧ 兜底超时回滚指引 → US-6/US-12；⑨ 线程清理对称 → US-9；④⑤ 空输出一致性与签收文案 → US-12；⑥⑦ 单一实现 → US-11 |
 
 ## 11. 风险与边界
 
