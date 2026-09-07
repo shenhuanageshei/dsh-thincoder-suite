@@ -58,3 +58,4 @@
 | 2026-09-06 | 真机验证收口记录：advisor/eng_coder/consult 全链 + 受害场景②活体治愈（flash+low → 最近档回落+note）+ D-15 测量完成（3 次 high-effort 最大静默间隙 50.1s << 240s，维持 300s 默认）+ D-24 eng.mjs 评审补跑通过（发现转 D-26）+ 真机验证记录入登记表（`9593b50`）|
 | 2026-09-06 | **R5 立项记录**：用户裁定 DP-1 修订终裁 = 方案 B 全量三路径 dsh 后台化（不改平台默认，插件自建后台机制）——advisor dsh 自动按 timeoutMs 判定、escalate/eng 显式 background 参数 + dshBackgroundTimeoutMs 兜底；D-27 登记（生产复现：900s 预算被 D-17 钳制的告警）。五次设计评审通过（4🟡+6🔵 折入，`2d39c91` 后补折入提交）——待实施 |
 | 2026-09-06 | **R5 交付记录（微轮 1+2 合并）**：advisor dsh 自动后台派发与 `dshBackgroundTimeoutMs` 三面配置先行；微轮 2 完成 escalate/eng dsh `background` 参数、`escalate-dsh`/`eng-dsh` jobs、run() 内子代理执行、兜底 abort、cancel 传播、成功分支单次簿记、单飞槽位与两段式降级告警；同步默认路径保持不变。微轮 1 继承中断轮半成品审计，并修复真缺陷（代际失配分支误调 `finalize` 等）；全量 node --test 验证通过，版本 0.9.0。 |
+| 2026-09-07 | **R6 维护轮交付记录**：D-26 十项一致性打磨全部收口（codex 配置告警、engineeringToggle 签名清理、单飞/空输出/F10 文案统一、eng dsh 簿记单一实现、后台超时 ABORTED 信封、escalate 线程清理及兜底句读）；全量 node --test 验证通过，版本 0.9.1。 |
