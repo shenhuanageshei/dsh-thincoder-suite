@@ -1,7 +1,7 @@
 # 缺陷登记表：dsh-thincoder-suite 机制缺陷治理
 
 - 日期：2026-09-05（thorough 审计定稿，审计子代理报告全量合并）
-- 状态：LIVING（随修复轮推进更新 status）；**R0-R5 全部交付且真机验证收口（2026-09-05/07）——现登记 27 条：已修 25〔D-01…D-07/D-09…D-15/D-16…D-25/D-27，含 D-15 测量完成与 D-27 R5 后台化终验活体〕⊕ 已驳回 1〔D-08，附平台 retainTail 证据〕⊕ 待修 1〔D-26 R6 维护轮实施中〕**；余项 = R6（D-26 十条打磨）
+- 状态：LIVING（随修复轮推进更新 status）；**R0-R6 全部交付且真机验证收口（2026-09-05/09）——现登记 28 条：已修 27〔D-01…D-07/D-09…D-15/D-16…D-28，含 D-15 测量完成、D-27 R5 后台化终验活体、D-28 跨回合信号修复〕⊕ 已驳回 1〔D-08，附平台 retainTail 证据〕⊕ 待修 0**；余项 = 无（D-26 随 0.9.1 收口）
 - 证据基线：git `e4aae98`，全部 file:line 已按当前工作树核对
 - 图例：风险 🔴 阻塞级 / 🟡 重要 / 🔵 次要；状态 待修 / 修复中 / 已修 / 已裁决处置 / 已驳回 / 待测量
 - 轮次：R1 诊断与校验层 / R2 执行架构与进程 / R3 回落与失败语义 / R4 一致性与 UX 收口（轮次定义见设计文档）
@@ -38,10 +38,12 @@
 | D-26 | 一致性 | eng.mjs 评审跟进批（2026-09-05 D-24 补跑发现，全部非阻塞）：①🟡 codex 分支 warnings 与 timeout/idle 本地回落告警；②🔵 engineeringToggle 移除未用 configDefaultEngineering；③🔵 单飞拒绝补 warnPrefix；④🔵 codex/dsh 空输出统一交付并显式「(empty report)」；⑤🔵 F10 盘回填区分已签发未传与从未签发；⑥⑦🟡 eng dsh 同步簿记改用模块级 deliverBookkeeping，四路单一实现；⑧🟡 dsh 后台兜底超时信封 code=ABORTED 触发回滚指引；⑨🔵 escalate codex jobs reject 清理 codexThreads；⑩🔵 eng 兜底 abort 文案空格句读统一 | 已定位 eng.mjs/escalate.mjs（R6 交付 2026-09-07） | 🟡(①⑦⑧)/🔵(其余) | R6 维护轮 | **已修**（2026-09-07 R6 终态：十项处方全部实施——实现 WIP `9318826`〔中断轮交付 + 架构师逐项审计通过〕+ 纯断言轮收口〔`test/codex-runner.test.mjs` 新增 4 test 块：①③④⑤⑥⑦⑧⑨⑩ 各 ≥1 断言；②编译级核销 = node --check 三文件通过 + 全量绿——纯无行为重构无断言面；④ 如实注记：eng codex ok+空文本经真实 adapter 不可达〔唯一 OK 出口要求 text 非空〕，按验收「两路径空输出断言一致」以 dsh 行为断言〔交付 + "(empty report)" + completed 簿记〕+ codex 分支源级一致性断言〔分类 env.ok 单条件、无 env.ok && env.text 残留、三处交付行共用 `(outputText || "(empty report)")` 表达式〕交付〕；全量 node --test **233/233 绿**〔229 既有 + 4 新增〕；版本 0.9.1。**+ code review 微修轮**（2026-09-07：⑧ reject-race 分支补回滚指引〔与 resolve-race/escalate 对称〕+ 断言；② session-state.test 两处旧签名迁移 + 兼容 shim 删除〔干净收口〕；③ eng/escalate 后台派发句柄补 warnPrefix〔对齐 advisor R4 先例——配置告警即时可见〕+ 次序断言；**235/235 绿**） |
 | D-27 | 执行架构 | dsh 路径仍受平台墙钟约束：advisor dsh 循环 900s 预算被 D-17 钳到 540s（**2026-09-06 生产复现**——用户撞到钳制告警「评审预算 900000ms 已按 budgetCapMs=540000ms 截断」）；escalate/eng dsh 子代理同步路径同理（DP-1 方案 A 设计边界）。根治 = 方案 B：三路径全部插件自建后台化，不改平台默认 | 已定位（D-17/DP-1 方案 A 边界；用户 2026-09-06 裁定升级为方案 B 全量 + 显式参数触发） | 🟡 | R5（设计 §7：advisor dsh 自动按 timeoutMs 判定；escalate/eng 显式 background 参数 + dshBackgroundTimeoutMs 兜底 30min） | **已修**（2026-09-06 R5 微轮 2/2：escalate/eng dsh 显式 `background` 后台 job〔run() 内启动子代理、dshBackgroundTimeoutMs 兜底、cancel→abort、成功簿记一次〕；jobs 缺失/派发抛错按两段式降级回同步+钳制告警；同步默认路径保持不变；工具 schema 与版本 0.9.0 收尾） |
 
+| D-28 | 执行架构 | **会诊跨回合彻底失效**：consult 子代理继承调用方 `exec.signal`（PTC run-scoped 控制器，run_code 程序 settle 即 abort）→ 启动 1~3 秒内被 `child.cancel({kind:'parent'})` 杀掉，stopReason=aborted 且从未发出模型请求。**2026-09-08/09 lore 会话生产实证**：21 次尝试 20 次失败；唯一成功的一次是启动程序被一个 61 秒的 grep 卡住没结束 | 已定位（`lib/consult.mjs:111/:119` 信号继承 + `lib/index.mjs:928` 传 exec.signal；平台侧 `dsh-tools/lib/types/ptc.js:375` 注入 / `:532` 程序 settle 时 abort） | 🔴 | 2026-09-09 生产修复轮 | **已修**（控制器自持 + 看门狗超时归因 + 5 用例回归，见 CHANGELOG 0.9.2） |
+
 ## 已核清的非缺陷（审计确认，无需修复）
 
 - **settings.yaml 剩余消费点**：文件读取只剩 profile-root 探测标记（dsh-home.mjs:37）；服务级读取（llm-pi-ai）为有意的分层富化源——数据源漂移问题整类清零（原 D9 收口）。
-- **consult 跨回合免疫**（N5）：startConsultChild fire-and-forget，回复在后续回合读取——jobs 迁移判据下无需迁移（需求 N-1 已固化此判据）。
+- ~~**consult 跨回合免疫**（N5）：startConsultChild fire-and-forget，回复在后续回合读取——jobs 迁移判据下无需迁移（需求 N-1 已固化此判据）。~~ **2026-09-09 撤回（D-28）**：该论断只在「子代理信号与调用方程序解耦」时才成立——原实现把 `exec.signal` 直传子代理，跨回合协议在生产上 100% 失效（21 次尝试 20 次死于 1~3 秒内）。「fire-and-forget 无需迁 jobs」的判据本身不变，但它的前提由 D-28 修复补齐。
 - **advisor/codexCli 组字段三面白名单**：PUT = merge = 运行时解析，同步无漂移（漂移仅在 D-13 的 override runner 一处）。
 
 ## 平台契约要点（设计依据，审计 Task C 钉死）
@@ -58,7 +60,7 @@
 |---|---|---|
 | advisor 主路径 + token 签发（D-25 新 secret） | ✅ | glm-5.3-flash/off（最近档回落链）完成三轮完整评审并签发 token `3c2b9011…`（有效至次日 10:49） |
 | eng_coder 全链 | ✅ | 新 secret token 校验 → dsh 后端执行 → 冒烟交付 1/1 pass → 脚手架即时清理 |
-| consult | ✅ | 单模型（glm-5.3）会诊回复到达（内容诚实：拒绝编造时间戳） |
+| consult | ✅（D-28 后须按跨回合形态重验） | 单模型（glm-5.3）会诊回复到达（内容诚实：拒绝编造时间戳）。**注**：该次冒烟成立的前提是启动程序活到了子代理完成——D-28 修复后「本回合 start、后续回合 check」才真正可用 |
 | 受害场景② effort 秒死 | ✅ **活体治愈** | `zai:glm-5.3-flash + effort=low`（mal-analyze 会话三连败同款组合）→ 尾部出现 `[thincoder-suite] effort "low" is not supported … falling back to nearest supported effort "off"（D-裁决-2 最近支持档，等距向上取）` + 评审完整交付 |
 | 受害场景① 空响应 | ✅ 按回退规则核销 | 自然复现不可求（需推理烧光 16384）；等效验收 = 215 套件空响应重试/分类/观测用例组（R1+R3 交付）；生产复现实录本表 D-01 留证 |
 | escalate（含 followup） | ⏸ 结构性约束 + 单测覆盖 | 工程模式禁用 escalate（「实现归 eng_coder」纪律，拦截实测工作正常）；R2 迁移路径/deadline/单飞/followup 预算均有专项用例；真机冒烟可在非工程会话 30 秒补做 |
