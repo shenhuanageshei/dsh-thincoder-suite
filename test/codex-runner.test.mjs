@@ -3183,6 +3183,57 @@ test("R5 dshBackgroundTimeoutMs: 运行时非法值（手编 config）→ 回落
   assert.equal(resolveDshBackgroundTimeoutMs({ dshBackgroundTimeoutMs: 400 }), 400, "正整数值运行时生效（PUT 面仍收口 60000..3600000）")
 })
 
+// ————————————— 0.9.3：consultTimeoutMs 用户层化 —— 三面同步 —————————————
+// 背景：consultTimeoutMs 原先只存在于 entry base（cordis.patch.yml 默认 600000）——base 是启动
+// 快照、pnpm 更新整包覆盖，用户改不动且升级即丢（2026-09-09 生产反馈：deepseek-v4-pro/max 在
+// 超大会话下偶发超过 10 分钟看门狗被杀）。0.9.3 按 D-27 dshBackgroundTimeoutMs 同款三面收口：
+// PUT 校验（index.mjs）⊕ merge 白名单（config-store.mjs）⊕ 运行时解析（resolveConsultTimeoutMs
+// ——consult.mjs 看门狗消费的单一事实源）。缺省 600000（10min）；合法 60000..3600000。
+
+test("0.9.3 consultTimeoutMs 三面同步: PUT 接受合法值 ⊕ merge 保留 ⊕ 运行时解析生效", async () => {
+  // 面 1：PUT 校验（validateGlobalUserConfig 直接面——与 dshBackgroundTimeoutMs 测试同通道）
+  const v = validateGlobalUserConfig({ consultTimeoutMs: 900000 }, [])
+  assert.equal(v.ok, true, "PUT 接受合法值: " + v.errors.join("|"))
+  assert.equal(v.sanitized.consultTimeoutMs, 900000, "sanitized 保留")
+  // 面 2：配置合并（mergeGlobalConfig 白名单透传——user 覆盖 base；无 user 保留 base）
+  const merged = mergeGlobalConfig({ consultTimeoutMs: 600000 }, { consultTimeoutMs: 900000 })
+  assert.equal(merged.consultTimeoutMs, 900000, "merge 保留（user 层覆盖 base）")
+  assert.equal(mergeGlobalConfig({ consultTimeoutMs: 600000 }, {}).consultTimeoutMs, 600000, "无 user 层保留 base")
+  assert.equal(mergeGlobalConfig({}, {}).consultTimeoutMs, undefined, "两者皆无 → 不引入键（运行时回落缺省）")
+  // 面 3：运行时解析（config-store resolveConsultTimeoutMs——consult 看门狗共享的单一事实源）
+  const { resolveConsultTimeoutMs, CONSULT_TIMEOUT_DEFAULT_MS, CONSULT_TIMEOUT_MIN_MS, CONSULT_TIMEOUT_MAX_MS } = await import("../lib/config-store.mjs")
+  assert.equal(resolveConsultTimeoutMs({ consultTimeoutMs: 900000 }), 900000, "运行时收配置值")
+  assert.equal(resolveConsultTimeoutMs({}), CONSULT_TIMEOUT_DEFAULT_MS, "未配 → 缺省 600000（10min）")
+  assert.equal(CONSULT_TIMEOUT_DEFAULT_MS, 600000)
+  assert.equal(CONSULT_TIMEOUT_MIN_MS, 60000)
+  assert.equal(CONSULT_TIMEOUT_MAX_MS, 3600000)
+})
+
+test("0.9.3 consultTimeoutMs: PUT 拒绝区间外/非整数（字段级错误，越界值不落盘）", () => {
+  for (const bad of [0, 59999, 3600001, 1.5, -100, "many"]) {
+    const v = validateGlobalUserConfig({ consultTimeoutMs: bad }, [])
+    assert.equal(v.ok, false, "PUT 拒绝非法值 " + JSON.stringify(bad))
+    assert.ok(v.errors.some((e) => e.includes("consultTimeoutMs") && e.includes("60000..3600000")), "错误信息含合法区间: " + v.errors.join("|"))
+    assert.equal(v.sanitized.consultTimeoutMs, undefined, "非法值不进 sanitized（不落盘）")
+  }
+  const ok = validateGlobalUserConfig({ consultTimeoutMs: 60000 }, [])
+  assert.equal(ok.ok, true, "下边界 60000 接受")
+  assert.equal(ok.sanitized.consultTimeoutMs, 60000)
+  const ok2 = validateGlobalUserConfig({ consultTimeoutMs: 3600000 }, [])
+  assert.equal(ok2.ok, true, "上边界 3600000 接受")
+})
+
+test("0.9.3 consultTimeoutMs: 运行时非法值（手编 config）→ 回落缺省 600000 + 响亮告警", async () => {
+  const { resolveConsultTimeoutMs, CONSULT_TIMEOUT_DEFAULT_MS } = await import("../lib/config-store.mjs")
+  for (const bad of ["many", -5, 0, 1.5]) {
+    const r = await captureWarn(() => resolveConsultTimeoutMs({ consultTimeoutMs: bad }))
+    assert.equal(r.value, CONSULT_TIMEOUT_DEFAULT_MS, "非法值回落缺省（绝不砖化会诊看门狗）: " + JSON.stringify(bad))
+    assert.ok(r.warnings.some((w) => w.includes("consultTimeoutMs") && w.includes("600000")), "非法值告警 console.warn 留档: " + r.warnings.join("|"))
+  }
+  // 运行时宽容正整数值（对齐 dshBackgroundTimeoutMs 先例：consult.test 的 25ms 看门狗用例依赖此语义）
+  assert.equal(resolveConsultTimeoutMs({ consultTimeoutMs: 400 }), 400, "正整数值运行时生效（PUT 面仍收口 60000..3600000）")
+})
+
 // ————————————— R5（D-27，设计 §7.1/§7.2）：advisor dsh 循环后台化 —— Stage 2 —————————————
 // route.timeoutMs > budgetCapMs 且 ctx.jobs 可用 → 自动派后台 job（与 codex 分支完全对称）：
 // run() 内跑完整 runAdvisorToolLoop（job 内预算不钳制——D-17 只护同步路径，route.timeoutMs

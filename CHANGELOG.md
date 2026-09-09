@@ -2,6 +2,15 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.9.3] — 2026-09-09
+
+**consultTimeoutMs 用户层化（会诊看门狗可配，跨升级保留）**
+
+- **背景**：`consultTimeoutMs` 原先只存在于 entry base（安装包 `cordis.patch.yml` 默认 600000）——base 是启动快照且插件更新整包覆盖，用户改不动、升级即丢。2026-09-09 生产反馈：会诊 `deepseek-v4-pro`（effort=max）在超大会话下偶发超过 10 分钟看门狗被杀、无返回。
+- **改动**：按 R5 `dshBackgroundTimeoutMs`（D-27）同款三面收口——①PUT 校验（`lib/index.mjs` `validateGlobalUserConfig`：60000..3600000 整数，越界报错不落盘）；②merge 白名单（`lib/config-store.mjs` `mergeGlobalConfig`：user 层定义即覆盖 base）；③运行时解析（`lib/config-store.mjs` `resolveConsultTimeoutMs`：正整数值即生效、非法回落缺省 600000 + 响亮告警——`lib/consult.mjs` 看门狗改从该单一事实源读取）。
+- 设置页「Thincoder」新增**会诊看门狗（consultTimeoutMs）**卡片（保存即生效，无需重启）。
+- README 用户层白名单清单同步更新；测试 241 → **244** 全绿（codex-runner.test.mjs 新增三面同步 / 越界拒绝 / 运行时回落三用例）。
+
 ## [0.9.2] — 2026-09-09
 
 **D-28 会诊跨回合失效修复（生产缺陷：PTC run-scoped 信号被继承）**

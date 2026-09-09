@@ -166,8 +166,9 @@ pnpm add link:<克隆路径>/dsh-thincoder-suite
 
 生效全局 = user 层（字段级覆盖 base）⊕ base；user 层缺失/损坏 → 回落 base。user 层可配字段白名单：
 `advisor.round1/convergence` 组（provider/model/effort/timeoutMs）、`advisor.includeProjectGuide`、
-`consultModels`（整体替换）、`engCoderMaxTokens`、`engCoderEffort`——其余字段（engineering /
-engTokenTtlMs / consultTimeoutMs 等）只在 base 配。文件示例：
+`consultModels`（整体替换）、`engCoderMaxTokens`、`engCoderEffort`、`consultTimeoutMs`（0.9.3，
+会诊看门狗，缺省 600000）、`dshBackgroundTimeoutMs`（后台 dsh 任务挂死兜底，缺省 1800000）、
+`codexCli`（整节字段级）——其余字段（engineering / engTokenTtlMs 等）只在 base 配。文件示例：
 
 ```json
 { "version": 1, "config": { "advisor": { "round1": { "provider": "…", "model": "…" } } } }
@@ -181,8 +182,9 @@ engTokenTtlMs / consultTimeoutMs 等）只在 base 配。文件示例：
 
 设置 →「Thincoder」：round1 / 收敛轮两组卡片（provider/model 下拉——数据来自官方
 `llm.providers/models` RPC，目录不可用时降级文本输入；effort 下拉；timeoutMs 数字输入）、
-includeProjectGuide 开关、consult/escalate 共用模型池可编辑行、engCoderMaxTokens /
-engCoderEffort 输入。**保存全局默认** → 写 user 层（`config.json`）；**恢复默认** → 清 user 层
+includeProjectGuide 开关、consult/escalate 共用模型池可编辑行、会诊看门狗（consultTimeoutMs）
+输入、Codex CLI runner 卡片、eng 卡片（engCoderMaxTokens / engCoderEffort）、dsh 后台任务兜底
+（dshBackgroundTimeoutMs）输入。**保存全局默认** → 写 user 层（`config.json`）；**恢复默认** → 清 user 层
 回落 base。非法值表单内联报错不提交（与一期解析链同源校验）。顶部为**当前会话视图**：
 生效摘要（含覆盖来源标注）→「应用到当前会话」写该会话 `advisorOverride`（仅 advisor 子集，
 优先级高于全局，见下方会话级覆盖）/「恢复会话默认」清除；活动会话 id 取不到时降级为
@@ -320,6 +322,8 @@ MIT —— 见 [LICENSE](./LICENSE)。基于 [thincoder](https://gitee.com/shang
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v0.9.3 | 2026-09-09 | **consultTimeoutMs 用户层化**：会诊看门狗从 entry base 专属改为可经 user 层/设置页配置（D-27 同款三面收口：PUT 校验 ⊕ merge 白名单 ⊕ 运行时解析），保存即生效、跨升级保留；新增「会诊看门狗」设置卡片；244 测试全绿 |
+| v0.9.2 | 2026-09-09 | **D-28 会诊跨回合失效修复**：consult 子代理不再继承调用方 run-scoped `exec.signal`（PTC 程序 settle 即 abort 导致 1~3s 被杀）；看门狗超时按 timedOut 归因 + codex 看门狗泄漏修复；241 测试全绿 |
 | v0.9.1 | 2026-09-07 | **R6 维护轮**：D-26 十项打磨全清（告警对称/签名清理/空输出统一/簿记单一实现/回滚指引/派发告警可见）——登记表 27/27 终态，235 测试全绿 |
 | v0.9.0 | 2026-09-06 | **R5 dsh 路径后台化（DP-1 方案 B）**：advisor dsh 自动按预算派后台 job、escalate/eng 显式 `background` 参数、`dshBackgroundTimeoutMs` 挂死兜底——四机制全部免墙钟，平台零修改 |
 | v0.8.0 | 2026-09-05/06 | **R1-R4 机制缺陷治理**：effort 最近档收口、流观测/空响应分类、codex 三路径 jobs 迁移、single-flight+代际检查、回落硬停+空响应重试、保存竞态+runner 三面同步、token-secret 安全加固（26 项登记缺陷收口） |
