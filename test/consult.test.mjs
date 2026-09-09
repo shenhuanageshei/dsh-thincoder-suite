@@ -133,8 +133,27 @@ test("D-28：consultTimeoutMs 看门狗仍有界中止（失败回复带 timed o
   const r = await checkConsultSession(state, s.id, undefined)
 
   assert.equal(r.failedReply, true)
-  assert.match(String(r.reply), /timed out after/)
+  assert.match(String(r.reply), /timed out after 1s/, "亚秒预算不得渲染成 0s（advisor 🔵#5）")
   assert.equal(sub.aborts.length, 1)
+  cleanup(sessionId, state)
+})
+
+test("D-28 跟进：check 的调用方信号只结束本次读取，不杀子代理", async () => {
+  const sub = makeSubagents({ delayMs: 40, reply: "late-ok" })
+  const { deps, state, sessionId } = makeDeps({ subagents: sub })
+
+  const s = await startConsultSession(deps, "问题", undefined)
+  await waitFor(() => sub.started.length === 1)
+
+  const ctrl = new AbortController()
+  ctrl.abort()
+  const first = await checkConsultSession(state, s.id, ctrl.signal)
+  assert.equal(first.stopped, true, "调用方 abort → 只结束本次读取")
+  assert.equal(sub.aborts.length, 0, "check 的信号不得杀子代理（advisor 🟡#1）")
+
+  const second = await checkConsultSession(state, s.id, undefined)
+  assert.equal(second.failedReply, false)
+  assert.match(String(second.reply), /^late-ok/, "子代理仍在跑 → 稍后仍能读到真实回复")
   cleanup(sessionId, state)
 })
 
