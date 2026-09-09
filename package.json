@@ -1,7 +1,7 @@
 {
   "name": "@dsh-external/dsh-thincoder-suite",
   "description": "thincoder 四功能移植：advisor 评审收敛 / 工程模式 eng / 飞刀 escalate / 会诊 consult（纯 JS 免构建；host + 设置页 client）",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "private": true,
   "type": "module",
   "main": "lib/index.mjs",
