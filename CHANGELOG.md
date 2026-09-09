@@ -9,7 +9,9 @@
 - **根因**：`consult_start` 把调用方 `exec.signal` 直传子代理，而 PTC 模式下它是 run_code 程序的 run-scoped 控制器（`dsh-tools/lib/types/ptc.js:375` 注入、`:532` 在程序 settle 的 finally 里 `abort('run_code settled')`）——会诊是「本回合 start、后续回合 check」的跨回合协议，子代理因此在启动 1~3 秒内被 `child.cancel({kind:'parent'})` 杀掉（stopReason=aborted，且从未发出模型请求）。2026-09-08/09 lore 会话生产实证：21 次尝试 20 次失败；唯一成功的一次是启动程序被一个 61 秒的 grep 卡住没结束。
 - **修复**：子代理改用插件自持 `AbortController`（`lib/consult.mjs`）——取消只走 `consult_stop` / `consultTimeoutMs` 看门狗 / session 销毁 `cleanupConsultSessions` 三条显式路径；`lib/index.mjs` 的 consult_start 不再传 `exec.signal`。
 - **附带归因修复**：看门狗超时与显式 abort 在驱动层都坍缩成 `stopReason=aborted`，现按 `timedOut` 归因（超时不再被读成「aborted 无死因」）；预算 < 1min 时显示为秒。
-- 新增 `test/consult.test.mjs`（5 用例：跨回合信号解耦回归 / stop 早停 / 看门狗有界 / session 销毁清理 / 选择器语义）；测试 235 → **240** 全绿。
+- 新增 `test/consult.test.mjs`（跨回合信号解耦回归 / stop 早停 / 看门狗有界 / session 销毁清理 / 选择器语义）。
+- **advisor 复审跟进**（1🟡+5🔵 同轮清零）：①🟡 `consult_check` 的调用方信号只结束本次读取，不再杀子代理（此前会落进 failed 分支被读成「child ended: aborted」），并写进头注释；②🔵 codex 行提前 return 漏掉 `clearTimeout(watchdog)`，已补 finally；③🔵 codex 行 ABORTED 也按 `timedOut` 归因；④🔵 fire-and-forget 子代理补 `.catch` 兜底（异常不再让 `pending` 永久 >0 卡死后续 check）；⑤🔵 亚秒预算不再显示 0s；⑥🔵 `consult_check`/`consult_stop`/advisor 补齐 `markSessionSeen`。
+- 测试 235 → **241** 全绿。
 
 ## [0.9.1] — 2026-09-07
 
