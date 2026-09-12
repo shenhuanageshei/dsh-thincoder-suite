@@ -48,7 +48,7 @@ advisor 把它变成 `for round in 1..5 { 权限递减的对账 }`：
 
 配套的机械约束：
 
-- **响应表协议** —— 被评审方每轮必须回 `| # | Action | Detail |`（Fixed / Not an issue / Deferred），逐条对账
+- **响应表协议** —— 被评审方每轮必须回 `| # | Action | Detail |`（Fixed / Dispatched / Not an issue / Deferred），逐条对账（`Dispatched` = 修复已派给子代理/后台 job、**尚未**返回经验证的结果，属「认领」而非「已解决」；Detail 必须点名派给了什么，未落地的 `Dispatched` 🔴 与未修复 🔴 同待遇）
 - **引用验真** —— 评审报告中的 `file:line` 引用逐条与磁盘文件比对，伪造引用直接标注
 - **每轮全新上下文** —— prior 输出以原文注入新会话，防锚定
 - **预算共享 + 类型隔离（F11）** —— code review 与 design review 共用 5 轮预算，修完复审不重新计数；但 **reviewType 切换（code ↔ design）时重置轮次与 prior**——新设计文档评审总是从 round 1 开始，不携带 code 评审的收敛上下文（2026-09-02 实测事故修复：code 3 轮后 design 评审误走收敛轮、新文档未被全量评审）

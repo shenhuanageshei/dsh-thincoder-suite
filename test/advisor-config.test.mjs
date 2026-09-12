@@ -15,6 +15,7 @@ import { tmpdir } from "node:os"
 import {
   advisorGroupKey, resolveAdvisorRoute, resolveIncludeProjectGuide,
   runAdvisorConfigTool, runAdvisorToolLoop, isApprovalVerdict, runAdvisorReview,
+  parseVerdict, hasUnresolvedBlockingRow, designApprovalCode,
 } from "../lib/advisor.mjs"
 import { buildAdvisorUserMessage } from "../lib/advisor-msgs.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
@@ -1147,4 +1148,668 @@ test("AC-27: union snapshot — first mint [A], a later round joins [B,C] → sn
     assert.ok(!out.includes("eng_coder delivery:"))
     assert.equal(started.length, 0)
   } finally { dropSession(sid); rmRoot(root) }
+})
+
+// ═════════════════ 批 3：评审协议增强（设计档 §7 AC-V1…AC-V22） ═════════════════
+// docs/2026-09-12-review-protocol-design.md。本区覆盖 VERDICT 解析器单测（AC-V1）、
+// 签发/撤销路径集成（AC-V2…V11、V18…V22）与 D-33/D-34 两条实测缺陷的回归锁。
+// 提示词侧静态断言（AC-V13…V15c）在 preset-static.test.mjs；AC-V12 在 codex-runner.test.mjs。
+// AC-V16 = 上方 T16（**原样未动**：20+ 条 isApprovalVerdict 断言 = N1 逐字节等价锁）。
+//   批 3 处置轮（分歧审计 🔴 #1）修订：注释**不是**机械保护 —— 现由下方「AC-V16 [negative lock]」
+//   用例把 T16 的 25 条 (输入 → 期望) 对**独立复述并逐条重跑**，另加源级计数锁要求锁表覆盖 T16
+//   的每一条断言。T16 本体仍**原样未动**（N1：本轮只新增，不改旧断言）。
+// AC-V17 = 全量 `node --test` 绿 + AC-28（package.json dependencies 为空，既有静态锁）。
+//   批 3 处置轮（分歧审计 🔴 #1）修订：该条**已从设计档 §7 移除**（全量绿不是单测可断言的对象；
+//   `dependencies` 为空由 test/codex-runner.test.mjs 的 AC-28 机械锁住）——不再声称本文件内有用例。
+
+// ————————————— AC-V16 [负]：T16 断言的**机械**重跑（N1 的锁，不止注释） —————————————
+// 分歧审计 🔴 #1（批 3 处置轮）：设计档 §7 声称 AC-V16 = 「T16 的 20+ 条断言原样全绿」，而此前
+// 测试里**只有那行注释** —— 注释不是机械保护：把 isApprovalVerdict 改坏、或把 T16 的样本删光，
+// 测试照样全绿。本用例把 T16 的 (输入 → 期望) 对**独立复述**（不改 T16 本体，N1）并逐条重跑，
+// 另加源级计数锁：锁表条数必须等于 T16 内 `assert.equal(isApprovalVerdict(` 的条数。
+/** T16 的 `fixedTable` 样本（逐字符复述，不改 T16 本体）。 */
+const T16_FIXED_TABLE = "| # | Orig# | File | Severity | Status | Notes |\n"
+  + "| 1 | 2 | lib/a.mjs | 🔴 | Fixed | addressed |\n"
+  + "| 2 | 1 | lib/b.mjs | 🟡 | Fixed | done |\n"
+  + "The design is approved."
+/** T16 的全部断言对：`[输入, isApprovalVerdict 的期望]`，顺序与 T16 一致。 */
+const T16_LOCK = [
+  // —— 通过（true）——
+  ["The design is approved.", true],
+  ["All issues verified. The design is approved.", true],
+  [T16_FIXED_TABLE, true],
+  ["| # | Severity | Status |\n| 1 | **🔴** | 已修复 |\nDesign approved.", true],
+  ["| # | Severity | Issue |\n| 1 | 🟡 | the 🔴 mentioned in prose must not block |\napproved", true],
+  ["no unfixed 🔴 remain — the design is approved.", true],
+  // —— 不签发（false）——
+  ["| 1 | 🔴 | something broken |\nThe design is approved.", false],
+  ["The design is not approved.", false],
+  ["The design will not be approved.", false],
+  ["| 1 | 🟡 | minor |\n设计未通过", false],
+  ["该设计未能通过评审。", false],
+  ["该设计没有通过评审。", false],
+  ["该设计不会通过。", false],
+  ["该设计不能通过。", false],
+  ["The design remains unapproved.", false],
+  ["没法通过——存在致命缺陷。", false],
+  ["The design cannot be approved.", false],
+  ["Everything is fine.", false],
+  ["| 1 | Feasibility | 🔴 Critical | broken |\nThe design is approved.", false],
+  ["  | 1 | 🔴 | broken |\nThe design is approved.", false],
+  ["| 1 | 1 | a.md | 🔴 | Not done | still open |\napproved", false],
+  ["| 1 | 1 | a.md | 🔴 | pending | open |\napproved", false],
+  ["| 1 | 1 | a.md | 🔴 | 未修复 | open |\napproved", false],
+  ["| 1 | 1 | a.md | 🔴 | not addressed | open |\napproved", false],
+  ["| 1 | Feasibility | 🔴(must fix) | broken |\napproved", false],
+]
+
+test("AC-V16 [negative lock]: every T16 isApprovalVerdict case is re-run independently — the fallback heuristic stays behaviourally identical (N1)", () => {
+  // ① 源级计数锁：锁表必须覆盖 T16 里的**每一条** isApprovalVerdict 断言
+  //    （删样本 → 红；加样本却不更新锁表 → 红。这正是「注释型锁」缺的那一环。）
+  const src = readFileSync(fileURLToPath(import.meta.url), "utf8")
+  const t16Start = src.indexOf('test("T16:')
+  assert.ok(t16Start > 0, "找不到 T16 用例（本锁的前提）")
+  const t16End = src.indexOf("\ntest(", t16Start + 1)
+  const t16Body = src.slice(t16Start, t16End === -1 ? undefined : t16End)
+  const t16Count = (t16Body.match(/assert\.equal\(isApprovalVerdict\(/g) || []).length
+  assert.equal(T16_LOCK.length, t16Count,
+    "锁表条数必须等于 T16 的断言条数（不可抽空锁表 / 不可漏抄样本）")
+  assert.ok(T16_LOCK.length >= 20, "N1 锁要求 ≥20 条样本（T16 的「20+ 条」口径），当前 " + T16_LOCK.length)
+
+  // ② 逐条重跑：任何对 isApprovalVerdict 的行为改动都会在这里红
+  for (const [text, expected] of T16_LOCK) {
+    assert.equal(isApprovalVerdict(text), expected, "N1 断裂——T16 样本行为漂移: " + JSON.stringify(text))
+  }
+})
+
+/** 批 3 夹具待批令牌：固定 uuid（未过期 → runAdvisorReview 不重铸；批准码可确定性派生）。 */
+const V3_UUID = "3f8fad5b-d9cb-469f-a165-70867728950e"
+const v3Pending = () => V3_UUID + ":" + (Date.now() + 3600_000)
+/** 启发式（回落路径）命中的通过句——措辞与既有 T16 样本同款。 */
+const V3_HEURISTIC_PASS = "The design is approved with no unresolved Critical issues."
+const V3_PASS_LINE = "VERDICT: PASS"
+const V3_FAIL_LINE = "VERDICT: FAIL"
+
+/**
+ * 批 3 签发路径夹具：design 评审 + 完全可控的评审正文（其余走真实 runAdvisorReview）。
+ * @param {object} [opts] seedToken 内存预置令牌 / seedRecord 磁盘预置记录 / cwd 会话 cwd / pendingToken
+ */
+async function runVerdictCase(sid, home, replyText, opts = {}) {
+  const st = sessionState(sid)
+  st.engineering = true
+  st.pendingDesignToken = opts.pendingToken ?? v3Pending()
+  st.pendingDocPaths = []
+  // 只在显式 seedToken 时改内存令牌——否则会「替产品擦掉」上一轮已签发的令牌，
+  // 让「后续轮不得撤销」这条断言假绿/假红（AC-V21 ④）。
+  if ("seedToken" in opts) st.designToken = opts.seedToken
+  if (opts.seedRecord) saveTokenRecord(sid, opts.seedRecord, home)
+  if (!opts.keepRound) {
+    st.advisorRound = 0
+    st.lastAdvisorOutput = null
+    st.advisorOverride = null
+  }
+  const agent = {
+    session: { id: sid, header: { cwd: opts.cwd ?? PLUGIN_DIR }, deriveMessages: () => [] },
+    options: { provider: "p", model: "m" },
+  }
+  const llm = {
+    stream: () => (async function* () {
+      yield { type: "block-end", block: { type: "text", text: replyText } }
+      yield { type: "finish", reason: { kind: "stop" } }
+    })(),
+  }
+  const out = await runAdvisorReview({ llm }, {
+    agent, config: {}, reviewType: "design", documents: [], storPathOverride: home,
+  })
+  return { out, st: sessionState(sid) }
+}
+
+/** 本夹具的合法批准码回显行（批准码 = sha256(token 首段) 前 8 位，只能派生、不能硬编码）。 */
+const v3Echo = (token) => "[APPROVE:" + designApprovalCode(token) + "]"
+
+/** 捕获 console.warn 期间跑一段逻辑（AC-V22 撤销留痕）。 */
+async function withWarnCapture(fn) {
+  const captured = []
+  const original = console.warn
+  console.warn = (...args) => { captured.push(args.map(String).join(" ")) }
+  try { return { out: await fn(), warns: captured } } finally { console.warn = original }
+}
+
+/** `|` 围栏的真实评审表格行（与真实评审表同形：`# | … | Severity | …`）。 */
+const V3_TABLE_WITH_CLEAN_ROWS = [
+  "| # | Orig# | File | Severity | Status | Notes |",
+  "| 1 | 2 | lib/advisor.mjs | 🟡 | Fixed | 已修复 |",
+].join("\n")
+
+// ————————————— AC-V1：解析器六形态 + 容忍面（单测） —————————————
+
+test("AC-V1: parseVerdict — pass/fail/absent/bad-value/misplaced/duplicate + bold / period / case / whitespace / CRLF tolerance", () => {
+  // ① 六个基本形态
+  assert.deepEqual(parseVerdict("...\n" + V3_PASS_LINE), { kind: "pass" })
+  assert.deepEqual(parseVerdict(V3_FAIL_LINE), { kind: "fail" })
+  assert.deepEqual(parseVerdict("no verdict line at all"), { kind: "absent" })
+  assert.deepEqual(parseVerdict("VERDICT: MAYBE"), { kind: "invalid", reason: "bad-value" })
+  assert.deepEqual(parseVerdict(V3_PASS_LINE + "\nmore text below"), { kind: "invalid", reason: "misplaced" })
+  assert.deepEqual(parseVerdict(V3_PASS_LINE + "\n" + V3_PASS_LINE), { kind: "invalid", reason: "duplicate" })
+  assert.deepEqual(parseVerdict(V3_PASS_LINE + "\n" + V3_FAIL_LINE), { kind: "invalid", reason: "duplicate" })
+
+  // ② 容忍面（决策 D-c）：加粗 / 尾句号 / 大小写 / 前后空白 / CRLF / 尾部空行
+  assert.deepEqual(parseVerdict("  **VERDICT: PASS**  "), { kind: "pass" })
+  assert.deepEqual(parseVerdict("**VERDICT: FAIL**"), { kind: "fail" })
+  assert.deepEqual(parseVerdict("VERDICT: PASS."), { kind: "pass" })
+  assert.deepEqual(parseVerdict("verdict: pass"), { kind: "pass" })
+  assert.deepEqual(parseVerdict("VeRdIcT : FaIl"), { kind: "fail" })
+  assert.deepEqual(parseVerdict("\tVERDICT: PASS\r\n"), { kind: "pass" })
+  assert.deepEqual(parseVerdict(V3_PASS_LINE + "\r\n\r\n"), { kind: "pass" })
+
+  // ③ 未声明的容忍边界（设计档 §8）：** 只包住关键字（冒号在外）→ 不命中过滤器 → 回落 absent
+  assert.deepEqual(parseVerdict("**VERDICT**: PASS"), { kind: "absent" })
+
+  // ④ 放宽**语义**一律不放松：行尾垃圾 / 多值
+  assert.deepEqual(parseVerdict("VERDICT: PASS — all good"), { kind: "invalid", reason: "bad-value" })
+  assert.deepEqual(parseVerdict("VERDICT: PASS FAIL"), { kind: "invalid", reason: "bad-value" })
+
+  // ⑤ 前置：任意值输入，纯函数、不抛、无副作用
+  for (const v of [null, undefined, 42, {}, [], true]) {
+    assert.deepEqual(parseVerdict(v), { kind: "absent" }, "非字符串输入 → absent：" + String(v))
+  }
+})
+
+// ————————————— AC-V1 盲点（批 3 分歧审计 🟡 #2 / N6） —————————————
+// 放宽项（D-c 容忍）不得放宽到**接受错误值**：尾句号必须紧跟取值、`**` 必须成对。
+// 本用例是独立的（不改上方 AC-V1 的既有断言），并附 D-c 容忍面的**反证**防止过度收紧。
+
+test("AC-V1 (blind spots): trailing period must be adjacent and `**` must be paired — tolerance never accepts a malformed verdict (N6)", () => {
+  // ① 尾句号必须**紧跟**取值：中间夹空白 → INVALID（收紧前 `\s*\.?` 会接受）
+  assert.deepEqual(parseVerdict("VERDICT: PASS   .   "), { kind: "invalid", reason: "bad-value" })
+  assert.deepEqual(parseVerdict("VERDICT: PASS ."), { kind: "invalid", reason: "bad-value" })
+  assert.deepEqual(parseVerdict("VERDICT: FAIL ."), { kind: "invalid", reason: "bad-value" })
+  // ② `**` 必须**成对**：缺尾 / 缺首 → INVALID（收紧前两个 `(?:\*\*)?` 各自可选，会接受）
+  assert.deepEqual(parseVerdict("**VERDICT: PASS"), { kind: "invalid", reason: "bad-value" })
+  assert.deepEqual(parseVerdict("VERDICT: PASS**"), { kind: "invalid", reason: "bad-value" })
+  assert.deepEqual(parseVerdict("**VERDICT: FAIL"), { kind: "invalid", reason: "bad-value" })
+  // ③ `VERDICT: PASS..` 继续拒绝（仍恰好一个尾句号）
+  assert.deepEqual(parseVerdict("VERDICT: PASS.."), { kind: "invalid", reason: "bad-value" })
+  assert.deepEqual(parseVerdict("**VERDICT: PASS..**"), { kind: "invalid", reason: "bad-value" })
+  // —— 反证：决策 D-c 的容忍面**未被过度收紧**（合法形态必须继续接受）——
+  assert.deepEqual(parseVerdict("VERDICT: PASS."), { kind: "pass" })
+  assert.deepEqual(parseVerdict("VERDICT: FAIL."), { kind: "fail" })
+  assert.deepEqual(parseVerdict("**VERDICT: PASS**"), { kind: "pass" })
+  assert.deepEqual(parseVerdict("**VERDICT: FAIL**"), { kind: "fail" })
+  assert.deepEqual(parseVerdict("**VERDICT: PASS.**"), { kind: "pass" })
+  assert.deepEqual(parseVerdict("  **VERDICT: PASS**  "), { kind: "pass" })
+  assert.deepEqual(parseVerdict("VeRdIcT : FaIl"), { kind: "fail" })
+  assert.deepEqual(parseVerdict("\tVERDICT: PASS\r\n"), { kind: "pass" })
+})
+
+// ————————————— AC-V8b 机制层：阻塞行扫描的「先抽单元格」管线 —————————————
+
+test("AC-V8b (mechanism): blocking rows are matched PER CELL in table rows; 🔴 or 🟡 must-fix block, a bare line never does", () => {
+  // 真表格行（`|` 围栏）——severity 单元格可在首列或中列，与真实评审表同形
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | 🟡 must-fix | x |"), true, "must-fix 在中列")
+  assert.equal(hasUnresolvedBlockingRow("| 🟡 must-fix | lib/a.mjs | x |"), true, "must-fix 在首列")
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | **🟡** must-fix | x |"), true, "加粗变体：**🟡** must-fix")
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | 🟡 (must fix) | x |"), true, "括号变体")
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | 🟡 Must-Fix | x |"), true, "连字符 + 大小写")
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | 🔴 | broken | x |"), true, "未解决 🔴")
+
+  // 非阻塞：已修复标记 / 普通 🟡 / 普通 🔵
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | 🔴 | Fixed | x |"), false)
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | 🟡 | plain advisory | x |"), false)
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | 🔵 | note | x |"), false)
+
+  // **反证**：无 `|` 围栏的裸行**不得**命中——锁死「先抽单元格再匹配」的管线语义
+  assert.equal(hasUnresolvedBlockingRow("🟡 must-fix here"), false, "裸行不得命中（拿整行匹配会让这条为 true）")
+  assert.equal(hasUnresolvedBlockingRow("must-fix"), false)
+  assert.equal(hasUnresolvedBlockingRow("🔴 must-fix (no table)"), false)
+
+  // 空/异常输入：纯函数、不抛
+  assert.equal(hasUnresolvedBlockingRow(""), false)
+  assert.equal(hasUnresolvedBlockingRow(null), false)
+  assert.equal(hasUnresolvedBlockingRow(undefined), false)
+})
+
+// ————————————— 收口轮 #3：must-fix 单元格长度护栏的 fail-open 角落 —————————————
+// 旧实现把 🔴 与 🟡 must-fix 共用 16 的长度上限，而 `**🟡** (must fix)`（加粗 + 括号组合，
+// UTF-16 长度 17）在匹配前就被护栏挡掉 → must-fix 静默漏判（可能错发凭证，方向是 fail-open）。
+// 用例必须能**证伪**：既证明该组合现在被拦，也证明放宽后普通长描述单元格仍不误判。
+
+test("AC-V8b (#3): the 17-char `**🟡** (must fix)` severity cell blocks; relaxing the cap does not misjudge ordinary long description cells", () => {
+  // —— ① 证伪旧行为：加粗 + 括号组合（UTF-16 长度 17 > 旧上限 16）必须命中 ——
+  assert.equal("**🟡** (must fix)".length, 17, "夹具前提：该单元格 UTF-16 长度恰为 17（旧上限 16 时漏判）")
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | **🟡** (must fix) | x |"), true,
+    "加粗+括号组合必须命中（旧上限 16 时此处为 false —— fail-open 角落）")
+  assert.equal(hasUnresolvedBlockingRow("| **🟡** (must fix) | lib/a.mjs | x |"), true, "同一单元格出现在首列同样命中")
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | **🟡**(must fix) | x |"), true, "无空格变体")
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | **🟡** (must-fix) | x |"), true, "连字符变体")
+
+  // —— ② 反证：放宽**只**对以 🟡 开头的严重度单元格生效；普通长描述单元格仍不误判 ——
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | 🟡 | we must fix this one later, it is advisory | x |"), false,
+    "描述列里的 must fix 文字不得把该行判成阻塞")
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | long descriptive cell with must fix wording inside | x |"), false,
+    "以文字开头（非 🟡）的长单元格不得命中 MUST_FIX_RE")
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | 🔵 | see the must fix note in the design doc, later | x |"), false,
+    "🔵 行携带 must fix 措辞仍不阻塞")
+  assert.equal(hasUnresolvedBlockingRow("| 1 | lib/a.mjs | 🟡 | " + "x".repeat(60) + " | x |"), false,
+    "超长描述单元格（🔵/🟡 普通行）不得误判")
+})
+
+// ————————————— AC-V2 / V3：签发路径正反向 —————————————
+
+test("AC-V2: VERDICT: PASS + valid echo → token issued, echo stripped, approval message shape kept", async () => {
+  const root = makeF10Root()
+  const sid = "acv2-" + randomUUID()
+  const home = join(root, "h")
+  try {
+    const token = v3Pending()
+    const { out, st } = await runVerdictCase(sid, home,
+      V3_HEURISTIC_PASS + "\n" + v3Echo(token) + "\n" + V3_PASS_LINE, { pendingToken: token })
+    assert.ok(out.includes("Approved. Pass this exact token to eng_coder"), "PASS + 有效回显必须签发: " + out)
+    assert.ok(out.includes(token), "签发文案带出令牌本体: " + out)
+    assert.ok(/有效至 .+，TTL engTokenTtlMs/.test(out), "有效期行形状保持: " + out)
+    assert.ok(!out.includes("[APPROVE:"), "回显被剥离: " + out)
+    assert.match(out, /VERDICT: PASS/, "评正文保留（只剥离回显）")
+    assert.equal(st.designToken, token, "state 记录签发令牌")
+    assert.equal(loadTokenRecord(sid, home)?.token, token, "磁盘同步落盘")
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+test("AC-V3: VERDICT: PASS without a valid echo → no token + the existing echo diagnostic", async () => {
+  const root = makeF10Root()
+  try {
+    for (const [name, reply] of [
+      ["no-echo", V3_HEURISTIC_PASS + "\n" + V3_PASS_LINE],
+      ["wrong-echo", V3_HEURISTIC_PASS + "\n[APPROVE:deadbeef]\n" + V3_PASS_LINE],
+    ]) {
+      const sid = "acv3-" + name + "-" + randomUUID()
+      const home = join(root, name)
+      try {
+        const { out, st } = await runVerdictCase(sid, home, reply)
+        assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), name + " 不得签发: " + out)
+        assert.ok(out.includes("批准码校验失败"), name + " 必须给既有批准码诊断: " + out)
+        assert.equal(st.designToken, null, name + " → state 无签发")
+        assert.equal(loadTokenRecord(sid, home), null, name + " → 磁盘无记录")
+      } finally { dropSession(sid) }
+    }
+  } finally { rmRoot(root) }
+})
+
+// ————————————— AC-V4：FAIL 撤销 —————————————
+
+test("AC-V4: VERDICT: FAIL + valid echo → no issue, state cleared, removeTokenRecord called (disk record gone)", async () => {
+  const root = makeF10Root()
+  const sid = "acv4-" + randomUUID()
+  const home = join(root, "h")
+  const seeded = "11111111-2222-3333-4444-555555555555:" + (Date.now() + 3600_000)
+  try {
+    const { out, st } = await runVerdictCase(sid, home,
+      "The design is not approved.\n" + v3Echo(v3Pending()) + "\n" + V3_FAIL_LINE,
+      { seedToken: seeded, seedRecord: { token: seeded, issuedAt: Date.now(), expiresAt: Date.now() + 3600_000 } })
+    assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), "FAIL 不得签发: " + out)
+    assert.equal(st.designToken, null, "FAIL → state 撤销")
+    assert.equal(loadTokenRecord(sid, home), null, "FAIL → 磁盘记录被 removeTokenRecord 删除（= 调用证据）")
+    assert.ok(out.includes("评审员判定为不通过"), "FAIL 诊断在位: " + out)
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+// ————————————— AC-V5：INVALID 三因不签发 + 点名格式 —————————————
+
+test("AC-V5: INVALID (duplicate / misplaced / bad-value) → no issue, no fallback, diagnostic names the VERDICT format", async () => {
+  const root = makeF10Root()
+  const token = v3Pending()
+  try {
+    const cases = [
+      ["duplicate", V3_HEURISTIC_PASS + "\n" + V3_PASS_LINE + "\n" + V3_PASS_LINE, "多行"],
+      ["misplaced", V3_HEURISTIC_PASS + "\n" + V3_PASS_LINE + "\n尾注：以上。", "最后一行非空"],
+      ["bad-value", V3_HEURISTIC_PASS + "\nVERDICT: MAYBE", "取值不是 PASS / FAIL"],
+    ]
+    const seen = []
+    for (const [name, reply, marker] of cases) {
+      const sid = "acv5-" + name + "-" + randomUUID()
+      const home = join(root, name)
+      try {
+        // 回显有效也无用：verdict 决定「算不算通过」（D-f 不回落）。回显在 verdict 行**上方**（设计档 §4.1）。
+        const { out, st } = await runVerdictCase(sid, home, v3Echo(token) + "\n" + reply, { pendingToken: token })
+        assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), name + " 不得签发: " + out)
+        assert.ok(out.includes("VERDICT 行格式非法"), name + " 必须给格式诊断: " + out)
+        assert.ok(out.includes("`VERDICT: PASS`") && out.includes("`VERDICT: FAIL`"), name + " 诊断必须点名格式: " + out)
+        assert.ok(out.includes(marker), name + " 原因点名（" + marker + "）: " + out)
+        assert.ok(!out.includes("批准码校验失败"), name + " 不得误报为回显问题（可区分性）: " + out)
+        assert.equal(st.designToken, null)
+        seen.push(out.slice(out.indexOf("VERDICT 行格式非法")))
+      } finally { dropSession(sid) }
+    }
+    assert.equal(new Set(seen).size, 3, "三种 invalid 原因必须给出**可区分**诊断")
+  } finally { rmRoot(root) }
+})
+
+// ————————————— AC-V6 [负] / AC-V7：回落路径（N1 的锁） —————————————
+
+test("AC-V6 [negative lock]: no VERDICT line + heuristic pass + valid echo → STILL ISSUES (the fallback path is permanent)", async () => {
+  const root = makeF10Root()
+  const sid = "acv6-" + randomUUID()
+  const home = join(root, "h")
+  const token = v3Pending()
+  try {
+    const { out, st } = await runVerdictCase(sid, home, V3_HEURISTIC_PASS + "\n" + v3Echo(token), { pendingToken: token })
+    assert.ok(out.includes("Approved. Pass this exact token to eng_coder"),
+      "回落路径必须仍然签发 —— 若将来有人把 VERDICT 改成必需，本测试必红: " + out)
+    assert.equal(st.designToken, token)
+    assert.equal(loadTokenRecord(sid, home)?.token, token)
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+test("AC-V7: no VERDICT line + heuristic fails + valid echo → no token (legacy negative behaviour kept)", async () => {
+  const root = makeF10Root()
+  const sid = "acv7-" + randomUUID()
+  const home = join(root, "h")
+  try {
+    const token = v3Pending()
+    const { out, st } = await runVerdictCase(sid, home, "Everything is fine.\n" + v3Echo(token), { pendingToken: token })
+    assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), "回落判不通过 → 不签发: " + out)
+    assert.equal(st.designToken, null)
+    assert.equal(loadTokenRecord(sid, home), null)
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+// ————————————— AC-V8 / AC-V9：verdict 与表格的 AND —————————————
+
+test("AC-V8: VERDICT: PASS + an unresolved 🔴 row + valid echo → no token + the contradiction diagnostic (D-a)", async () => {
+  const root = makeF10Root()
+  const sid = "acv8-" + randomUUID()
+  const home = join(root, "h")
+  try {
+    const token = v3Pending()
+    const reply = [
+      "| # | File | Severity | Issue | Suggestion |",
+      "|---|------|----------|-------|------------|",
+      "| 1 | lib/a.mjs | 🔴 | crash on empty input | guard it |",
+      "",
+      v3Echo(token),
+      V3_PASS_LINE,
+    ].join("\n")
+    const { out, st } = await runVerdictCase(sid, home, reply, { pendingToken: token })
+    assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), "verdict 与表格矛盾 → 不得签发: " + out)
+    assert.ok(out.includes("verdict 与表格矛盾"), "矛盾诊断在位: " + out)
+    assert.ok(!out.includes("批准码校验失败"), "不得误报为回显问题（诊断指错方向 = 送补救进错误的洞）: " + out)
+    assert.equal(st.designToken, null)
+    assert.equal(loadTokenRecord(sid, home), null)
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+test("AC-V8b: VERDICT: PASS + a real `|`-fenced 🟡 must-fix row + valid echo → no token (D-b)", async () => {
+  const root = makeF10Root()
+  try {
+    for (const [name, severityCell] of [["mid-column", "| 1 | lib/a.mjs | 🟡 must-fix | x |"], ["first-column", "| 🟡 must-fix | lib/a.mjs | x |"]]) {
+      const sid = "acv8b-" + name + "-" + randomUUID()
+      const home = join(root, name)
+      try {
+        const token = v3Pending()
+        const reply = V3_TABLE_WITH_CLEAN_ROWS + "\n" + severityCell + "\n\n" + v3Echo(token) + "\n" + V3_PASS_LINE
+        const { out, st } = await runVerdictCase(sid, home, reply, { pendingToken: token })
+        assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), name + "：must-fix 必须阻塞签发: " + out)
+        assert.ok(out.includes("verdict 与表格矛盾"), name + "：矛盾诊断: " + out)
+        assert.equal(st.designToken, null)
+        assert.equal(loadTokenRecord(sid, home), null)
+      } finally { dropSession(sid) }
+    }
+  } finally { rmRoot(root) }
+})
+
+test("AC-V9 [negative lock]: VERDICT: PASS + a plain 🟡 (unresolved) row + valid echo → STILL ISSUES", async () => {
+  const root = makeF10Root()
+  const sid = "acv9-" + randomUUID()
+  const home = join(root, "h")
+  const token = v3Pending()
+  try {
+    const reply = [
+      "| # | File | Severity | Issue | Suggestion |",
+      "|---|------|----------|-------|------------|",
+      "| 1 | lib/a.mjs | 🟡 | advisory, not fixed | consider it |",
+      "| 2 | lib/b.mjs | 🔵 | style nit | — |",
+      "",
+      v3Echo(token),
+      V3_PASS_LINE,
+    ].join("\n")
+    const { out, st } = await runVerdictCase(sid, home, reply, { pendingToken: token })
+    assert.ok(out.includes("Approved. Pass this exact token to eng_coder"),
+      "普通 🟡/🔵 永不阻塞 —— 若有人把行扫描简化成「扫所有 emoji」，本测试必红: " + out)
+    assert.equal(st.designToken, token)
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+// ————————————— AC-V10：旧格式回显（钓鱼通道） —————————————
+
+test("AC-V10: VERDICT: PASS + legacy [DESIGN-TOKEN:<token>] echo → no token (old channel stays closed on the new path)", async () => {
+  const root = makeF10Root()
+  const sid = "acv10-" + randomUUID()
+  const home = join(root, "h")
+  try {
+    const token = v3Pending()
+    const { out, st } = await runVerdictCase(sid, home,
+      V3_HEURISTIC_PASS + "\n[DESIGN-TOKEN:" + token + "]\n" + V3_PASS_LINE, { pendingToken: token })
+    assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), "旧格式回显不得签发: " + out)
+    assert.ok(out.includes("批准码校验失败"), "走回显诊断（非 verdict 诊断）: " + out)
+    assert.equal(st.designToken, null)
+    assert.equal(loadTokenRecord(sid, home), null)
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+// ————————————— AC-V11：截断表格（双重 fail-closed） —————————————
+
+test("AC-V11: truncated table fixtures (heuristic true / false) → neither issues (verdict + echo are both at the tail → double fail-closed)", async () => {
+  const root = makeF10Root()
+  try {
+    for (const [name, reply] of [
+      // 启发式为真：通过句在正文里，但表格/verdict/回显被截断
+      ["heuristic-true", "| # | File | Severity |\n| 1 | lib/a.mjs | 🟡 |\n\nThe design is approved with no unresolved Critical issues.\n\n[APPROVE:aa"],
+      // 启发式为假：截断在表格中途
+      ["heuristic-false", "| # | File | Severity |\n| 1 | lib/a.mjs | 🔴 |"],
+    ]) {
+      const sid = "acv11-" + name + "-" + randomUUID()
+      const home = join(root, name)
+      try {
+        const { out, st } = await runVerdictCase(sid, home, reply)
+        assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), name + " 不得签发: " + out)
+        assert.equal(st.designToken, null, name)
+        assert.equal(loadTokenRecord(sid, home), null, name)
+      } finally { dropSession(sid) }
+    }
+  } finally { rmRoot(root) }
+})
+
+// ————————————— AC-V18 [负] / AC-V20：D-33 回归锁（真实中文评审文本） —————————————
+
+/**
+ * D-33 实测评审文本（2026-09-12 现场，父侧逐条实测）：中文散文表达通过 + 中文表格 + 末行批准码回显。
+ * 实测的批准码为 `a6065235`；批准码 = sha256(令牌首段) 前 8 位、无法反推，故该行的 code 由
+ * **本夹具待批令牌派生**（其余文字逐字保留）。真实会话里宿主对该文本的判定是「不通过」——
+ * 这正是 P5：三词词表（通过/批准/approved）命中数为 0。
+ */
+function d33ReviewText(code) {
+  return [
+    "## 评审结论",
+    "",
+    "| # | Orig# | File | Severity | Status | Notes |",
+    "|---|-------|------|----------|--------|-------|",
+    "| 1 | 2 | lib/advisor.mjs | 🔴 | Fixed | 已修复并复核 |",
+    "| 2 | 1 | lib/prompts/discipline.md | 🟡 | Fixed | 三值词表已改 |",
+    "",
+    "无未决 🔴、无新增阻塞项，设计档可交 eng_coder 实施。",
+    "",
+    "[APPROVE:" + code + "]",
+  ].join("\n")
+}
+
+test("AC-V18 [negative lock]: the real D-33 Chinese PASS review issues a token once VERDICT: PASS is appended — and does not without it", async () => {
+  const root = makeF10Root()
+  const token = v3Pending()
+  const code = designApprovalCode(token)
+  try {
+    // ① 加 VERDICT: PASS 末行 → 必须签发（D-33 的正解：中文通过表达不再静默卡死）
+    const sid1 = "acv18-ok-" + randomUUID()
+    const home1 = join(root, "ok")
+    try {
+      const { out, st } = await runVerdictCase(sid1, home1, d33ReviewText(code) + "\n" + V3_PASS_LINE, { pendingToken: token })
+      assert.ok(out.includes("Approved. Pass this exact token to eng_coder"), "D-33 回归锁：中文通过 + VERDICT: PASS 必须签发: " + out)
+      assert.equal(st.designToken, token)
+      assert.equal(loadTokenRecord(sid1, home1)?.token, token)
+    } finally { dropSession(sid1) }
+
+    // ② 去掉 VERDICT 行 → 走回落（证明「修好中文通过」靠的正是 VERDICT，而非扩词表）
+    const sid2 = "acv18-fallback-" + randomUUID()
+    const home2 = join(root, "fallback")
+    try {
+      const { out } = await runVerdictCase(sid2, home2, d33ReviewText(code), { pendingToken: token })
+      assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"),
+        "回落路径下同一文本仍判不通过（P5 的实测根因 = 三词词表命中数为 0）: " + out)
+      assert.ok(out.includes("未给出 VERDICT 行"), "但必须**可见**（AC-V19/V20）: " + out)
+    } finally { dropSession(sid2) }
+  } finally { rmRoot(root) }
+})
+
+test("AC-V20: the Chinese-pass fallback diagnostic is readable — it does NOT claim '评审未通过' and names the real cause", async () => {
+  const root = makeF10Root()
+  const sid = "acv20-" + randomUUID()
+  const home = join(root, "h")
+  try {
+    const { out } = await runVerdictCase(sid, home, d33ReviewText(designApprovalCode(v3Pending())))
+    assert.ok(out.includes("评审员表达了通过但宿主未识别其通过措辞"),
+      "必须明说「评审员表达了通过但宿主未识别」（而不是让用户以为评审没过）: " + out)
+    assert.ok(!out.includes("评审未通过"), "不得写成「评审未通过」（误导）: " + out)
+    assert.ok(out.includes("不等于") && out.includes("判了不通过"), "必须显式排除误解: " + out)
+    assert.ok(out.includes("`VERDICT: PASS`"), "必须给出补救动作（重跑评审 + 末行 VERDICT）: " + out)
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+// ————————————— AC-V19：六类情形各自可区分诊断（N7） —————————————
+
+test("AC-V19: every path that does NOT issue a token names a distinguishable reason (N7 — silence is a defect)", async () => {
+  const root = makeF10Root()
+  const token = v3Pending()
+  const echo = v3Echo(token)
+  const unissued = [
+    ["pass+blocking", "| 1 | lib/a.mjs | 🔴 | broken |\n" + echo + "\n" + V3_PASS_LINE, "verdict 与表格矛盾"],
+    ["pass+echo", V3_HEURISTIC_PASS + "\n" + V3_PASS_LINE, "批准码校验失败"],
+    ["fail", echo + "\n" + V3_FAIL_LINE, "评审员判定为不通过"],
+    ["invalid", echo + "\n" + V3_PASS_LINE + "\n" + V3_PASS_LINE, "VERDICT 行格式非法"],
+    ["absent+heuristic-fail", "Everything is fine.\n" + echo, "未给出 VERDICT 行；回落启发式判定为不通过"],
+  ]
+  try {
+    const seen = []
+    for (const [name, reply, marker] of unissued) {
+      const sid = "acv19-" + name + "-" + randomUUID()
+      const home = join(root, name)
+      try {
+        const { out, st } = await runVerdictCase(sid, home, reply, { pendingToken: token })
+        assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), name + " 不该签发: " + out)
+        assert.ok(out.includes(marker), name + " 缺少可区分诊断「" + marker + "」: " + out)
+        // 诊断尾部可辨：取诊断段，逐条必须互不相同
+        seen.push(out.slice(out.indexOf(marker)))
+        assert.equal(st.designToken, null)
+      } finally { dropSession(sid) }
+    }
+    assert.equal(new Set(seen).size, unissued.length, "五类未签发诊断必须两两可区分")
+    // 第六类（absent + 回落判通过 + 回显有效）= 正常签发，由 AC-V6 覆盖（唯一允许的「无诊断」路径）
+    const sidOk = "acv19-ok-" + randomUUID()
+    const homeOk = join(root, "ok")
+    try {
+      const { out } = await runVerdictCase(sidOk, homeOk, V3_HEURISTIC_PASS + "\n" + echo, { pendingToken: token })
+      assert.ok(out.includes("Approved. Pass this exact token to eng_coder"), "第六类 = 正常签发")
+    } finally { dropSession(sidOk) }
+  } finally { rmRoot(root) }
+})
+
+// ————————————— AC-V21：撤销收紧（D-i / D-34）正反两向 —————————————
+
+test("AC-V21: revocation tightened — FAIL revokes, fallback-fail revokes, PASS-with-bad-echo does NOT, a later round keeps an issued token", async () => {
+  const root = makeF10Root()
+  const seeded = "99999999-8888-7777-6666-555555555555:" + (Date.now() + 3600_000)
+  const seedOpts = () => ({ seedToken: seeded, seedRecord: { token: seeded, issuedAt: Date.now(), expiresAt: Date.now() + 3600_000 } })
+  try {
+    // ① verdict 显式 FAIL → 撤销 + 诊断
+    const sid1 = "acv21a-" + randomUUID()
+    const home1 = join(root, "a")
+    try {
+      const { out, st } = await runVerdictCase(sid1, home1, V3_FAIL_LINE, { ...seedOpts(), pendingToken: v3Pending() })
+      assert.equal(st.designToken, null, "① FAIL → state 撤销")
+      assert.equal(loadTokenRecord(sid1, home1), null, "① FAIL → 磁盘记录撤销")
+      assert.ok(out.includes("评审员判定为不通过"), "① 诊断")
+    } finally { dropSession(sid1) }
+
+    // ② 无 verdict + 回落判不通过 → 撤销 + 诊断（含「未给出 VERDICT 行」）
+    const sid2 = "acv21b-" + randomUUID()
+    const home2 = join(root, "b")
+    try {
+      const { out, st } = await runVerdictCase(sid2, home2, "Nothing to report.", { ...seedOpts(), pendingToken: v3Pending() })
+      assert.equal(st.designToken, null, "② 回落判不通过 → 撤销")
+      assert.equal(loadTokenRecord(sid2, home2), null, "② 磁盘撤销")
+      assert.ok(out.includes("未给出 VERDICT 行；回落启发式判定为不通过"), "② 诊断")
+    } finally { dropSession(sid2) }
+
+    // ③ verdict PASS 但回显缺失/不符 → **只诊断、不撤销**（[负] 锁：不再因回显问题销毁已签发令牌）
+    for (const [name, reply] of [["missing", V3_PASS_LINE], ["wrong", "[APPROVE:deadbeef]\n" + V3_PASS_LINE]]) {
+      const sid3 = "acv21c-" + name + "-" + randomUUID()
+      const home3 = join(root, "c-" + name)
+      try {
+        const { out, st } = await runVerdictCase(sid3, home3, reply, seedOpts())
+        assert.ok(out.includes("批准码校验失败"), name + "：诊断在位: " + out)
+        assert.equal(st.designToken, seeded, name + "：③ **不得**撤销已签发令牌（state）")
+        assert.equal(loadTokenRecord(sid3, home3)?.token, seeded, name + "：③ 磁盘记录不得被动（D-i）")
+      } finally { dropSession(sid3) }
+    }
+
+    // ④ 成功签发之后的后续轮（同一会话）：令牌仍在
+    const sid4 = "acv21d-" + randomUUID()
+    const home4 = join(root, "d")
+    try {
+      const token = v3Pending()
+      const first = await runVerdictCase(sid4, home4,
+        V3_HEURISTIC_PASS + "\n" + v3Echo(token) + "\n" + V3_PASS_LINE, { pendingToken: token })
+      assert.ok(first.out.includes("Approved. Pass this exact token to eng_coder"), "首轮签发")
+      // 后续轮：verdict PASS 但忘带回显 → 令牌必须仍在（state + 磁盘）
+      const later = await runVerdictCase(sid4, home4, V3_HEURISTIC_PASS + "\n" + V3_PASS_LINE,
+        { pendingToken: token, keepRound: true })
+      assert.ok(later.out.includes("批准码校验失败"), "后续轮诊断在位")
+      assert.equal(later.st.designToken, token, "④ 后续轮不得撤销已签发令牌（state）")
+      assert.equal(loadTokenRecord(sid4, home4)?.token, token, "④ 后续轮不得撤销已签发令牌（磁盘）")
+    } finally { dropSession(sid4) }
+  } finally { rmRoot(root) }
+})
+
+// ————————————— AC-V22：撤销路径留痕（返回值被收集，不再丢弃） —————————————
+
+test("AC-V22: the revocation path collects removeTokenRecord's boolean and warns (both on removal and on failure)", async () => {
+  const root = makeF10Root()
+  const seeded = "77777777-6666-5555-4444-333333333333:" + (Date.now() + 3600_000)
+  try {
+    // ① 磁盘记录存在 → 删除成功 → 撤销发生时必须 warn（「令牌为什么没了」可查）
+    const sid1 = "acv22a-" + randomUUID()
+    const home1 = join(root, "a")
+    try {
+      const { warns } = await withWarnCapture(() => runVerdictCase(sid1, home1, V3_FAIL_LINE, {
+        seedToken: seeded,
+        seedRecord: { token: seeded, issuedAt: Date.now(), expiresAt: Date.now() + 3600_000 },
+        pendingToken: v3Pending(),
+      }))
+      const revokeWarn = warns.find(w => w.includes("design token 撤销"))
+      assert.ok(revokeWarn, "撤销必须留痕（console.warn）: " + JSON.stringify(warns))
+      assert.ok(revokeWarn.includes("VERDICT: FAIL"), "留痕点明撤销原因: " + revokeWarn)
+      assert.ok(revokeWarn.includes("已删除"), "留痕带出 removeTokenRecord 的返回值（已收集，不再丢弃）: " + revokeWarn)
+      assert.equal(loadTokenRecord(sid1, home1), null)
+    } finally { dropSession(sid1) }
+
+    // ② 磁盘删除失败（存储路径不可解析）→ 返回值 false → 必须 warn 失败（而不是静默丢弃）
+    const sid2 = "acv22b-" + randomUUID()
+    const tmpCwd = mkdtempSync(join(tmpdir(), "thincoder-acv22-"))
+    try {
+      const { warns } = await withWarnCapture(() => runVerdictCase(sid2, "", V3_FAIL_LINE, {
+        pendingToken: v3Pending(), cwd: tmpCwd,
+      }))
+      const revokeWarn = warns.find(w => w.includes("design token 撤销"))
+      assert.ok(revokeWarn, "撤销必须留痕: " + JSON.stringify(warns))
+      assert.ok(revokeWarn.includes("删除失败"), "删除失败必须 warn（返回值 = false 被收集）: " + revokeWarn)
+      assert.equal(sessionState(sid2).designToken, null, "内存态仍撤销")
+    } finally { dropSession(sid2); rmRoot(tmpCwd) }
+  } finally { rmRoot(root) }
 })

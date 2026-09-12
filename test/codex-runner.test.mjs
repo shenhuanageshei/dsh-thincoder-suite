@@ -332,6 +332,48 @@ test("runAdvisorReview: codex runner → 走 adapter 返回评本文（llm 不�
   dropSession(sid)
 })
 
+// ═════════ 批 3（评审协议增强）：AC-V12 —— code 评审不设宿主门禁（决策 D-d）═════════
+// docs/2026-09-12-review-protocol-design.md §7.2。四份提示词都要求 VERDICT，但宿主**只**对
+// design token 路径设门禁；code 评审的 verdict 供主代理消费（batch 6 才做评审链守卫）。
+
+test("AC-V12 (批 3): reviewType='code' + VERDICT: PASS + a valid-looking echo → NOTHING is issued and the token path is untouched", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const sid = "acv12-code-review"
+  const home = mkdtempSync(join(tmpdir(), "thincoder-acv12-"))
+  const seeded = "0f8fad5b-d9cb-469f-a165-70867728950e:" + (Date.now() + 3600_000)
+  try {
+    const st = sessionState(sid)
+    st.engineering = true
+    st.pendingDesignToken = seeded
+    st.pendingDocPaths = []
+    st.designToken = null
+    // 预置既有磁盘记录：code 评审**不得**删它、也不得写它
+    saveTokenRecord(sid, { token: seeded, issuedAt: Date.now(), expiresAt: Date.now() + 3600_000 }, home)
+    const reply = "| # | File | Severity | Issue |\n|---|---|---|---|\n| 1 | lib/a.mjs | 🟡 | minor |\n\n"
+      + "[APPROVE:deadbeef]\nVERDICT: PASS"
+    const llm = {
+      stream: () => (async function* () {
+        yield { type: "block-end", block: { type: "text", text: reply } }
+        yield { type: "finish", reason: { kind: "stop" } }
+      })(),
+    }
+    const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: { provider: "p", model: "m" } }
+    const out = await runAdvisorReview({ llm }, {
+      agent, config: {}, reviewType: "code", paths: [], documents: [], signal: undefined,
+      configDefaultEngineering: false, storPathOverride: home,
+    })
+    assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), "code 评审不得签发任何东西: " + out)
+    assert.ok(!out.includes("批准码校验失败"), "code 评审不得被 design 侧诊断污染: " + out)
+    assert.ok(out.includes("VERDICT: PASS"), "评正文原样返回（不剥离、不改写）: " + out)
+    assert.equal(sessionState(sid).designToken, null, "state 不得被触碰")
+    const raw = JSON.parse(readFileSync(resolveTokenStorePath(home), "utf8"))
+    assert.equal(raw.tokens[sid].token, seeded, "既有磁盘记录不得被 code 评审删除/改写")
+  } finally {
+    dropSession(sid)
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
 // ————————————— 二期：T2.1 escalate 写任务 / T2.3 idle / T2.4 resume / T2.2 eng_coder —————————————
 
 const CODexDeps = (spawn, extra) => ({ spawn, platform: "linux", env: {}, ...extra })

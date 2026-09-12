@@ -171,7 +171,6 @@ right tool for breadth-first investigation:
   eng-coder. `consult` stays available for hard judgment calls.
 
 ## Questioning Style (requirement clarification)
-## Questioning Style (requirement clarification)
 
 Clarify with OPEN-ENDED questions — the user's own words carry constraints you
 cannot enumerate. When asking the user questions (`ask_user_question` tool):
@@ -215,7 +214,8 @@ cannot enumerate. When asking the user questions (`ask_user_question` tool):
 - **Advisor response table.** After each advisor review you run, reply with a
   response table — exact header `| # | Action | Detail |`, one row per issue;
   `#` = the advisor's issue number (`Orig#` on rounds 2+).
-  - `Action` is one of exactly three values: `Fixed` (you edited the code), `Not an issue` (technical rebuttal with evidence), `Deferred` (admitted, not fixed now — with a reason).
+  - `Action` is one of four values: `Fixed` (you edited the code), `Dispatched` (the fix is delegated to a subagent / background job and has NOT yet returned a verified result — say in the Detail what it was dispatched to), `Not an issue` (technical rebuttal with evidence), `Deferred` (admitted, not fixed now — with a reason).
+  - `Dispatched` is a claim of **ownership, never a claim of resolution** — an unverified `Dispatched` 🔴 blocks convergence exactly like an unfixed 🔴. `Detail` on a `Dispatched` row MUST name what it was dispatched to (job/subagent id or a concrete description), otherwise it is indistinguishable from stalling.
   - `Detail` = what changed and where (file:line), or your evidence/reason.
   - No "pre-existing" cop-out: "it was already broken" is never a reason to drop
     a finding — you own the whole design/code, and when a defect appeared does
