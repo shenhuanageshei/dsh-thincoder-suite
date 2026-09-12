@@ -2,6 +2,16 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [Unreleased]
+
+**D-29 配置面缺口：`consultTimeoutMs` / `engTokenTtlMs` 进 user 层白名单（用户实测痛点）**
+
+- **缺口**：两键运行时都读得到配置（`lib/consult.mjs:115` / `lib/advisor.mjs:677`），却都被 `mergeGlobalConfig` 的白名单排除 —— 结果是它们**只能**在 entry base（`cordis.patch.yml`）里改，**设置页改不动**。用户侧实测后果：① design token 每 1h 过期，而新 token 只能由一次新的设计评审签发 → **反复重评审**；② 会诊里慢/挂的模型把整轮吊满缺省 600000（10min），四个模型常只剩两个能回。
+- **修复**：两键补进三面白名单（对齐 `dshBackgroundTimeoutMs` 的 N-5/US-10 先例）——`lib/config-store.mjs` 值域校验与常量（`isValidConsultTimeoutMs` 30000..3600000 / `isValidEngTokenTtlMs` 600000..2592000000）⊕ `mergeGlobalConfig` 白名单 ⊕ `lib/index.mjs` PUT 校验（`topAllowed` + 区间错误文案）⊕ 设置页表单字段（`lib/client.js`：校验 / 载荷 / 初始态 / busy 窗口编辑保留 / 新增卡片）。
+- **base 示例值**：`cordis.patch.yml` 的 `consultTimeoutMs` 600000 → **1800000**（慢模型有合理窗口；原值会让整轮吊满 10min）。`engTokenTtlMs` 保持 3600000 —— **缺省值的语义变更属后续批次，本批只让两键可配**。
+- **测试**：新增 4 条（`test/codex-runner.test.mjs`）——① PUT 接受合法值 + 回归断言「不再被当 unknown top-level field 忽略」+ merge 覆盖语义；② 区间外/非整数拒绝且不落盘（边界值两侧合法）；③ 设置页接线静态核对（`client.js` 无既有 UI 测试面，锁住「后端开了前端没接」这类静默半成品：初始态 / 载荷 / 校验 / busy 保留 / onChange / 区间常量同值）；④ user 层落盘 → `loadUserConfig` → merge → 到达运行时消费点的完整往返（锁「user 层能覆盖 base 钉死值」）。241 → **245 全绿**。
+- **文档同步**：`README.md` 的 user 层白名单段与 `cordis.patch.yml` 头部白名单清单同步补齐（两处此前仍称两键「只在 base 配」，与本批改动矛盾）；README base 示例值同步为 1800000。
+
 ## [0.9.2] — 2026-09-09
 
 **D-28 会诊跨回合失效修复（生产缺陷：PTC run-scoped 信号被继承）**

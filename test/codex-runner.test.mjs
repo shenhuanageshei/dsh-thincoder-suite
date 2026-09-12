@@ -21,7 +21,7 @@ import {
 import { resolveAdvisorRoute, advisorGenerationOf, bumpAdvisorGeneration, sessionStateViewWithGeneration, checkInFlightJob } from "../lib/advisor.mjs"
 import { resolveSupportedEffort, resolveCodexRowEffort } from "../lib/effort-resolve.mjs"
 import { startConsultSession, checkConsultSession } from "../lib/consult.mjs"
-import { mergeGlobalConfig } from "../lib/config-store.mjs"
+import { mergeGlobalConfig, saveUserConfig, loadUserConfig } from "../lib/config-store.mjs"
 import { validateGlobalUserConfig } from "../lib/index.mjs"
 import { runEscalate } from "../lib/escalate.mjs"
 import { runEngCoder } from "../lib/eng.mjs"
@@ -3138,8 +3138,7 @@ test("R4 收尾 #4: advisor jobs 派发路径 warnPrefix 并入派发文本—�
 //（config-store.mjs）⊕ 运行时解析（resolveDshBackgroundTimeoutMs——config-store.mjs 导出，
 // advisor/escalate/eng 三机制消费的单一事实源）。缺省 1800000（30min）；合法 60000..3600000。
 
-test("R5 dshBackgroundTimeoutMs 三面同步: PUT 接受合法值 ⊕ merge 保留 ⊕ 运行时解析生效", async () => {
-  // 面 1：PUT 校验（index.mjs validateGlobalUserConfig 经 makeApiHandler 真实 PUT 路径）
+test("R5 dshBackgroundTimeoutMs 三面同步: PUT 接受合法值 ⊕ merge 保留 ⊕ 运行时解析生效", async () => {  // 面 1：PUT 校验（index.mjs validateGlobalUserConfig 经 makeApiHandler 真实 PUT 路径）
   const { makeApiHandler } = await import("../lib/index.mjs")
   const handler = makeApiHandler({}, { baseConfig: {}, dshHomeOverride: mkdtempSync(join(tmpdir(), "dshbg-")) })
   const req = { method: "PUT", url: "/thincoder-suite/api/config", [Symbol.asyncIterator]: function* () { yield Buffer.from(JSON.stringify({ config: { dshBackgroundTimeoutMs: 720000 } })) } }
@@ -3182,6 +3181,119 @@ test("R5 dshBackgroundTimeoutMs: 运行时非法值（手编 config）→ 回落
   // 运行时宽容正整数值（对齐 resolveCodexBudgetCapMs 先例：测试/手编小值可驱动兜底 deadline）
   assert.equal(resolveDshBackgroundTimeoutMs({ dshBackgroundTimeoutMs: 400 }), 400, "正整数值运行时生效（PUT 面仍收口 60000..3600000）")
 })
+
+// ————————————— D-29：consultTimeoutMs / engTokenTtlMs 进 user 层白名单 —————————————
+// 缺口（用户实测）：两键运行时都读得到配置，却都被 mergeGlobalConfig 白名单排除 → 只能改
+// entry base（cordis.patch.yml），设置页改不动。本块锁三面同步（PUT 校验 ⊕ merge 保留 ⊕
+// 到达运行时消费点），并对「此前会告警 unknown top-level field」做回归断言。
+
+test("D-29 consultTimeoutMs/engTokenTtlMs: PUT 接受合法值 ⊕ 不再告警 unknown ⊕ merge 保留", async () => {
+  const { makeApiHandler } = await import("../lib/index.mjs")
+  const handler = makeApiHandler({}, { baseConfig: {}, dshHomeOverride: mkdtempSync(join(tmpdir(), "d29-")) })
+  const req = {
+    method: "PUT", url: "/thincoder-suite/api/config",
+    [Symbol.asyncIterator]: function* () {
+      yield Buffer.from(JSON.stringify({ config: { consultTimeoutMs: 1800000, engTokenTtlMs: 604800000 } }))
+    },
+  }
+  const res = { statusCode: 0, body: "", writeHead(code) { this.statusCode = code }, end(b) { this.body = b } }
+  await handler(req, res)
+  assert.equal(res.statusCode, 200, "PUT 接受合法值: " + res.body)
+  const body = JSON.parse(res.body)
+  assert.equal(body.user.consultTimeoutMs, 1800000, "consultTimeoutMs sanitized 保留")
+  assert.equal(body.user.engTokenTtlMs, 604800000, "engTokenTtlMs sanitized 保留")
+  // 回归：这两键此前落在 topAllowed 之外 → notes 里会出现 "ignoring unknown top-level field"
+  const notes = (body.notes ?? []).join("|")
+  assert.ok(!notes.includes("ignoring unknown top-level field"), "两键已入白名单，不再被当未知字段忽略: " + notes)
+  // merge 面：user 层覆盖 base；无 user 层保留 base
+  const merged = mergeGlobalConfig({}, { consultTimeoutMs: 1800000, engTokenTtlMs: 604800000 })
+  assert.equal(merged.consultTimeoutMs, 1800000, "merge 保留 consultTimeoutMs")
+  assert.equal(merged.engTokenTtlMs, 604800000, "merge 保留 engTokenTtlMs")
+  assert.equal(mergeGlobalConfig({ consultTimeoutMs: 30000 }, {}).consultTimeoutMs, 30000, "无 user 层保留 base（consult）")
+  assert.equal(mergeGlobalConfig({ engTokenTtlMs: 600000 }, {}).engTokenTtlMs, 600000, "无 user 层保留 base（ttl）")
+})
+
+test("D-29: PUT 拒绝区间外/非整数（越界值不落盘，错误文案含合法区间）", () => {
+  const cases = [
+    ["consultTimeoutMs", [29999, 3600001, 1.5, "x", -1], "30000..3600000"],
+    ["engTokenTtlMs", [599999, 2592000001, 1.5, "x", -1], "600000..2592000000"],
+  ]
+  for (const [field, bads, range] of cases) {
+    for (const bad of bads) {
+      const v = validateGlobalUserConfig({ [field]: bad }, [])
+      assert.ok(v.errors.some((e) => e.includes(field) && e.includes(range)),
+        field + " 越界报错含区间（" + JSON.stringify(bad) + "）: " + v.errors.join("|"))
+      assert.equal(v.sanitized[field], undefined, field + " 非法值不进 sanitized（不落盘）")
+    }
+    // 边界值两侧都合法
+    for (const ok of [Number(range.split("..")[0]), Number(range.split("..")[1])]) {
+      const v = validateGlobalUserConfig({ [field]: ok }, [])
+      assert.equal(v.ok, true, field + " 边界值合法（" + ok + "）: " + v.errors.join("|"))
+      assert.equal(v.sanitized[field], ok, field + " 边界值进 sanitized")
+    }
+  }
+})
+
+test("D-29: 设置页表单接线齐全（静态核对——client.js 无既有 UI 测试面，至少锁住接线不丢字段）", () => {
+  // client.js 是宿主内联的浏览器 bundle，无法在本进程直接渲染；这里做静态接线核对，
+  // 防止「后端白名单开了、设置页却没接」这类静默半成品（本批最可能出的错）。
+  const src = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8")
+  for (const field of ["consultTimeoutMs", "engTokenTtlMs"]) {
+    // ① 初始态（effective → draft 表单串）
+    assert.ok(src.includes(field + ": effective && effective." + field + " !== undefined"),
+      field + " 缺 draft 初始态接线（effective → 表单串）")
+    // ② 草稿 → PUT 载荷（空字段不发送）
+    assert.ok(src.includes("config." + field + " = Number(draft." + field + ")"),
+      field + " 缺草稿 → PUT 载荷接线")
+    // ③ 表单校验分支（区间常量）
+    assert.ok(src.includes("draft." + field + " !== \"\"") && src.includes(field + " 必须是 "),
+      field + " 缺前端校验分支或错误文案")
+    // ④ busy 窗口内编辑保留（touched 回填）
+    assert.ok(src.includes("touched[\"" + field + "\"]") && src.includes("next." + field + " = curOf(["),
+      field + " 缺 busy 窗口编辑保留接线（touched 回填）")
+    // ⑤ 表单控件 + onChange（有输入框才算真的可编辑）
+    assert.ok(src.includes("setField([\"" + field + "\"], e.target.value)"),
+      field + " 缺表单控件 onChange 接线")
+  }
+  // 区间常量与后端同值（防两面漂移）
+  assert.ok(src.includes("var CONSULT_TIMEOUT_MIN = 30000") && src.includes("var CONSULT_TIMEOUT_MAX = 3600000"),
+    "client.js 的 consultTimeoutMs 区间常量须与 config-store 同值")
+  assert.ok(src.includes("var ENG_TTL_MIN = 600000") && src.includes("var ENG_TTL_MAX = 2592000000"),
+    "client.js 的 engTokenTtlMs 区间常量须与 config-store 同值")
+})
+
+test("D-29: user 层落盘 → loadUserConfig → merge → 到达运行时消费点（effective 值真的变）", async () => {
+  const home = mkdtempSync(join(tmpdir(), "d29-roundtrip-"))
+  try {
+    const cfg = { consultTimeoutMs: 900000, engTokenTtlMs: 604800000 }
+    assert.equal(saveUserConfig(cfg, home), true, "user 层落盘成功")
+    const loaded = loadUserConfig(home)
+    assert.equal(loaded.consultTimeoutMs, 900000, "loadUserConfig 读回 consultTimeoutMs")
+    assert.equal(loaded.engTokenTtlMs, 604800000, "loadUserConfig 读回 engTokenTtlMs")
+    // base 里是旧值（模拟 cordis.patch.yml 的钉死值）——user 层必须覆盖它
+    const base = { consultTimeoutMs: 600000, engTokenTtlMs: 3600000 }
+    const effective = mergeGlobalConfig(base, loaded)
+    assert.equal(effective.consultTimeoutMs, 900000, "user 层覆盖 base 的 consultTimeoutMs（这正是用户痛点：base 钉死改不动）")
+    assert.equal(effective.engTokenTtlMs, 604800000, "user 层覆盖 base 的 engTokenTtlMs")
+    // 消费点：驱动**真实铸造路径**（advisor.mjs generateDesignToken 读 config.engTokenTtlMs），
+    // 断言 token 的有效期确实由 user 层生效值决定——而不是复制读取表达式（评审 🔵#6）
+    const { generateDesignToken, tokenExpiryMs } = await import("../lib/advisor.mjs")
+    const t0 = Date.now()
+    const tok = generateDesignToken(effective)
+    const exp = tokenExpiryMs(tok)
+    assert.ok(exp !== null, "铸造出的 token 可解析 expiresAt")
+    const ttlActual = exp - t0
+    assert.ok(Math.abs(ttlActual - 604800000) < 5000,
+      "token 有效期由 user 层 engTokenTtlMs 决定（实测 " + ttlActual + "ms，期望 ≈604800000）")
+    // 反证：base 的旧值（1h）不再影响结果——证明覆盖链真的生效
+    const tokBase = generateDesignToken({ engTokenTtlMs: 3600000 })
+    assert.ok(Math.abs((tokenExpiryMs(tokBase) - t0) - 3600000) < 5000,
+      "未覆盖时仍按传入 config 的 TTL 生效（对照组）")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
 
 // ————————————— R5（D-27，设计 §7.1/§7.2）：advisor dsh 循环后台化 —— Stage 2 —————————————
 // route.timeoutMs > budgetCapMs 且 ctx.jobs 可用 → 自动派后台 job（与 codex 分支完全对称）：

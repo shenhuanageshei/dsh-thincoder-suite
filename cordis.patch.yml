@@ -8,7 +8,10 @@
 # - $DSH_HOME/.thincoder/config.json 的 config = user 层（DSH 设置面板「Thincoder」页编辑；
 #   字段级覆盖下方 base；保存即生效无需重启；删除/清空则回落本 base）。
 #   用户层可配字段白名单：advisor.round1/convergence 组（provider/model/effort/timeoutMs）、
-#   advisor.includeProjectGuide、consultModels（整体替换）、engCoderMaxTokens、engCoderEffort。
+#   advisor.includeProjectGuide、advisor.maxOutputTokens、consultModels（整体替换）、
+#   engCoderMaxTokens、engCoderEffort、codexCli、dshBackgroundTimeoutMs、
+#   consultTimeoutMs、engTokenTtlMs（末两键 D-29 并入）。
+#   base 专属（user 层不接受）：engineering 等。
 #   下列示例值若在 user 层被覆盖，以 user 层为准。
 - insert:
     - id: thincoder-suite
@@ -39,5 +42,5 @@
         engCoderEffort: low          # eng_coder 子代理推理档（可选 off|low|medium|high|max；缺省 low；非法值忽略并警告 N4）
         # 所有会话默认进工程模式（默认 false）
         engineering: false
-        engTokenTtlMs: 3600000
-        consultTimeoutMs: 600000
+        engTokenTtlMs: 3600000       # design token 有效期（D-29：现已可从设置页覆盖；值域 600000..2592000000 = 10min..30d）
+        consultTimeoutMs: 1800000    # 会诊各模型看门狗（D-29：现已可从设置页覆盖；值域 30000..3600000；原 600000 会让慢模型把整轮吊满 10min）

@@ -166,8 +166,9 @@ pnpm add link:<克隆路径>/dsh-thincoder-suite
 
 生效全局 = user 层（字段级覆盖 base）⊕ base；user 层缺失/损坏 → 回落 base。user 层可配字段白名单：
 `advisor.round1/convergence` 组（provider/model/effort/timeoutMs）、`advisor.includeProjectGuide`、
-`consultModels`（整体替换）、`engCoderMaxTokens`、`engCoderEffort`——其余字段（engineering /
-engTokenTtlMs / consultTimeoutMs 等）只在 base 配。文件示例：
+`advisor.maxOutputTokens`、`consultModels`（整体替换）、`engCoderMaxTokens`、`engCoderEffort`、
+`codexCli`、`dshBackgroundTimeoutMs`、`consultTimeoutMs`、`engTokenTtlMs`——其余字段（`engineering` 等）
+只在 base 配。文件示例：
 
 ```json
 { "version": 1, "config": { "advisor": { "round1": { "provider": "…", "model": "…" } } } }
@@ -235,9 +236,13 @@ engCoderEffort 输入。**保存全局默认** → 写 user 层（`config.json`�
           idleTimeoutMs: 300000        # 写任务假死判定（事件流静默窗口；缺省 300s）
         # 可选：其余开关
         engineering: false              # 所有会话默认进工程模式（默认 false）
-        engTokenTtlMs: 3600000          # design token 有效期
-        consultTimeoutMs: 600000        # 会诊子代理超时
+        engTokenTtlMs: 3600000          # design token 有效期（ms；合法 600000..2592000000 = 10min..30d）
+        consultTimeoutMs: 1800000       # 会诊子代理超时（ms；合法 30000..3600000 = 30s..1h；本仓库 base 示例值见 cordis.patch.yml）
 ```
+
+> **D-29**：`engTokenTtlMs` 与 `consultTimeoutMs` 现已可从**设置页**修改（此前只认 entry base 的这份配置，设置页改不动）。两键都进 user 层白名单，优先级 user > base。
+> 注意：token 过期后 `eng_coder` 会拒绝执行，而新 token **只能由一次新的设计评审签发** —— 所以 TTL 设得过短会导致反复重评审。若你的设计会话跨度大，建议调长 `engTokenTtlMs`。
+> `consultTimeoutMs` 是**单个模型**的看门狗：超时只把该模型记成超时失败，不终止整轮会诊。
 
 字段说明（解析链与校验细节见设计文档 §3.2/§3.6）：
 
