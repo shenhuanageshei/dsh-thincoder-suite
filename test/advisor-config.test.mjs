@@ -1738,10 +1738,13 @@ test("AC-V21: revocation tightened — FAIL revokes, fallback-fail revokes, PASS
     } finally { dropSession(sid1) }
 
     // ② 无 verdict + 回落判不通过 → 撤销 + 诊断（含「未给出 VERDICT 行」）
+    //    收口小轮（FR-6 / AC-V23 ②）修订：本支的前提是「**无**有效令牌」——守卫命中（已有有效令牌）时
+    //    不再撤销，那是 AC-V23 ③ 的领地。此处原先预置了一枚**有效**令牌，与方案 A 的语义直接冲突，
+    //    故只把预置去掉（断言本体与语义不变：无有效令牌时 **仍撤销**，fail-closed 保留）。
     const sid2 = "acv21b-" + randomUUID()
     const home2 = join(root, "b")
     try {
-      const { out, st } = await runVerdictCase(sid2, home2, "Nothing to report.", { ...seedOpts(), pendingToken: v3Pending() })
+      const { out, st } = await runVerdictCase(sid2, home2, "Nothing to report.", { pendingToken: v3Pending() })
       assert.equal(st.designToken, null, "② 回落判不通过 → 撤销")
       assert.equal(loadTokenRecord(sid2, home2), null, "② 磁盘撤销")
       assert.ok(out.includes("未给出 VERDICT 行；回落启发式判定为不通过"), "② 诊断")
@@ -1774,6 +1777,100 @@ test("AC-V21: revocation tightened — FAIL revokes, fallback-fail revokes, PASS
       assert.equal(later.st.designToken, token, "④ 后续轮不得撤销已签发令牌（state）")
       assert.equal(loadTokenRecord(sid4, home4)?.token, token, "④ 后续轮不得撤销已签发令牌（磁盘）")
     } finally { dropSession(sid4) }
+  } finally { rmRoot(root) }
+})
+
+// ————————————— AC-V23：FR-6 守卫（方案 A）——「猜不通过」不得撤销已签发的**有效**令牌 —————————————
+// 设计档 §4.5「A 的精确语义」（批 3 收口小轮，用户裁定方案 A）：
+//   ① `verdict.kind === "fail"`  → **仍撤销**（明确的否定裁决，不是猜测）；
+//   ② `absent` ∧ 回落判不通过    → **先查「有效」令牌**：有 → **只诊断、不撤销**；无 → 撤销（D-33 的 fail-closed 保留）；
+//   ③ `pass` 侧回显缺失/不符     → 只诊断（不变）。
+// 守卫检查对象是**「有效」而非「存在」**（⑤ 锁死：已过期的令牌本就不能用，不构成要保的授权）。
+// 可证伪性：③ 在**加守卫之前**必红 —— 撤销支会把已签发令牌清成 null（本用例实施时已实测红，见交付报告）。
+// 与 AC-V21 互补：AC-V21 覆盖 FR-5 的收紧（③ 不再撤销、④ 后续轮带 VERDICT 时不受影响），
+// 本用例覆盖 FR-6 的残余修补（④ 那个承诺在**无 VERDICT 的后续轮**上此前并不成立）。
+
+test("AC-V23: the FR-6 guard — an explicit FAIL still revokes, a guessed FAIL no longer destroys a VALID token, an expired token is not protected", async () => {
+  const root = makeF10Root()
+  // 已签发的**有效**令牌（未过期 → validateDesignToken 为真）
+  const valid = "99999999-8888-7777-6666-555555555555:" + (Date.now() + 3600_000)
+  const validOpts = () => ({
+    seedToken: valid,
+    seedRecord: { token: valid, issuedAt: Date.now(), expiresAt: Date.now() + 3600_000 },
+    pendingToken: v3Pending(),
+  })
+  // 已**过期**的令牌（存在但无效）
+  const expired = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:" + (Date.now() - 60_000)
+  // ② 的输入形态：无 VERDICT 行 + 回落启发式判不通过（= 宿主「猜」不通过）
+  const guessedFail = "Nothing to report."
+  try {
+    // ① 明说 FAIL + 已有一枚有效令牌 → **仍撤销**（守卫**不得**渗进「明说」的那一支）
+    const sid1 = "acv23a-" + randomUUID()
+    const home1 = join(root, "a")
+    try {
+      const { out, st } = await runVerdictCase(sid1, home1, V3_FAIL_LINE, validOpts())
+      assert.equal(st.designToken, null, "① 明说 FAIL → 仍撤销（即便已有有效令牌）")
+      assert.equal(loadTokenRecord(sid1, home1), null, "① 磁盘记录同步撤销")
+      assert.ok(out.includes("评审员判定为不通过"), "① 诊断 = 明确的否定裁决: " + out)
+      assert.ok(!out.includes("未撤销"), "① 不得出现「未撤销」措辞（守卫只能作用于②）: " + out)
+    } finally { dropSession(sid1) }
+
+    // ② 猜是没过 + **无**有效令牌 → 撤销（D-33 的 fail-closed 语义原样保留）
+    const sid2 = "acv23b-" + randomUUID()
+    const home2 = join(root, "b")
+    try {
+      const { out, st } = await runVerdictCase(sid2, home2, guessedFail, { pendingToken: v3Pending() })
+      assert.equal(st.designToken, null, "② 无有效令牌 → 撤销")
+      assert.equal(loadTokenRecord(sid2, home2), null, "② 磁盘无记录")
+      assert.ok(out.includes("评审未签发：未给出 VERDICT 行；回落启发式判定为不通过"), "② 撤销支诊断: " + out)
+      assert.ok(!out.includes("未撤销"), "② 守卫未命中 → 不得出现「未撤销」措辞: " + out)
+    } finally { dropSession(sid2) }
+
+    // ③ 猜是没过 + **有**有效令牌 → **不撤销** + 诊断可见（D-34 残余的正向修复；加守卫前此支必红）
+    const sid3 = "acv23c-" + randomUUID()
+    const home3 = join(root, "c")
+    try {
+      const { out, st } = await runVerdictCase(sid3, home3, guessedFail, validOpts())
+      assert.ok(!out.includes("Approved. Pass this exact token to eng_coder"), "③ 本轮不得签发新令牌: " + out)
+      assert.equal(st.designToken, valid, "③ **不得撤销**已有有效令牌（state）—— 加守卫前此处必红")
+      assert.equal(loadTokenRecord(sid3, home3)?.token, valid, "③ 磁盘记录不得被动（守卫只在「猜」这一支生效）")
+      assert.ok(out.includes("本轮评审未签发新令牌"), "③ 必须点名「本轮未签发」: " + out)
+      assert.ok(out.includes("未给出 VERDICT 行") && out.includes("回落启发式判定为不通过"),
+        "③ 必须点名原因（未给出 VERDICT 行 + 回落判不通过）: " + out)
+      assert.ok(out.includes("已有一枚有效令牌") && out.includes("未撤销"),
+        "③ 必须点名「因已有有效令牌而未撤销」（与撤销支文案可区分）: " + out)
+      assert.ok(!out.includes("评审未签发：未给出 VERDICT 行"),
+        "③ 不得复用撤销支的文案（两条诊断必须可区分，N7）: " + out)
+    } finally { dropSession(sid3) }
+
+    // ④ pass 侧回显缺失 → 只诊断、不撤销（FR-5 的 ③，不变；且与 ③ 的守卫生效路径**可区分**）
+    const sid4 = "acv23d-" + randomUUID()
+    const home4 = join(root, "d")
+    try {
+      const { out, st } = await runVerdictCase(sid4, home4, V3_HEURISTIC_PASS + "\n" + V3_PASS_LINE, validOpts())
+      assert.ok(out.includes("批准码校验失败"), "④ 走既有回显诊断: " + out)
+      assert.ok(!out.includes("未给出 VERDICT 行"), "④ 不得误报为「未给出 VERDICT 行」（与③可区分）: " + out)
+      assert.equal(st.designToken, valid, "④ 不撤销（state）")
+      assert.equal(loadTokenRecord(sid4, home4)?.token, valid, "④ 磁盘不动")
+    } finally { dropSession(sid4) }
+
+    // ⑤ 令牌**存在但无效**（已过期）+ 猜是没过 → **仍撤销** —— 锁死「有效而非存在」
+    const sid5 = "acv23e-" + randomUUID()
+    const home5 = join(root, "e")
+    try {
+      // 夹具前提：该令牌「存在但已过期」（不引 validateDesignToken 以免改本文件既有 import 行，
+      // 用与 tokenExpiryMs 同口径的「第二段是毫秒时间戳」直接断言）
+      assert.ok(Number(expired.split(":")[1]) < Date.now(), "夹具前提：令牌已过期（存在但无效）")
+      const { out, st } = await runVerdictCase(sid5, home5, guessedFail, {
+        seedToken: expired,
+        seedRecord: { token: expired, issuedAt: Date.now() - 7200_000, expiresAt: Date.now() - 60_000 },
+        pendingToken: v3Pending(),
+      })
+      assert.equal(st.designToken, null, "⑤ 过期令牌不构成要保的授权 → **仍撤销**（锁「有效而非存在」）")
+      assert.equal(loadTokenRecord(sid5, home5), null, "⑤ 磁盘记录被撤销")
+      assert.ok(out.includes("未给出 VERDICT 行；回落启发式判定为不通过"), "⑤ 撤销支诊断: " + out)
+      assert.ok(!out.includes("未撤销"), "⑤ 守卫不得命中已过期令牌: " + out)
+    } finally { dropSession(sid5) }
   } finally { rmRoot(root) }
 })
 

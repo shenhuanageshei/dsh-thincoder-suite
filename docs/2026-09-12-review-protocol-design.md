@@ -1,7 +1,7 @@
 # 设计：评审协议增强（四值词表 / VERDICT 收尾行 / 判定规则 R1–R7e）—— 批 3
 
 - 日期：2026-09-12
-- 需求档：[`2026-09-12-review-protocol-requirements.md`](./2026-09-12-review-protocol-requirements.md)（7 用户故事 / 6 非功能标准）
+- 需求档：[`2026-09-12-review-protocol-requirements.md`](./2026-09-12-review-protocol-requirements.md)（9 用户故事 / 8 非功能标准 —— D-33/D-34 并入后由 7/6 扩为 9/8）
 - 设计输入：**会诊 id 2**（kimi-k3 交付完整设计并做出一处关键勘察纠正 —— 见需求档 §2.2；其余模型超时）
 - 决策：用户裁定 **VERDICT 并存**（不删启发式）；**D-a…D-d 全按推荐**（§5 逐条记录与理由）
 - 章节：按 `METHODOLOGY.md`「设计文档的成文流程与必备章节」九节 + 图示
@@ -10,8 +10,9 @@
 >
 > 本档正文里的 `lib/advisor.mjs:NNNN` 一类行号**已于批 3 处置轮按工作树逐个重测并修正**
 > （此前是**设计期快照** as-of 2026-09-12 设计定稿时；批 3 实施后整体右移，
-> 实测：原 `:1463` 的 `verdictPassed` 谓词 → 现 **`:1582`**；
-> 原 `:1489-1496` 的诊断支 → 现 **`:1629-1641`**；`state.designToken = null` → 现 **`:1620`**）。
+> 实测：原 `:1463` 的 `verdictPassed` 谓词 → 现 **`:1593`**（`const verdict = parseVerdict(result)` 在 `:1592`）；
+> 原 `:1489-1496` 的诊断支 → 现 **`:1652-1664`**；`state.designToken = null` → 现 **`:1643`**）。
+> **FR-6 收口小轮再次整档重测**：上列三处已按工作树重测并修正（`advisor.mjs` 因守卫新增 25 行而整体右移，差值与映射逐处核对过）；定位依旧**以符号名为准**。
 >
 > **定位方式以符号名为准，不以行号为准**（行号会随每次改动漂移，符号名不会）：
 >
@@ -33,7 +34,7 @@
 
 ## §1 背景
 
-评审协议目前有三处不对称（详见需求档 §2）：
+评审协议目前有**四处**不对称（详见需求档 §2；第 4 项为后续补入，故本节最初写「三处」）：
 
 1. **词表少一值** —— 「已派工未落地」无词可表，裁决表被迫撒谎；
 2. **结论靠猜** —— 宿主用正则从散文里猜通过与否（`lib/advisor.mjs:741`，三版踩坑）；
@@ -51,20 +52,20 @@
 | P1 | 裁决表无法表达在途 | 三值词表（四处复制） | `lib/prompts/discipline.md:4`、`lib/prompts/engineering.md:217`、`lib/index.mjs:790`、`README.md:51` |
 | P2 | 宿主猜散文 | 启发式正则 + 严重度单元格锚定 | `lib/advisor.mjs:741`、`:735`（`APPROVAL_VERDICT_RE`）、`:740`（`RED_SEVERITY_CELL_RE`）、`:736`（`RESOLVED_MARK_RE`） |
 | P3 | 判据不固定 | 无 R1–R7e | — |
-| P4 | 假承诺 + 代码评审无判定 | 宿主只在 design 分支消费结果 | `lib/advisor.mjs:1582`（唯一调用点）、`:1572`（分支）、`:1477`（reviewType 作用域校验所在行） |
+| P4 | 假承诺 + 代码评审无判定 | 宿主只在 design 分支消费结果 | `lib/advisor.mjs:1593`（唯一调用点）、`:1582`（分支）、`:1487`（reviewType 作用域校验所在行） |
 | **P5** | **评审员表达了通过但宿主未识别 → 工程流程静默卡死**（D-33 现场复现） | 启发式的**通过词表只有三个词**（`通过` / `批准` / `approved`），且通过态测试样本**全用同一句英文** | 词表实测：`lib/advisor.mjs:735` 的 `APPROVAL_VERDICT_RE`；实测 `isApprovalVerdict("I approve this design.")===false`、`("Approval granted.")===false`、`("VERDICT: PASS")===false`；断言样本 `test/advisor-config.test.mjs:391-433` |
-| **P6** | **判定失败不可见** | 诊断只在 `verdictPassed` 为真时追加 | `lib/advisor.mjs:1631-1639` |
-| **P7** | **撤销条件过宽：一次后续轮的 miss 会销毁先前已签发的有效令牌**（D-34，会诊独立提出） | `if (completed)` 覆盖「每一个完成但未签发的 design 轮」——含 verdict 通过但回显缺失，以及**成功签发之后的后续轮** | `lib/advisor.mjs:1617-1628`（`state.designToken = null` + `removeTokenRecord`，无「本轮是否曾签发」的判别） |
+| **P6** | **判定失败不可见** | 诊断只在 `verdictPassed` 为真时追加 | `lib/advisor.mjs:1654-1664` |
+| **P7** | **撤销条件过宽：一次后续轮的 miss 会销毁先前已签发的有效令牌**（D-34，会诊独立提出） | `if (completed)` 覆盖「每一个完成但未签发的 design 轮」——含 verdict 通过但回显缺失，以及**成功签发之后的后续轮** | `lib/advisor.mjs:1637-1651`（`state.designToken = null` + `removeTokenRecord`，无「本轮是否曾签发」的判别） |
 
 **P5/P6 的现场证据链**（2026-09-12，父侧逐条实测）：
 
 1. 评审 PASS，评审员回「**无未决 🔴、无新增阻塞项，设计档可交 eng_coder 实施**」；
-2. 批准码铸造并随提示词送达评审员（`:1546-1548` 注入，**每轮无条件**发生——与签发判定无关）；
+2. 批准码铸造并随提示词送达评审员（`:1556-1558` 注入，**每轮无条件**发生——与签发判定无关）；
 3. 词表命中数 = **0**（文本中 `通过`=0、`批准`=0；唯一的 `approved` 出现在评审员复述指令的
    `not approved` 里，被当作**否定语境**跳过）→ `isApprovalVerdict` 返回 false；
-4. `verdictPassed = true && false = false` → `:1588` 整条 if 为假 → 不签发、不落盘；
-5. `:1617-1628` 因 `completed` 为真而**撤销**（P7）→ 连历史记录一起清掉；
-6. `:1631-1639` 的诊断被 `verdictPassed` 门住 → **完全静默**；`eng_coder` 报「从未签发」，用户看不到真因。
+4. `verdictPassed = true && false = false` → `:1598` 整条 if 为假 → 不签发、不落盘；
+5. `:1637-1651` 因 `completed` 为真而**撤销**（P7）→ 连历史记录一起清掉；
+6. `:1654-1664` 的诊断被 `verdictPassed` 门住 → **完全静默**；`eng_coder` 报「从未签发」，用户看不到真因。
 
 **这是本批最重要的定位修正**：我最初把 P5 描述为「**中文**评审被误判」——
 **不准确**。精确说法是「**通过表达的措辞未命中三词词表**」：换成英文 `I approve this design.` 同样失败。
@@ -212,7 +213,7 @@ MUST_FIX_RE = /^\s*(?:\*\*)?🟡(?:\*\*)?\s*\(?\s*must[ -]?fix\b/i
 
 ### §4.4 判定失败可见（FR-4，D-33）
 
-**问题**：`:1629-1641` 的返回支里，诊断只在 `verdictPassed` 为真时追加。为假时**完全静默** ——
+**问题**：`:1652-1664` 的返回支里，诊断只在 `verdictPassed` 为真时追加。为假时**完全静默** ——
 用户只看到下游的「从未签发」，看不到上游真因（本次实测就是如此）。
 
 **改法**：把该支的返回扩为**可区分的多路诊断**（与 §5.4 的解析结果一一对应）：
@@ -221,33 +222,80 @@ MUST_FIX_RE = /^\s*(?:\*\*)?🟡(?:\*\*)?\s*\(?\s*must[ -]?fix\b/i
 |---|---|
 | `pass` + 无阻塞行 + 回显有效 | 正常签发（不变） |
 | `pass` + 有阻塞行 | 「verdict 与表格矛盾」——点名存在未解决阻塞行 |
-| `pass` + 回显缺失/不符/旧格式 | 既有诊断「批准码校验失败——请重跑评审」（保留原措辞；文案常量 `VERDICT_DIAG.echo` 在 `:850`，选用点 `:1634`） |
+| `pass` + 回显缺失/不符/旧格式 | 既有诊断「批准码校验失败——请重跑评审」（保留原措辞；文案常量 `VERDICT_DIAG.echo` 在 `:852`，选用点 `:1657`） |
 | `fail` | 「评审员判定为不通过」+ 撤销既有签发 |
 | `invalid`(duplicate/misplaced/bad-value) | 「verdict 行格式非法（原因：X）」+ 点名要求格式 |
 | **`absent` + 回落判定为不通过** | **「未给出 VERDICT 行；回落启发式判定为不通过」** —— **D-33 的正解**：用户由此知道不是「评审没过」，而是「说了通过但宿主没认出来」 |
+| **`absent` + 回落判定为不通过 + 已有有效令牌**（FR-6 守卫） | **「本轮评审未签发新令牌：未给出 VERDICT 行；回落启发式判定为不通过…；本会话已有一枚有效令牌，因此本次判定未撤销既有签发」** —— 与上一行**必须可区分**（撤销 / 未撤销是两种不同结果）；本轮**不签发**新令牌这一点同样要点名 |
 | `absent` + 回落判定为通过 | 正常签发（回落路径，`[负]` 锁住：AC-V6） |
 
 **关键**：最后一类之外的所有「未签发」都必须**点名原因**。**任何静默的未签发都视为缺陷**（N7）。
 
-### §4.5 撤销条件收紧（FR-5，D-34，会诊独立提出）
+### §4.5 撤销条件收紧（FR-5 + FR-6，D-34，会诊独立提出；FR-6 = 设计评审 #1 发现 #1，用户裁定方案 A）
 
-**问题**：`:1617-1628` 的 `if (completed)` 会在**每一个完成但未签发的 design 轮**触发撤销 —— 包括
+**问题**：`:1637-1651` 的 `if (completed)` 会在**每一个完成但未签发的 design 轮**触发撤销 —— 包括
 「verdict 通过但回显缺失/不符」（AC-6 的负例恰好断言了这个行为）以及**成功签发之后的后续轮**。
 后果：**一次后续轮的启发式 miss 可以销毁一枚先前已签发的有效令牌**（本次现场极可能就是这样把记录删掉的）。
 
 **改法**：撤销只在**明确的否定裁决**下发生，且**永不静默**：
 
 ```
-撤销条件（三选一才撤销）：
+撤销条件（实现 = advisor.mjs 的 explicitFail || (heuristicFail && !heuristicFailGuarded)）：
   ① verdict 行显式为 FAIL                 → 撤销 + 诊断
-  ② 无 verdict 行 且 回落判定为不通过      → 撤销 + 诊断（含「未给出 VERDICT 行」）← D-33 情形
+  ② 无 verdict 行 且 回落判定为不通过      → **先查是否已有「有效」令牌**：
+                                              无 → 撤销 + 诊断（含「未给出 VERDICT 行」）← D-33 情形
+                                              有 → **仅诊断，不撤销** ← FR-6（方案 A）守卫
   ③ 回显缺失/不符（verdict 通过）          → **仅诊断，不撤销**（令牌语义仍有效；缺的是回显）
-「成功签发之后的后续轮」→ **不撤销**（链已闭合，令牌继续有效至过期/续期）
 ```
+
+> **④ 的准确口径（设计评审 #1 的修订，2026-09-12；残余已由 FR-6 收口小轮补齐）**
+>
+> 收紧**前**是 `if (completed)`：它覆盖**每一个完成但未签发的 design 轮**。收紧**后**，**判定通过**的轮
+> （① 不成立、② 的三元分支落在 pass 侧）不再撤销 —— 这正是 **AC-V6 / AC-V21 ③** 断言的行为（verdict PASS +
+> 回显缺失 → 只诊断）。
+>
+> **FR-5 当时并未提供独立的「④ 后续轮守卫」**：因此一个「无 VERDICT 行 + 回落 miss」的后续轮会按 ② 撤销，
+> **哪怕是成功签发之后的轮** —— D-34 的危害在这条路径上仍然可达（③ 挡住的是「有 VERDICT 的后续轮」，
+> 挡不住「无 VERDICT 的后续轮」）。该残余即设计评审 #1 的发现 #1（父侧查源码核实：文档此前承诺的
+> 「成功签发之后的后续轮不撤销」在当时**并不存在**对应实现）。
+>
+> **两条出路 —— 已裁定并实施（用户 2026-09-12 选 A；实现落点 `lib/advisor.mjs` 的 `heuristicFailGuarded`）**：
+> - **A** ✅ **已裁定并实施（FR-6，批 3 收口小轮）**：给 ② 加守卫 —— 本轮之前已有已签发的**有效**令牌时
+>   **不撤销，只诊断**。于是本档承诺的 ④（「成功签发之后的后续轮 → 不撤销」）在**无 VERDICT 的后续轮**上
+>   也**成为事实**（此前只在「有 VERDICT 的后续轮」上成立）；
+> - ~~B：如实记录为显式接受的取舍（方向 fail-closed；靠「后续轮都带 VERDICT 行」规避）~~ —— 未采纳。
+>
+> **A 的精确语义（父侧细化；实施依据，已与 `lib/advisor.mjs` 的守卫逐支对齐）** —— 区分「明说」与「猜」：
+>
+> | 情形 | 判据 | 行为 |
+> |---|---|---|
+> | ① 明说 FAIL | `verdict.kind === "fail"` | **仍撤销**（明确的否定裁决，不是猜测） |
+> | ② 猜是没过 | `verdict.kind === "absent"` ∧ 回落判不通过 | **先查是否已有已签发的有效令牌**：有 → **只诊断，不撤销**；无 → 撤销（保留 D-33 的 fail-closed 语义） |
+> | ③ 说过了但回显缺失/不符 | `pass` 侧 | 只诊断，不撤销（不变） |
+>
+> **为什么 ① 仍撤销**：① 是评审员**明确告知**未通过；而 ② 是宿主**看不懂**的结果 —— 不该拿猜测去销毁既得的有效授权（这正是 D-34 的危害本体）。
+> 守卫的检查对象 = `state.designToken` **且** `validateDesignToken(state.designToken)` 为真（「有效」而非「存在」；已过期的令牌本就不能用，不构成要保的授权）。
+> **两条诊断必须可区分（N7）**：撤销支 = `VERDICT_DIAG.absentFail`（「评审未签发：未给出 VERDICT 行；回落启发式判定为不通过…」）；
+> 守卫生效支 = `VERDICT_DIAG.absentFailKept`（「本轮评审未签发新令牌：…；本会话已有一枚有效令牌，因此本次判定未撤销既有签发」）。
+> 逐支用例见 §7.2 的 **AC-V23**（① 仍撤销 / ② 无有效令牌 → 撤销 / ③ 有有效令牌 → 不撤销 / ④ pass 侧只诊断 / ⑤ 已过期令牌 → 仍撤销）。
+>
+> **实施收口注（2026-09-12，落地后的三条裁定）**
+>
+> 1. **保留实施者的结构改进 `revokeReason`（单一事实源）** —— 原设计只规定了守卫公式与「命中支改用 `absentFailKept`」。
+>    落地时实施者把「撤不撤销、因何撤销」收敛为单一变量 `revokeReason`，撤销动作、`console.warn` 留痕标签、
+>    诊断文案**三者同源**。父侧裁定**保留**：原写法把同一判断写两遍，两支各自演化就可能出现
+>    「真撤销了、诊断却说未撤销」—— 正是 N7 要防的漂移。真值 ⟺ `explicitFail || (heuristicFail && !heuristicFailGuarded)`，与本节公式等价。
+> 2. **守卫**不校验**令牌归属周期**（不比对 `state.pendingDesignToken` 的 uuid）—— 父侧裁定**维持现状**：
+>    该行为已被 **AC-V23 ③ 显式锁定**（夹具是「有效但与本轮无关」的令牌，断言不撤销），是**有意的语义**而非缺口；
+>    「只保同一评审周期的令牌」若要做，属**新需求**，须先改本节再改码。
+> 3. **守卫生效支不发 `console.warn`** —— 父侧裁定**维持**：§4.5 的留痕要求只针对**撤销路径**
+>    （「令牌为什么没了」才需要追查）；守卫生效时令牌**没被动过**，可观测性由返回文本的诊断承担（N7 不要求日志）。
+>    若将来要求对称留痕，须先入本节。
 
 **为什么 ③ 不再撤销**：回显是**签发时的**门禁，它管的是「这一轮该不该新签发」；
 它不构成「把已签发的作废」的理由 —— 那会让一次疏忽（忘带回显）升级为**丢掉已有授权**。
-而 ① ② 是明确的否定裁决，撤销是对的（评审没过就不该拿着旧令牌开工）。
+而 ① ②（在**无有效令牌**时）是明确的否定裁决（①）或 fail-closed 的保守判定（②），撤销是对的
+（评审没过 / 宿主判不准时不该拿着旧令牌开工）；**已有有效令牌时 ② 只诊断**，理由同 ③。
 
 **可观测性**：撤销路径**必须留痕**（`removeTokenRecord` 的布尔返回值当前被丢弃 —— 收集它并 warn），
 否则「令牌为什么没了」依然是谜（这正是 D-33 排查时最耗时的一步）。
@@ -283,7 +331,7 @@ function hasUnresolvedBlockingRow(text) { /* 复用 RED_SEVERITY_CELL_RE + MUST_
 | `parseVerdict(result)` | `result` 可以是任意值（内部 `String(result ?? "")`）；不要求是字符串 | **纯函数、无副作用、不抛**。返回四种形态之一：`{kind:"pass"}` / `{kind:"fail"}` / `{kind:"invalid",reason}` / `{kind:"absent"}`。保证：`kind==="pass"` ⟹ 该行是**最后一行非空内容**且取值恰为 `PASS`（大小写 / **成对** `**` / **紧跟取值**的一个尾句号容忍后）。**绝不**在 `kind==="absent"` 之外返回 absent |
 | `hasUnresolvedBlockingRow(text)` | 同上，任意值 | 纯函数、无副作用、不抛。**内部必须先按 §4.3 的管线抽取单元格**（滤表格行 → `split("|")` → trim → 逐单元格匹配），不得对整行匹配。`true` **当且仅当**至少一行满足：**某单元格**（🔴 ≤16 / `🟡 must-fix` ≤24，见 §4.3 收口注）是 🔴 或 `🟡 must-fix`，**且**该行不含已解决标记（`RESOLVED_MARK_RE`）或含未解决标记（`UNRESOLVED_MARK_RE`）。方向：**宁可误判 true**（fail-closed，多跑一轮评审）**不可误判 false**（错发凭证） |
 
-**唯一调用方**：`lib/advisor.mjs` 的 `finalize`（`:1572-1643`，design 分支）。两者的结果做 AND 后决定签发，**不得**在任何其他路径消费（尤其：代码评审路径不得消费 —— 决策 D-d）。
+**唯一调用方**：`lib/advisor.mjs` 的 `finalize`（`:1582-1666`，design 分支）。两者的结果做 AND 后决定签发，**不得**在任何其他路径消费（尤其：代码评审路径不得消费 —— 决策 D-d）。
 
 ### §5.2 判定状态机
 
@@ -297,16 +345,18 @@ stateDiagram-v2
 
     Absent --> LegacyHeuristic: 回落（行为与今日等价）
     LegacyHeuristic --> Issue: heuristic=true ∧ 回显有效
-    LegacyHeuristic --> NoIssue: 其余
+    LegacyHeuristic --> Revoke: heuristic=false ∧ 无有效令牌（②：无 verdict + 回落判不通过）
+    LegacyHeuristic --> NoIssue: heuristic=false ∧ 已有有效令牌（FR-6 守卫：只诊断，不撤销）
+    LegacyHeuristic --> NoIssue: 回显缺失/不符（③：只诊断，不撤销）
 
     Invalid --> NoIssue: 拒绝 + 格式诊断（不回落到启发式）
-    Fail --> Revoke: 撤销既有签发
+    Fail --> Revoke: ① 撤销既有签发
 
     Pass --> RowScan: 阻塞行扫描（D-a/D-b）
     RowScan --> NoIssue: 存在未解决阻塞行 + 矛盾诊断
     RowScan --> EchoCheck: 无阻塞行
     EchoCheck --> Issue: 回显有效
-    EchoCheck --> NoIssue: 回显缺失/不符/旧格式
+    EchoCheck --> NoIssue: 回显缺失/不符/旧格式（③：只诊断，不撤销）
 
     Issue --> [*]
     NoIssue --> [*]
@@ -324,19 +374,22 @@ flowchart TD
     B -->|absent| F["回落 isApprovalVerdict<br/>（既有 20+ 断言锁定）"]
     C -->|有阻塞行| G["拒绝 + 「verdict 与表格矛盾」诊断"]
     C -->|无| H{"makeApprovalCodeRegex 命中?"}
-    F --> H
+    F -->|heuristic 通过| H
+    F -->|heuristic 不通过 ∧ 无有效令牌| D
+    F -->|heuristic 不通过 ∧ 已有有效令牌| J2["拒绝 + 「未给出 VERDICT 行」诊断<br/>（FR-6 守卫：不撤销既有有效令牌）"]
     H -->|是| I["签发：state + saveTokenRecord<br/>+ 剥离回显 + 有效期行"]
-    H -->|否| J["拒绝 + 批准码诊断"]
+    H -->|否| J["拒绝 + 批准码诊断（③：只诊断，不撤销）"]
     I --> K["eng_coder 可用"]
     D --> L["未签发"]
     E --> L
     G --> L
     J --> L
+    J2 --> L
 ```
 
 ### §5.4 宿主改动（谓词替换，最小 diff）
 
-`lib/advisor.mjs:1582` 的单个谓词替换：
+`lib/advisor.mjs:1593` 的单个谓词替换：
 
 ```js
 // 旧：const verdictPassed = completed && isApprovalVerdict(result)
@@ -348,9 +401,16 @@ const verdictPassed = completed && (
 )
 ```
 
-`:1588-1642` 的签发/撤销/持久化骨架**不动** —— 这是安全门禁该有的 diff 尺寸。
-**:1633-1639 的单条诊断扩为三路**（回显失败 / verdict 格式非法 / verdict 与表格矛盾），各自有用例
+`:1598-1665` 的签发/撤销/持久化骨架**不动** —— 这是安全门禁该有的 diff 尺寸。
+**:1654-1664 的单条诊断扩为多路**（回显失败 / verdict 格式非法 / verdict 与表格矛盾 /
+`absent` 回落判不通过〔撤销支 / 守卫未撤销支各一〕），各自有用例
 （主代理唯一的补救手段就是「重跑评审」，诊断指错方向等于送它进错误的洞）。
+
+**FR-6 收口小轮（`lib/advisor.mjs:1637-1651`）**：撤销的**判定条件**加一条守卫 ——
+`explicitFail || (heuristicFail && !heuristicFailGuarded)`，其中
+`heuristicFailGuarded = heuristicFail && Boolean(state.designToken) && validateDesignToken(state.designToken)`
+（守卫必须在任何 state 变更**之前**求值）；命中的那一支改用 `VERDICT_DIAG.absentFailKept`
+（「本轮未签发新令牌 + 原因 + 已有有效令牌故未撤销」）。谓词 `verdictPassed` 与签发骨架**仍然不动**。
 
 ### §5.5 R7e 的执行面（诚实说明）
 
@@ -392,7 +452,7 @@ const verdictPassed = completed && (
 
 | AC | 断言 |
 |---|---|
-| AC-V2 | PASS + 有效回显 → **签发**；回显被剥离；签发文案形状（`:1606`，设计期 `:1482`）保持 |
+| AC-V2 | PASS + 有效回显 → **签发**；回显被剥离；签发文案形状（`:1629`，设计期 `:1482`）保持 |
 | AC-V3 | PASS + 回显缺失/不符 → **不签发** + 「批准码校验失败」诊断 |
 | AC-V4 | FAIL + 有效回显 → **不签发**；`state.designToken === null`；`removeTokenRecord` 被调用 |
 | AC-V5 | INVALID（三种原因）→ 不签发 + 诊断**点名** `VERDICT: PASS\|FAIL` 格式 |
@@ -405,10 +465,11 @@ const verdictPassed = completed && (
 | AC-V11 | 截断表格夹具（启发式为真 / 为假各一）→ 两者均不签发（verdict 与回显**都是**末行 → 截断双失，双重 fail-closed） |
 | AC-V12 | `reviewType="code"` + `VERDICT: PASS` + 任意回显 → **不签发任何东西**，不触碰 token 路径（宿主只对 design 设门禁） |
 | **AC-V18** `[负]` | **D-33 回归锁**：夹具为**本次实测评审文本的忠实重建**（中文、含「无未决 🔴」「可交 eng_coder 实施」、末行批准码回显）—— 散文与表格**逐字保留**，但**末行回显的批准码由夹具待批令牌派生**（实测值为 `a6065235`，而批准码 = sha256(token 首段) 前 8 位、**无法反推**，只能派生，故不逐字保留；实施者已在 `test/advisor-config.test.mjs` 的夹具注释中披露）。加上 `VERDICT: PASS` 末行后**必须签发**；去掉 VERDICT 行则走回落（用于证明「VERDICT 修好了中文通过」）。**这条是把 D-33 钉死不再复发的锁** |
-| AC-V19 | **失败可见（N7）**：六类「未签发」路径**各自**给出可区分诊断 —— 特别地 `absent` + 回落判不通过 → 诊断须含「未给出 VERDICT 行；回落启发式判定为不通过」（D-33 情形）。**任何未签发路径若无诊断即红** |
+| AC-V19 | **失败可见（N7）**：六类「未签发」路径**各自**给出可区分诊断 —— 特别地 `absent` + 回落判不通过 → 诊断须含「未给出 VERDICT 行；回落启发式判定为不通过」（D-33 情形）。**任何未签发路径若无诊断即红**（`absent` + 回落判不通过 之下另有「已有有效令牌 → 未撤销」一支，由 **AC-V23 ③** 锁住其诊断的可区分性） |
 | AC-V20 | 中文通过语在**回落路径**下的诊断可读（D-33 的次生要求）：断言该诊断不被写成「评审未通过」（会误导），而是明说「评审员表达了通过但宿主未识别」 |
-| **AC-V21** | **D-34 撤销收紧**：① `verdict: FAIL` → 撤销 + 诊断；② 无 verdict + 回落判不通过 → 撤销 + 诊断；③ **verdict PASS 但回显缺失/不符 → 只诊断、`state.designToken` 与磁盘记录均不动**（`[负]` 锁住「不再因回显问题销毁已签发令牌」）；④ **成功签发后的后续轮** → 令牌仍在 |
+| **AC-V21** | **D-34 撤销收紧（FR-5）**：① `verdict: FAIL` → 撤销 + 诊断；② 无 verdict + 回落判不通过 **且无有效令牌** → 撤销 + 诊断（有有效令牌的那一支见 AC-V23 ③）；③ **verdict PASS 但回显缺失/不符 → 只诊断、`state.designToken` 与磁盘记录均不动**（`[负]` 锁住「不再因回显问题销毁已签发令牌」）；④ **成功签发后的后续轮（带 VERDICT: PASS）** → 令牌仍在 |
 | AC-V22 | 撤销路径留痕：断言 `removeTokenRecord` 的返回值被收集并在失败/发生时 warn（不再丢弃） |
+| **AC-V23** | **FR-6 守卫（方案 A）逐支**（设计审核见 §4.5；落点 = `test/advisor-config.test.mjs` 的 `AC-V23` 用例）：① 明说 FAIL（**且已有一枚有效令牌**）→ **仍撤销** + 诊断，且诊断中**不得**出现「未撤销」措辞（守卫不得渗进「明说」那一支）；② 猜是没过 + **无**有效令牌 → **仍撤销**（D-33 的 fail-closed 保留）；③ 猜是没过 + **有**有效令牌 → **不撤销**（state 与磁盘记录均不动）**且诊断可见**：必须点名「本轮未签发」+ 原因（未给出 VERDICT 行 / 回落判不通过）+「已有一枚有效令牌…未撤销」，且**不得**复用撤销支文案（两条诊断必须可区分，N7）；④ `pass` 侧回显缺失 → 只诊断、不撤销，且诊断**不得**误报为「未给出 VERDICT 行」；⑤ **已过期令牌（存在但无效）** + 猜是没过 → **仍撤销** —— 锁死「守卫检查的是**有效**而非**存在**」。**可证伪性**：③ 在守卫落地**之前**必红（撤销支会把已签发令牌清成 `null`，实施时已实测红并在交付报告留证） |
 
 ### §7.3 提示词↔解析器防漂移（N3 的核心）
 
@@ -426,7 +487,7 @@ const verdictPassed = completed && (
 > **AC-V17 已移除**（批 3 分歧审计 🔴 #1）：原断言「`node --test` 全量绿 + `package.json` dependencies 为空（N4）」
 > 不是单测可断言的对象，故**由 AC-28 与全量跑承担** —— **全量绿**由每次交付实际跑出的 `node --test`
 > 数字承担（不是断言能锁的东西）；**`dependencies` 为空**由 **AC-28**（`test/codex-runner.test.mjs` 的静态锁）承担。
-> 本表不再声称此处有用例。编号**留空不重排**：AC-V18…V22 已被测试与提示词静态断言逐名引用，重排会制造新的行号式漂移。
+> 本表不再声称此处有用例。编号**留空不重排**：AC-V18…V23 已被测试与提示词静态断言逐名引用，重排会制造新的行号式漂移。
 
 ---
 
@@ -436,6 +497,7 @@ const verdictPassed = completed && (
 |---|---|---|---|
 | 有 verdict、忘了回显 | EchoCheck | 不签发 + 既有诊断 | fail-closed ✅ |
 | 有回显、无 verdict | LegacyHeuristic | **回落判定**（并存条款本体） | 等价今日 ✅ |
+| 无 verdict + 回落判不通过 **且已有有效令牌** | LegacyHeuristic（FR-6 守卫） | **只诊断、不撤销**（本轮不签发；既有令牌继续有效至过期/续期）——诊断与撤销支可区分 | fail-safe ✅（不做多余销毁；守卫只认**有效**令牌，过期者不保） |
 | PASS + must-fix 🟡 | RowScan | 不签发（D-b） | fail-closed ✅ |
 | PASS + 普通 🟡/🔵 | EchoCheck | 签发（与「🟡/🔵 不阻塞」全局一致） | ✅ |
 | verdict 行**之后**还有文字 | Invalid(misplaced) | 不签发 + 格式诊断，**不回落** | fail-closed ✅ |
@@ -480,10 +542,12 @@ const verdictPassed = completed && (
 > **刷新纪律**：本列历史上两度因**逐点打补丁**而失准（2026-09-12 收尾轮、批 3 收尾轮）。
 > 故**整列重写**为本轮实测值，并规定：此后任何改动落地，只要动到表中文件，就必须**整列重新实测**，
 > 不得只改动过的那几行 —— 局部修补正是本列反复失准的成因。
+> **本轮（批 3 收口小轮 / FR-6）已按此纪律整列重测 13 个文件**：实测仅有 2 处变化
+> （`lib/advisor.mjs` 1997 → 2022、`test/advisor-config.test.mjs` 1815 → 1912），其余 11 处与本列原值一致。
 
 | 文件 | 现状行数 | 改动性质 |
 |---|---|---|
-| `lib/advisor.mjs` | 1997 | 新增 `parseVerdict` + `hasUnresolvedBlockingRow`（导出）+ 新正则 2 条；`:1582` 谓词替换；`:1629-1641` 诊断扩为三路 |
+| `lib/advisor.mjs` | 2024 | 新增 `parseVerdict` + `hasUnresolvedBlockingRow`（导出）+ 新正则 2 条；谓词替换；诊断扩为多路。**FR-6 守卫**：撤销块 `:1618-1651`（`heuristicFailGuarded` + **单一事实源 `revokeReason`**，撤销动作/留痕标签/诊断文案三者同源 ⇒ 杜绝「真撤销了而诊断说未撤销」的漂移）+ 守卫命中文案 `VERDICT_DIAG.absentFailKept`（`:866-871`）。行号随每次改动整体右移，**定位以符号名为准**（见档首行号口径块） |
 | `lib/prompts/advisor-round1.md` | 74 | 加 VERDICT 契约段 + R1–R7e 判据段 + 修 `:25` 那句假承诺 |
 | `lib/prompts/advisor-round2.md` | 53 | 加 VERDICT 契约 + 「Dispatched = 未验证即未解决」+ R3 议题级扩展 |
 | `lib/prompts/advisor-round3.md` | 49 | 同上 |
@@ -493,7 +557,7 @@ const verdictPassed = completed && (
 | `lib/prompts/engineering.md` | 233 | `:217` 词表 3→4 值 |
 | `lib/index.mjs` | 1155 | `:790` 工具描述词表 3→4 值 |
 | `README.md` | 342 | `:51` 响应表协议描述 3→4 值 |
-| `test/advisor-config.test.mjs` | 1815 | 新增 AC-V1…V18 用例（`parseVerdict` 单测 + 签发路径 + 提示词静态断言）；**T16（`:392-435`）原样不动**（N1）。批 3 处置轮另加：`AC-V16 [negative lock]`（把 T16 的 25 条断言独立复述并逐条重跑 + 源级计数锁）与 `AC-V1 (blind spots)`（尾句号/`**` 配对收紧的证伪用例 + D-c 容忍面反证） |
+| `test/advisor-config.test.mjs` | 1912 | 新增 AC-V1…V18 用例（`parseVerdict` 单测 + 签发路径 + 提示词静态断言）；**T16（`:392-435`）原样不动**（N1）。批 3 处置轮另加：`AC-V16 [negative lock]`（把 T16 的 25 条断言独立复述并逐条重跑 + 源级计数锁）与 `AC-V1 (blind spots)`（尾句号/`**` 配对收紧的证伪用例 + D-c 容忍面反证）。**FR-6 收口小轮**另加 `AC-V23`（守卫逐支 ①–⑤），并把 `AC-V21` ② 的预置令牌去掉（该支的前提是「**无**有效令牌」——见下方收口小轮表） |
 | `test/codex-runner.test.mjs` | 4610 | AC-V12（code 评审不签发）等少量集成用例 |
 | `test/preset-static.test.mjs` | 449 | **（批 3 实施补登）** AC-V13…V15c 的**提示词↔解析器静态断言**落点（契约字面串 / 四值词表 / R 规则锚点 / 假承诺负向锁）——设计评审 #2 只补登了 `advisor-msgs.mjs`，本文件是同一类漏登：缺此 AC-V13–V15c 无法合规实施 |
 
@@ -519,6 +583,13 @@ const verdictPassed = completed && (
 | #3 🟡 | 本档（§2/§4.2/§4.4/§4.5/§5.1/§5.4/§7.2/§7.3/§10 + 行号口径块）/ `docs/2026-09-12-review-protocol-requirements.md`（§2.0/§2.1/§2.2） | 行号引用按工作树**逐个重测并修正**（`advisor.mjs` 一族 / `advisor-msgs.mjs` 一族 / `advisor-round1.md` / `engineering.md`）；AC-V18 的过度声称改为**诚实措辞**（夹具为**忠实重建**，末行批准码**由夹具待批令牌派生** —— 实测 `a6065235` 无法反推，已在测试夹具注释中披露） |
 | #4 — | 无（仅回归） | 全量回归：`node --test` **303/303 绿**（基线 301，本轮净增 2 条：`AC-V16 [negative lock]` + `AC-V1 (blind spots)`）；`git diff --numstat test/advisor-config.test.mjs` 仍为**零删除** |
 
+**批 3 收口小轮（FR-6 / 方案 A —— 设计评审 #1 发现 #1 的收口；同批、同表所列文件，无新增文件）**：
+
+| # | 文件 | 改动 |
+|---|---|---|
+| #1 | `lib/advisor.mjs`（守卫 + 新诊断文案）/ `test/advisor-config.test.mjs`（新增 `AC-V23`）/ 本档（§2 / §4.1 / §4.4 / §4.5 / §5.1 / §5.2 / §5.3 / §5.4 / §7.2 / §7.4 / §8 / §10 / §11 + 行号口径块） | **守卫**：撤销条件由 `explicitFail \|\| heuristicFail` 收紧为 `explicitFail \|\| (heuristicFail && !heuristicFailGuarded)`（`heuristicFailGuarded = heuristicFail && Boolean(state.designToken) && validateDesignToken(state.designToken)`，在 state 变更前求值）；命中时改用新文案 `VERDICT_DIAG.absentFailKept`（「本轮未签发新令牌 + 原因 + 已有有效令牌故未撤销」）。于是 §4.5 的 ④ 承诺在「**无** VERDICT 的后续轮」上**成为事实**（这正是 D-34 的残余） |
+| #2 ⚠️ | `test/advisor-config.test.mjs`（`AC-V21` ② 的**预置令牌**一行） | **与硬约束「零删除」冲突的必改点**：`AC-V21` ② 原先把一枚**有效**令牌预置进 `state.designToken`，再断言「回落判不通过 → 撤销」——该前提与方案 A 直接矛盾（有效令牌**不得**被「猜」撤销）。故只删去该支的预置（`{ ...seedOpts(), ... }` → `{ pendingToken: ... }`），断言与语义不变。`git diff --numstat test/advisor-config.test.mjs` = **98 增 / 1 删**（唯一一删即此行）；**T16 区与 `isApprovalVerdict` 零改动**（N1 完好）。AC-V23 ③ 在守卫落地**前**必红（实施时已实测红并留证） |
+
 ---
 
 ## §11 部署注意（非代码）
@@ -527,3 +598,6 @@ const verdictPassed = completed && (
    生效判据：设置页/会话中评审员回复的末行出现 `VERDICT:` 行。
 2. 本批**不改任何缺省值**，无运维动作。
 3. 兼容性：本批只**新增**一个可选信号 + 扩一个词表；旧格式回复（无 VERDICT、三值表）仍按回落路径处理，**不产生升级中断**。
+4. **FR-6 收口小轮**：改动在宿主侧（`lib/advisor.mjs`），随插件重启生效；**不改提示词、无配置面、无运维动作**。
+   唯一可观测变化：已有有效令牌的会话里，「无 VERDICT 行 + 回落判不通过」的后续轮**不再**丢掉令牌，
+   其诊断由「评审未签发：…」变为「本轮评审未签发新令牌：…已有一枚有效令牌，因此本次判定未撤销既有签发」。
