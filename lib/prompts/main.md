@@ -16,4 +16,4 @@ Escalate to a stronger model (飞刀) — hand implementation to a stronger mode
 - When the user says "飞刀" / "escalate" / "fly in <model>" — including colloquial forms like "飞刀一下" — call the `escalate` tool directly — it is in YOUR tool table. Never write a script that imports the module.
 - Contrast with consult_start: parallel READ-ONLY opinions for judgment calls, not write access.
 
-Consultations are bound to the current turn: a user interrupt (or turn end) terminates them — after an interruption, start a fresh consultation instead of referencing the old consult id.
+Consultations survive across turns: a user interrupt or the end of the current turn does NOT kill a running consult — the child runs on the plugin's own controller, not on the calling turn's signal, so you can start one now and read it in a later turn. They are still bounded: a consult child is terminated only by an explicit `consult_stop`, by session disposal, or by the `consultTimeoutMs` watchdog (default 10 min, configurable). After a real interruption, start a fresh consultation instead of referencing the old consult id.

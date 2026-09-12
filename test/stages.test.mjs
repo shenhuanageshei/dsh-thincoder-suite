@@ -6,7 +6,7 @@
 // 依赖的契约——fixture 由 git HEAD 的原始 buildCoderBrief 生成，见交付报告）。
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { randomUUID, createHmac } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { dirname, join, resolve } from "node:path"
 import { readFileSync, mkdtempSync, rmSync } from "node:fs"
@@ -25,11 +25,9 @@ const mkHome = () => mkdtempSync(join(tmpdir(), "thincoder-f13-"))
 const rmHome = (h) => { try { rmSync(h, { recursive: true, force: true }) } catch { /* 已清理 */ } }
 const readFixture = (name) => readFileSync(new URL("./fixtures/" + name, import.meta.url), "utf8")
 
-/** 铸造一枚格式合法的 design token（uuid:expiresAt:hmac16）。 */
+/** 铸造一枚格式合法的 design token（uuid:expiresAt，两段；D-30 删除了 HMAC 签名腿）。 */
 function makeToken(expiresAt = Date.now() + 3600_000) {
-  const secret = process.env.THINCODER_TOKEN_SECRET || "thincoder-default-secret"
-  const payload = randomUUID() + ":" + expiresAt
-  return payload + ":" + createHmac("sha256", secret).update(payload).digest("hex").slice(0, 16)
+  return randomUUID() + ":" + expiresAt
 }
 
 /** eng 会话 fixture：engineering=true + 有效 token。 */

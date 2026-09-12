@@ -8,7 +8,7 @@
 // node:test 零依赖；临时 DSH_HOME（storPathOverride 注入缝或 env）不碰真实 $DSH_HOME。
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { randomUUID, createHmac } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { dirname, join, resolve } from "node:path"
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs"
@@ -24,6 +24,8 @@ import { runAdvisorReview, runAdvisorConfigTool } from "../lib/advisor.mjs"
 import { engineeringToggle, runEngCoder, attachEngineeringSection } from "../lib/eng.mjs"
 import { apply, applySessionOverride, resetSessionOverride, makeApiHandler } from "../lib/index.mjs"
 import { saveTokenRecord, loadTokenRecord, resolveTokenStorePath } from "../lib/token-store.mjs"
+import { ENG_TOKEN_TTL_MAX_MS } from "../lib/config-store.mjs"
+import { computeDocHash } from "../lib/doc-hash.mjs"
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -34,11 +36,9 @@ process.env.DSH_HOME = ""
 const mkHome = () => mkdtempSync(join(tmpdir(), "thincoder-f12-"))
 const rmHome = (h) => { try { rmSync(h, { recursive: true, force: true }) } catch { /* 已清理 */ } }
 
-/** 铸造一枚格式合法的 design token（uuid:expiresAt:hmac16，同 advisor 签发口径）。 */
+/** 铸造一枚格式合法的 design token（uuid:expiresAt，两段；D-30 删除了 HMAC 签名腿）。 */
 function makeToken(expiresAt = Date.now() + 3600_000) {
-  const secret = process.env.THINCODER_TOKEN_SECRET || "thincoder-default-secret"
-  const payload = randomUUID() + ":" + expiresAt
-  return payload + ":" + createHmac("sha256", secret).update(payload).digest("hex").slice(0, 16)
+  return randomUUID() + ":" + expiresAt
 }
 
 /** advisor 用 agent stub（route 走 agent options；deriveMessages 空）。 */
@@ -432,6 +432,112 @@ test("T6: removeSessionState deletes the entry; save-time sweep drops >7d orphan
     // TTL 边界内（恰好 7d 前 - 1s）的条目仍可 load（写时清扫只删超限）
     assert.ok(loadSessionState("keep", home), "TTL-valid entry loadable")
   } finally { rmHome(home) }
+})
+
+// ————————————— D-30/AC-17（FR-T8 缺口 G2）：清扫回归 — 续期输入不得被别的会话扫掉 —————————————
+// 修复前「过期即删」会顺手清掉别的会话那条已过期但带 docHash 的记录（= 续期唯一输入），
+// 让「重启后续期」头号场景非确定性地失败。新规则：过期 + 有 docHash → 保留（+30d 上限）；
+// 过期 + 无 docHash → 仍删；畸形 → 仍删。
+
+test("AC-17: an expired record WITH docHash survives another session's saveTokenRecord; one WITHOUT docHash is still swept", () => {
+  const home = mkHome()
+  const sidKeep = "d30-keep"      // 过期 + docHash → 保留（续期输入）
+  const sidDrop = "d30-drop"      // 过期 + 无 docHash → 删
+  const sidOld = "d30-old"        // 过期 + docHash 但超出 30d 保留期 → 删（防无界累积）
+  const sidBad = "d30-bad"        // 畸形（expiresAt 非有限数）→ 删
+  const sidWriter = "d30-writer"  // 触发清扫的另一个会话
+  const expiredTok = (e) => randomUUID() + ":" + e
+  try {
+    const now = Date.now()
+    const hash = computeDocHash([]).hash // 任意非空字符串即可（本用例只验证清扫分支，不动指纹语义）
+    mkdirSync(join(home, ".thincoder"), { recursive: true })
+    writeFileSync(resolveTokenStorePath(home), JSON.stringify({
+      version: 1,
+      tokens: {
+        [sidKeep]: { token: expiredTok(now - 60_000), issuedAt: now - 7_200_000, expiresAt: now - 60_000, docHash: hash, docPaths: ["D:/x/a.md"] },
+        [sidDrop]: { token: expiredTok(now - 60_000), issuedAt: now - 7_200_000, expiresAt: now - 60_000 },
+        [sidOld]: { token: expiredTok(now - ENG_TOKEN_TTL_MAX_MS - 120_000), issuedAt: now - 9_000_000, expiresAt: now - ENG_TOKEN_TTL_MAX_MS - 120_000, docHash: hash },
+        [sidBad]: { token: "junk", issuedAt: 1, expiresAt: "soon" },
+      },
+    }))
+    // 别的会话写入（= 会触发全量清扫）
+    const fresh = randomUUID() + ":" + (now + 3_600_000)
+    assert.equal(saveTokenRecord(sidWriter, { token: fresh, issuedAt: now, expiresAt: now + 3_600_000 }, home), true)
+    const tokens = JSON.parse(readFileSync(resolveTokenStorePath(home), "utf8")).tokens
+    assert.ok(tokens[sidKeep], "过期但有 docHash 的记录必须存活（它是续期判定的唯一输入——G2 回归锁）")
+    assert.equal(tokens[sidKeep].docHash, hash, "指纹原样保留")
+    assert.deepEqual(tokens[sidKeep].docPaths, ["D:/x/a.md"], "路径表原样保留")
+    assert.equal(tokens[sidDrop], undefined, "过期且无 docHash → 仍被清扫（现状语义不变）")
+    assert.equal(tokens[sidOld], undefined, "过期 + docHash 但超出 expiresAt + 30d → 删（防无界累积，锚点 = expiresAt）")
+    assert.equal(tokens[sidBad], undefined, "畸形记录 → 仍删")
+    assert.equal(tokens[sidWriter].token, fresh, "触发写入的会话自身记录落盘")
+    // 存活记录真的还能读（= 它确实可用作续期输入）
+    assert.equal(loadTokenRecord(sidKeep, home).docHash, hash)
+  } finally { rmHome(home) }
+})
+
+// ————————————— D-30/AC-16（负 / D7）：未过期路径**不做**文档校验 —————————————
+// 显式接受的取舍（需求档 §5.3）：否则每次合法文档澄清都强制重评，等于把痛点换个位置。
+// 本用例把「指纹故意与当前文档不符」摆好——若未过期路径顺带校验文档，必然误拒。
+
+test("AC-16: [负] an UNEXPIRED token passes even though the bound doc fingerprint cannot match (unexpired path does no doc validation)", async () => {
+  const home = mkHome()
+  const sid = "d30-ac16-" + randomUUID()
+  try {
+    const state = sessionState(sid)
+    state.engineering = true
+    const token = makeToken() // 1h 后过期
+    state.designToken = token
+    assert.equal(saveTokenRecord(sid, {
+      token, issuedAt: Date.now(), expiresAt: Date.now() + 3_600_000,
+      docHash: "0".repeat(64),                                  // 与任何真实文档都不可能匹配
+      docPaths: [join(home, "gone", "never-existed.md")],       // 且该文档根本不存在
+    }, home), true)
+    const started = []
+    const out = await runEngCoder(makeEngDeps(sid, home, started), { task: "implement x", designToken: token })
+    assert.ok(out.includes("eng_coder delivery:"), "未过期 → 照常放行（不做文档校验）: " + out)
+    assert.ok(!out.includes("has CHANGED") && !out.includes("no longer readable"), "不得触发任何文档检查文案")
+    assert.equal(started.length, 1)
+    assert.equal(state.designToken, token, "未过期路径不改写令牌（不续期）")
+    assert.equal(loadTokenRecord(sid, home).token, token, "磁盘记录亦不变")
+  } finally { dropSession(sid); rmHome(home) }
+})
+
+// ————————————— D-30/AC-20：新字段不进 session-state.json（对齐 T7 既有契约） —————————————
+
+test("AC-20: docHash / docPaths never appear in session-state.json (or in the persisted view / restore whitelist)", async () => {
+  const home = mkHome()
+  const sid = "d30-ac20-" + randomUUID()
+  try {
+    const agent = makeAgent(sid)
+    const out = await runAdvisorReview({ llm: approvingLlm() }, {
+      agent, config: {}, reviewType: "design",
+      documents: ["docs/2026-09-02-session-state-stages-design.md"],
+      storPathOverride: home,
+    })
+    assert.match(out, /Approved\. Pass this exact token to eng_coder/, out)
+    const state = sessionState(sid)
+    assert.ok(state.pendingDocHash, "内存态确实持有指纹（否则本用例会退化成空断言）")
+    assert.ok(state.pendingDocPaths.length > 0, "内存态确实持有路径表")
+    // 指纹落在 design-tokens.json（续期输入面）——证明它真的被写下来了
+    const tokenFile = JSON.parse(readFileSync(resolveTokenStorePath(home), "utf8"))
+    assert.equal(tokenFile.tokens[sid].docHash, state.pendingDocHash, "指纹在 token 存储里")
+    // 而 session-state.json（会话状态镜像）里一个字都不得有
+    const statePath = resolveSessionStorePath(home)
+    assert.ok(existsSync(statePath), "session 状态镜像已落盘")
+    const raw = readFileSync(statePath, "utf8")
+    assert.ok(!raw.includes("docHash") && !raw.includes("docPaths"), "键名不得出现: " + raw)
+    assert.ok(!raw.includes(state.pendingDocHash), "指纹值不得出现")
+    for (const p of state.pendingDocPaths) assert.ok(!raw.includes(p), "绑定路径不得出现: " + p)
+    const entry = JSON.parse(raw).sessions[sid]
+    assert.ok(!("docHash" in entry) && !("docPaths" in entry) && !("pendingDocHash" in entry) && !("pendingDocPaths" in entry))
+    // 视图函数与恢复白名单同样不含（单一链：写侧即净化）
+    const view = viewOfSessionState(state)
+    assert.deepEqual(Object.keys(view).sort(),
+      ["advisorOverride", "advisorRound", "engineering", "lastAdvisorOutput", "lastReviewType", "mutatedThisRun", "touchedFiles"].sort())
+    const norm = normalizeRestored({ pendingDocHash: "x", pendingDocPaths: ["/a.md"], advisorRound: 1 })
+    assert.ok(!("pendingDocHash" in norm) && !("pendingDocPaths" in norm), "恢复路径也丢弃这两个字段")
+  } finally { dropSession(sid); rmHome(home) }
 })
 
 test("T6-handler: session/disposed → removeSessionState called (index.mjs wiring, mirrors removeTokenRecord)", () => {

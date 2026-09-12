@@ -42,5 +42,5 @@
         engCoderEffort: low          # eng_coder 子代理推理档（可选 off|low|medium|high|max；缺省 low；非法值忽略并警告 N4）
         # 所有会话默认进工程模式（默认 false）
         engineering: false
-        engTokenTtlMs: 3600000       # design token 有效期（D-29：现已可从设置页覆盖；值域 600000..2592000000 = 10min..30d）
+        engTokenTtlMs: 604800000     # design token 有效期（D-30：缺省值改为 7d，本 base 同步；值域 600000..2592000000 = 10min..30d；现已可从设置页覆盖）
         consultTimeoutMs: 1800000    # 会诊各模型看门狗（D-29：现已可从设置页覆盖；值域 30000..3600000；原 600000 会让慢模型把整轮吊满 10min）

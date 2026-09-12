@@ -26,7 +26,7 @@
 | **自愈与封顶** | codex 连续 2 次失败自动回落 dsh 一轮；回落连败 2 次硬停并输出双路由诊断；空响应重试一次；任何零进度循环有界 |
 | **并发与状态安全** | 三机制 per-session single-flight（复合键）；后台完成代际检查（晚到结果不复活已重置状态）；全局 codex 并发准入 `maxConcurrent`（默认 8） |
 | **effort 智能校验** | 全部消费点按目标模型实际档位回落到**最近支持档**（等距向上取，绝不秒死）；设置页下拉目录化（dsh 行 /catalog、codex 行 codex catalog） |
-| **安全加固** | design token 以 `$DSH_HOME/.thincoder/token-secret` 持久化随机密钥签发（HMAC；无持久化面时响亮告警）；token/会话状态分文件落盘、回滚独立 |
+| **安全模型（D-30）** | design token = 两段式 `uuid:expiresAt`（无签名腿，密钥链已删除）：授权靠**记录全等匹配** + **设计文档集指纹**（续期门控）+ 流程纪律；token/会话状态分文件落盘、回滚独立 |
 
 ## 为什么 advisor 不是又一个 code review
 
@@ -60,18 +60,20 @@ design-before-code 的运行时门禁：
 
 - `eng`（action: `enter` / `exit`）—— 会话内切换架构师角色
 - enter 后模型只做需求澄清和设计文档，**设计评审由用户发起**——agent 不能自己评审自己拿 token
-- 设计评审的**每一轮**（round 1 与收敛轮）user 消息都携带 `## Approval Signal`——8 位批准码（`[APPROVE:<8hex>]`；token 每评审会话只铸造一次、每轮同码，token 本体不进提示词）。评审通过且无 🔴 Critical 时，advisor 回显 `[APPROVE:<code>]`，宿主校验命中后注入完整 design token（附有效期提示）；`eng_coder` 携带该 token 派实现子代理（token 机械校验，不消费、可多次 spawn；后续评审不通过则撤销，拒绝消息按「未签发 / 已过期 / 不一致」三态分别提示）
+- 设计评审的**每一轮**（round 1 与收敛轮）user 消息都携带 `## Approval Signal`——8 位批准码（`[APPROVE:<8hex>]`；token 每评审会话只铸造一次、每轮同码，token 本体不进提示词）。评审通过且无 🔴 Critical 时，advisor 回显 `[APPROVE:<code>]`，宿主校验命中后注入完整 design token（附有效期提示）；`eng_coder` 携带该 token 派实现子代理（token 机械校验，不消费、可多次 spawn；后续评审不通过则撤销，拒绝消息按「未签发 / 已过期 / 不一致」三态分别提示——**已过期**一态在 D-30 后细分为「自动续期 / 文档已变更 / 无法续期 / 旧版本令牌」四路，见下）
 - **双写门禁** —— 工程模式 ON 且主代理无有效 token 时，`write`/`edit` 对产品代码路径的调用被 `tools/pre-execute` 拦截：`src/**` 一律算产品代码，其他目录里非文档扩展名也算；`docs/**` 与根级文档（`.md` / `.txt` 等）豁免——那是架构师的产出物。间接写（shell 等）不拦，靠流程纪律，与上游同款取舍
 - 子代理交付后自动触发交付 code review；变更合并回父会话并重置评审预算
 
 ### design token 跨重启持久化（F10）
 
-评审签发的 design token 除内存态外还会镜像到 `$DSH_HOME/.thincoder/design-tokens.json`（profile 根下，与 `super-injector/`、`undo-snapshots/` 平级）——DSH 重启后，同一会话的 `eng_coder` 校验在内存无 token 时自动查盘：本 sessionId 有条目且回传 token 与记录全等且签名/有效期校验通过 → 回填内存态并通过，**有效期内无需重新评审**。
+评审签发的 design token 除内存态外还会镜像到 `$DSH_HOME/.thincoder/design-tokens.json`（profile 根下，与 `super-injector/`、`undo-snapshots/` 平级）——DSH 重启后，同一会话的 `eng_coder` 校验在内存无 token 时自动查盘：本 sessionId 有条目且回传 token 与记录全等且形状/有效期校验通过 → 回填内存态并通过，**有效期内无需重新评审**。
 
-- **只增不改签发协议**：签发判定、TTL（`engTokenTtlMs`）、三态拒绝（未签发 / 已过期 / 不一致）语义不变——磁盘只是第二存储，内存态仍是第一存储与签发源
-- **过期全量清扫**：每次写入时清理所有 session 的过期条目（不只本 session）；过期 token 在 `eng_coder` 校验路径自然落入 expired 拒绝（提示重跑评审铸新 token）
-- **fail-safe**：文件损坏 / 路径不可写 / 被外部删除 → 仅 `console.warn`，签发与校验不崩溃、不误放行；删除存储文件即回到 F10 前的纯内存行为
-- **安全模型**：token 短生命周期（TTL 1h 级）+ HMAC 绑定本机 `THINCODER_TOKEN_SECRET`，明文落盘基于本机信任模型（N3）
+- **只增不改签发协议**：签发判定、TTL（`engTokenTtlMs`，缺省 **7d**）、三态拒绝（未签发 / 已过期 / 不一致）语义不变——磁盘只是第二存储，内存态仍是第一存储与签发源；磁盘格式为**纯追加**（新增 `docHash`/`docPaths` 条件字段，无迁移脚本，旧记录读得动）
+- **过期续期（D-30 / FR-T5）**：过期时 `eng_coder` 先问「设计文档集变了吗」——`docHash`（路径 **+** 内容双绑的指纹）一致 → **同一 uuid 顺延** `expiresAt`（新令牌串随工具返回文本回传，须**替换你手里的副本**）；文档变了 / 不可读 / 无指纹 → 拒绝并指向重评。**未过期路径不做文档校验**（有意取舍：否则每次合法的文档澄清都要重评）
+- **清扫规则（D-30 / FR-T8）**：写入时全量清扫——畸形记录删除；未过期保留；已过期**且带** `docHash` 的记录**保留**（它是续期输入，保留期上限 = `ENG_TOKEN_TTL_MAX_MS` = 30d，锚点 = `expiresAt`）；已过期且无 `docHash` 删除
+- **fail-safe**：文件损坏 / 路径不可写 / 被外部删除 → 仅 `console.warn`，签发与校验不崩溃、不误放行（续期时写盘失败 → 内存仍顺延 + 响亮告警）；删除存储文件即回到 F10 前的纯内存行为
+- **安全模型（D-30 改写）**：token 是**两段式 `uuid:expiresAt`，无签名腿**——HMAC 签名与整条密钥链已删除（威胁模型见需求档 §2.3：门禁刻意 fail-open 属纪律护栏而非安全边界；真正挡住伪造的是**记录全等匹配**；密钥与 token 镜像同目录，能写后者者几乎必然能读前者）。新论证 = **全等匹配 + 设计文档集指纹 + 流程纪律**，不再依赖「短 TTL 限制暴露面」（TTL 已放宽到 7d，且文档未变即可续期）。**审批码**（`[APPROVE:<code>]`）保留但改为无状态派生 `sha256(uuid).slice(0,8)`——uuid 由宿主生成且从不进提示词，故对主代理不可预测
+- **升级注意（D-30）**：旧**三段式**令牌形状已不兼容（干净切换，**不做**旧格式兼容验签）——`eng_coder` 会明确报「旧版本令牌」并指引重跑一次评审。旧密钥环境变量 `THINCODER_TOKEN_SECRET` 已**无任何作用**（启动时一次性弃用告警）；磁盘上的 `.thincoder/token-secret` 成为**孤儿文件，声明不清理、留档**（删除属破坏性动作，不在本批范围）
 
 详细设计见 `docs/2026-09-02-thincoder-suite-extensions-design.md` §2.1。
 
@@ -236,12 +238,12 @@ engCoderEffort 输入。**保存全局默认** → 写 user 层（`config.json`�
           idleTimeoutMs: 300000        # 写任务假死判定（事件流静默窗口；缺省 300s）
         # 可选：其余开关
         engineering: false              # 所有会话默认进工程模式（默认 false）
-        engTokenTtlMs: 3600000          # design token 有效期（ms；合法 600000..2592000000 = 10min..30d）
+        engTokenTtlMs: 604800000       # design token 有效期（ms；合法 600000..2592000000 = 10min..30d；缺省 7d）
         consultTimeoutMs: 1800000       # 会诊子代理超时（ms；合法 30000..3600000 = 30s..1h；本仓库 base 示例值见 cordis.patch.yml）
 ```
 
 > **D-29**：`engTokenTtlMs` 与 `consultTimeoutMs` 现已可从**设置页**修改（此前只认 entry base 的这份配置，设置页改不动）。两键都进 user 层白名单，优先级 user > base。
-> 注意：token 过期后 `eng_coder` 会拒绝执行，而新 token **只能由一次新的设计评审签发** —— 所以 TTL 设得过短会导致反复重评审。若你的设计会话跨度大，建议调长 `engTokenTtlMs`。
+> **D-30**：token 缺省有效期改为 **7d**（`cordis.patch.yml` base 同步为 604800000），且**过期 ≠ 必须重评**——设计文档集未变时 `eng_coder` 自动续期（同一 uuid 顺延有效期，新令牌串随返回文本给出，请替换你手里的副本）；文档变了才必须重跑设计评审。TTL 仍是陈旧度护栏，不再是「短 TTL 限制暴露面」式的安全边界。
 > `consultTimeoutMs` 是**单个模型**的看门狗：超时只把该模型记成超时失败，不终止整轮会诊。
 
 字段说明（解析链与校验细节见设计文档 §3.2/§3.6）：
@@ -301,7 +303,7 @@ cp preset/thincoder-eng/* ~/.dsh/.agent-presets/thincoder-eng/
 
 ## 架构说明
 
-- **host + client 双层** —— host 侧全部是 `.mjs`（advisor / eng / escalate / consult / 设置页 config API）；client 侧是手写 CJS（`lib/client.js`，设置页「Thincoder」，经 `dsh.client` 声明 + `exports["./client"]` 由 dsh-client-modules 装配）。两层都无 TypeScript、无打包步骤（继承 thincoder 的 zero-dependency 哲学；client 只依赖装配契约 dsh-client-runtime/ui-slots/connection 与壳 seed 的 react）。一期 host-only（交互经对话流工具卡片）；二期（本设置页）引入 client，host 工具不变
+- **host + client 双层** —— host 侧全部是 `.mjs`（advisor / eng / escalate / consult / 设置页 config API；D-30 新增 `lib/doc-hash.mjs`——文档集指纹的单点实现）；client 侧是手写 CJS（`lib/client.js`，设置页「Thincoder」，经 `dsh.client` 声明 + `exports["./client"]` 由 dsh-client-modules 装配）。两层都无 TypeScript、无打包步骤（继承 thincoder 的 zero-dependency 哲学；client 只依赖装配契约 dsh-client-runtime/ui-slots/connection 与壳 seed 的 react）。一期 host-only（交互经对话流工具卡片）；二期（本设置页）引入 client，host 工具不变
 - **零 bare import** —— host 不 `import` cordis / schemastery：插件经 junction 安装后 Node 会 realpath 化，从安装目录向上解析不到宿主的包；工具手工构造 ToolDefinition 形状，插件契约只依赖 `export name / inject / apply`
 - **advisor** = `ctx.llm.stream` 自管工具循环：每轮完整替换 system prompt，配只读工具集（read / glob / grep）；LLM 调用带 **绝对截止定时器**（单轮剩余预算到点即中止，不依赖 chunk 到达）与 chunk 级看门狗双保险（90s 无输出即中止，最多重试 3 次，仍失败转为可诊断的 `provider_stall` 错误；两类结束消息见设计 §3.4）——DSH 的 GenerateOptions 没有 per-request 超时字段，这是移植侧的替代机制
 - **飞刀 / 会诊 / eng-coder** = `ctx.subagents.start`：模型覆盖（agentOptions）、深度限制（maxDepth）、工具过滤（toolFilter）
@@ -313,7 +315,8 @@ cp preset/thincoder-eng/* ~/.dsh/.agent-presets/thincoder-eng/
 1. **LLM 调用超时**：上游有 per-request `FETCH_TIMEOUT`；DSH 的 GenerateOptions 无超时字段，移植版以 chunk 级看门狗（90s）+ 3 次重试替代，挂起的 provider 调用最终转为有界可诊断错误
 2. **子代理宿主**：上游 spawn 独立 CLI 进程；移植版用 DSH 进程内 subagents（spawn / fork provider）
 3. **eng 会话状态**：内存态为主 + `$DSH_HOME/.thincoder/session-state.json` 镜像（F12）——`agent/session-start` 预载恢复 engineering/评审轮次（只填空槽，7d TTL，7 天以上未见的孤儿写时清扫）；删除该文件即回纯内存行为
-4. **预设入口**：DSH 特有——工程模式的新会话一键入口用 agent preset 实现，机制本体留在插件（运行时状态机装不进静态预设）
+4. **design token 格式**：上游是裸 `uuid:expiresAt` 且 TTL 7d（`design-token.mjs`）——本插件直到 D-30 才与之对齐（此前多一条 HMAC 签名腿与密钥链，D-30 按威胁模型复核整体删除，审批码保留但改无状态派生）；差异收敛后，本插件另加**文档集指纹门控续期**（上游无此机制）
+5. **预设入口**：DSH 特有——工程模式的新会话一键入口用 agent preset 实现，机制本体留在插件（运行时状态机装不进静态预设）
 
 ## License
 
@@ -325,6 +328,7 @@ MIT —— 见 [LICENSE](./LICENSE)。基于 [thincoder](https://gitee.com/shang
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v0.10.0 | 2026-09-11 | **D-30 design token 生命周期**：两段式 `uuid:expiresAt`（删签名腿与整条密钥链）、**文档集指纹门控续期**（文档未变 → 同 uuid 顺延，变了才重评）、审批码改无状态派生 `sha256(uuid).slice(0,8)`、缺省 TTL 7d、token-store 两缺口修复（保存路径补 `docHash`/`docPaths` + 清扫保留可续期记录）、旧三段式令牌诚实识别、会诊跨回合口径修正（FR-T7）；同版含 **D-29** 配置面（`consultTimeoutMs`/`engTokenTtlMs` 进 user 层白名单） |
 | v0.9.1 | 2026-09-07 | **R6 维护轮**：D-26 十项打磨全清（告警对称/签名清理/空输出统一/簿记单一实现/回滚指引/派发告警可见）——登记表 27/27 终态，235 测试全绿 |
 | v0.9.0 | 2026-09-06 | **R5 dsh 路径后台化（DP-1 方案 B）**：advisor dsh 自动按预算派后台 job、escalate/eng 显式 `background` 参数、`dshBackgroundTimeoutMs` 挂死兜底——四机制全部免墙钟，平台零修改 |
 | v0.8.0 | 2026-09-05/06 | **R1-R4 机制缺陷治理**：effort 最近档收口、流观测/空响应分类、codex 三路径 jobs 迁移、single-flight+代际检查、回落硬停+空响应重试、保存竞态+runner 三面同步、token-secret 安全加固（26 项登记缺陷收口） |

@@ -11,23 +11,25 @@ process.env.DSH_HOME = ""
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
-import { writeFileSync, mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync } from "node:fs"
+import { writeFileSync, mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, renameSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import {
   normalizeRunnerValue, validateRunnerValue, resolveCodexCliGlobals,
   buildCodexArgs, resolveExecutableFile, runCodexTask, discoverCodexModels, codexRowLabel, sweepStaleCodexTempDirs,
 } from "../lib/codex-adapter.mjs"
-import { resolveAdvisorRoute, advisorGenerationOf, bumpAdvisorGeneration, sessionStateViewWithGeneration, checkInFlightJob } from "../lib/advisor.mjs"
+import { resolveAdvisorRoute, advisorGenerationOf, bumpAdvisorGeneration, sessionStateViewWithGeneration, checkInFlightJob,
+  generateDesignToken, validateDesignToken, designApprovalCode, designTokenShape, designTokenFailureReason,
+  expiryLabel, renewDesignToken, TOKEN_TTL_DEFAULT_MS, tokenExpiryMs } from "../lib/advisor.mjs"
+import { normalizeDocPath, computeDocHash, sha256Hex } from "../lib/doc-hash.mjs"
 import { resolveSupportedEffort, resolveCodexRowEffort } from "../lib/effort-resolve.mjs"
 import { startConsultSession, checkConsultSession } from "../lib/consult.mjs"
 import { mergeGlobalConfig, saveUserConfig, loadUserConfig } from "../lib/config-store.mjs"
-import { validateGlobalUserConfig } from "../lib/index.mjs"
+import { validateGlobalUserConfig, warnDeprecatedTokenSecretEnvOnce, resetDeprecatedSecretEnvWarnForTests } from "../lib/index.mjs"
 import { runEscalate } from "../lib/escalate.mjs"
-import { runEngCoder } from "../lib/eng.mjs"
+import { runEngCoder, makeWriteGate } from "../lib/eng.mjs"
 import { saveSessionState, loadSessionState, normalizeRestored, resolveSessionStorePath } from "../lib/session-store.mjs"
-import { saveTokenRecord } from "../lib/token-store.mjs"
-import { createHmac } from "node:crypto"
+import { saveTokenRecord, resolveTokenStorePath } from "../lib/token-store.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -440,12 +442,10 @@ test("buildCodexArgs: resume 形态（flags → resume → id → stdin）", () 
 // ————————————— T2.2 eng_coder codex 后端 —————————————
 
 function makeEngToken(state) {
-  const secret = process.env.THINCODER_TOKEN_SECRET || "thincoder-default-secret"
+  // D-30（FR-T1）：token = uuid:expiresAt，恰好两段（HMAC 签名腿已随密钥链删除）。
   const uuid = "u-" + Math.random().toString(16).slice(2)
   const expiresAt = Date.now() + 3600_000
-  const payload = uuid + ":" + expiresAt
-  const sig = createHmac("sha256", secret).update(payload).digest("hex").slice(0, 16)
-  state.designToken = payload + ":" + sig
+  state.designToken = uuid + ":" + expiresAt
   return state.designToken
 }
 
@@ -2198,10 +2198,10 @@ test("R2 §4.7-8 US-3: job_output 保尾截断（头部丢弃 + [output truncate
   assert.ok(!truncated.includes("| 0 | issue 0"), "头部评审内容被丢弃")
   assert.ok(!truncated.includes(bigReviewHead(output)), "表头被丢弃（截断幅度足够）")
   // —— 尾部 design token 完整可提取 + 可通过校验（eng_coder 签收链不断） ——
-  const tm = truncated.match(/Approved\. Pass this exact token to eng_coder \(designToken parameter\): ([0-9a-f-]+:\d+:[0-9a-f]+)/)
+  const tm = truncated.match(/Approved\. Pass this exact token to eng_coder \(designToken parameter\): ([0-9a-f-]+:\d+)/)
   assert.ok(tm, "token 行完整保留在截断后尾部（retainTail 契约）")
   assert.equal(typeof tm[1], "string")
-  assert.equal(validateDesignToken(tm[1]), true, "提取的 token 通过签名/过期校验（eng_coder 可签收）")
+  assert.equal(validateDesignToken(tm[1]), true, "提取的 token 通过形状/过期校验（eng_coder 可签收）")
   dropSession(sid)
 })
 
@@ -3041,76 +3041,43 @@ test("R4 R1审计🔵①: 接线级 fail-open — advisor dsh 主路径元数据
   dropSession(sid)
 })
 
-// ————————————— R4 收尾微修复轮：D-25 TOKEN_SECRET 密钥源 + jobs 派发 warnPrefix —————————————
+// ————————————— D-30（FR-T2）：旧密钥链已删除 —— 本块原 D-25 用例（三形态密钥解析 / 重启稳定性 /
+// 公开默认值回落）随密钥链一并移除；替代覆盖 = AC-3（静态：advisor.mjs 无密钥链残留）、
+// AC-4（无 env 无 DSH_HOME 时铸造+校验成功且无告警）、AC-26（一次性弃用告警）。
+// jobs 派发 warnPrefix —————————————
 
-test("R4 D-25: env THINCODER_TOKEN_SECRET 有值 → 用 env（优先于既有持久化文件，不读盘不写盘；空白串视为未设）", async () => {
-  const { resolveTokenSecret } = await import("../lib/advisor.mjs")
-  const home = mkdtempSync(join(tmpdir(), "d25-env-"))
-  try {
-    // 预置持久化密钥，证明 env 优先级更高
-    mkdirSync(join(home, ".thincoder"), { recursive: true })
-    writeFileSync(join(home, ".thincoder", "token-secret"), "persisted-secret-value\n")
-    assert.equal(resolveTokenSecret({ THINCODER_TOKEN_SECRET: "env-secret-value" }, home), "env-secret-value", "env 有值 → 用 env")
-    // 空白串 = 未设 → 走持久化链
-    assert.equal(resolveTokenSecret({ THINCODER_TOKEN_SECRET: "   " }, home), "persisted-secret-value", "空白 env 视为未设 → 读持久化")
-    // env 分支不动盘上文件
-    assert.equal(readFileSync(join(home, ".thincoder", "token-secret"), "utf8").trim(), "persisted-secret-value", "env 路径不写盘")
-  } finally {
-    rmSync(home, { recursive: true, force: true })
+// ————————————— D-30 补丁（分歧审计 B2）：tokenExpiryMs 必须匹配**整段**整数 —————————————
+// 修复前用 Number.parseInt → 截断尾随垃圾，故 validateDesignToken("<uuid>:<exp>xyz") === true，
+// 与 advisor.mjs:678 注释「畸形串一律不通过」及设计档契约「expiresAt 有限」矛盾（父侧实测复现）。
+test("D-30/B2: tokenExpiryMs matches the WHOLE expiry segment — trailing junk / whitespace / sign / float / scientific / overlong digit strings are all malformed", () => {
+  const exp = Date.now() + 10 * 24 * 3600 * 1000 // 10d 后：任何「截断后仍读到 exp」的实现都会误判为有效
+  const uuid = "11111111-2222-3333-4444-555555555555"
+  const good = uuid + ":" + exp
+  // 干净两段仍通过（回归锁：本补丁不得误伤合法令牌）
+  assert.equal(tokenExpiryMs(good), exp, "整数段 → 原值")
+  assert.equal(validateDesignToken(good), true, "干净两段仍通过")
+  assert.equal(designTokenFailureReason(good), null)
+  const bad = [
+    good + "xyz",                    // 尾随垃圾（B2 实测复现形态）
+    uuid + ": " + exp,               // 段前空白
+    uuid + ":" + exp + " ",          // 段后空白
+    uuid + ":+" + exp,               // 前导符号
+    uuid + ":-" + exp,
+    uuid + ":" + exp + ".5",         // 浮点
+    uuid + ":1e12",                  // 科学计数
+    uuid + ":0x10",                  // 十六进制
+    uuid + ":" + "9".repeat(16),     // 超长数字串（>15 位；19 位起 Number 精度失真）
+    uuid + ":",                      // 空段
+  ]
+  for (const t of bad) {
+    assert.equal(tokenExpiryMs(t), null, "not an exact integer segment: " + JSON.stringify(t))
+    assert.equal(validateDesignToken(t), false, "malformed token must NOT validate: " + JSON.stringify(t))
+    assert.equal(designTokenFailureReason(t), "malformed", "failure reason must be malformed: " + JSON.stringify(t))
   }
-})
-
-test("R4 D-25: 无 env 有路径 → 生成 randomBytes(32).hex 持久化；清缓存重解析（模块级缓存模拟重启）密钥稳定，在途 token 不失效", async () => {
-  const { resolveTokenSecret, resolveTokenSecretPath, resetTokenSecretCacheForTests, validateDesignToken } = await import("../lib/advisor.mjs")
-  const home = mkdtempSync(join(tmpdir(), "d25-persist-"))
-  const home2 = mkdtempSync(join(tmpdir(), "d25-other-"))
-  const savedHome = process.env.DSH_HOME
-  const savedSecret = process.env.THINCODER_TOKEN_SECRET
-  const mint = (secret) => {
-    const payload = "d25-" + Math.random().toString(16).slice(2) + ":" + (Date.now() + 3600_000)
-    return payload + ":" + createHmac("sha256", secret).update(payload).digest("hex").slice(0, 16)
-  }
-  try {
-    delete process.env.THINCODER_TOKEN_SECRET
-    process.env.DSH_HOME = home
-    // 无状态解析器：首次解析 → 生成 64hex 密钥并持久化到 $DSH_HOME/.thincoder/token-secret
-    const s1 = resolveTokenSecret({}, home)
-    assert.match(s1, /^[0-9a-f]{64}$/, "crypto.randomBytes(32).hex 形态")
-    assert.equal(resolveTokenSecretPath(home), join(home, ".thincoder", "token-secret"), "路径复用 dsh-home.mjs 解析链（与 token-store 同源）")
-    assert.ok(existsSync(resolveTokenSecretPath(home)), "持久化文件生成")
-    assert.equal(readFileSync(resolveTokenSecretPath(home), "utf8").trim(), s1, "文件内容 = 密钥")
-    // 模块级单例（生产消费路径 tokenSecret()）经公共行为驱动：清缓存 → validateDesignToken 以 home 的密钥验签
-    resetTokenSecretCacheForTests()
-    assert.equal(validateDesignToken(mint(s1)), true, "单例从持久化文件解析 → 与 s1 同密钥（签名通过）")
-    // 模拟重启：清缓存（= 新进程的空缓存）→ 重解析 → 读同一持久化文件 → 同一密钥 → 在途 token 仍有效
-    resetTokenSecretCacheForTests()
-    assert.equal(validateDesignToken(mint(s1)), true, "重启后密钥稳定——在途 token 不因重启失效")
-    // 负对照：换 home（另一密钥域）→ 清缓存重解析生成新密钥 → 旧 token 失效（证明重解析真实发生、密钥按 home 隔离）
-    process.env.DSH_HOME = home2
-    resetTokenSecretCacheForTests()
-    assert.equal(validateDesignToken(mint(s1)), false, "不同 DSH_HOME → 新密钥 → 旧 token 失效（缓存清零真实生效）")
-  } finally {
-    if (savedSecret === undefined) delete process.env.THINCODER_TOKEN_SECRET
-    else process.env.THINCODER_TOKEN_SECRET = savedSecret
-    process.env.DSH_HOME = savedHome
-    resetTokenSecretCacheForTests() // 后续测试（默认密钥口径 makeEngToken）从恢复后的 env 重新解析
-    rmSync(home, { recursive: true, force: true })
-    rmSync(home2, { recursive: true, force: true })
-  }
-})
-
-test("R4 D-25: 无 env 无路径（DSH_HOME 不可解析）→ 回落公开默认值 + 响亮告警「门禁不可信」", async () => {
-  const { resolveTokenSecret } = await import("../lib/advisor.mjs")
-  // cwdHint 指向无 profile 根特征的深层临时目录（向上探测不命中——同 config-api.test U 系先例）
-  const noRoot = mkdtempSync(join(tmpdir(), "d25-nopath-"))
-  try {
-    const r = await captureWarn(() => resolveTokenSecret({}, null, noRoot))
-    assert.equal(r.value, "thincoder-default-secret", "回落公开默认值（fail-open——门禁不砖化但响亮告警）")
-    assert.ok(r.warnings.some((w) => w.includes("design token 门禁使用公开默认密钥，不可信")), "响亮告警：门禁不可信")
-    assert.ok(r.warnings.some((w) => w.includes("THINCODER_TOKEN_SECRET") && w.includes("DSH_HOME")), "告警给出两条修正路径（env / DSH_HOME）")
-  } finally {
-    rmSync(noRoot, { recursive: true, force: true })
-  }
+  // 边界（显式记录，非本轮变更面）：**整串**前导空白不落在第 1 段上，故 tokenExpiryMs 仍返回 exp。
+  // 该形态在真实路径上必先撞 eng.mjs 的全等匹配（token !== state.designToken），无授权面影响；
+  // 此处锁住现状，避免将来「顺手 trim」把形状语义改到无人察觉。
+  assert.equal(tokenExpiryMs(" " + good), exp, "整串前导空白不改变第 1 段（形状层概念，见上）")
 })
 
 test("R4 收尾 #4: advisor jobs 派发路径 warnPrefix 并入派发文本——与同步路径可见性一致（此前仅 console.warn 留档）", async () => {
@@ -3760,6 +3727,8 @@ test("R6 ③⑤(D-26): eng 单飞拒绝返回带 warnPrefix 前缀 + F10 盘回�
   dropSession(sid)
 
   // ⑤：F10 盘回填两态——同一 store 内：sidA 有签发记录但未传 token；sidB 无任何记录
+  // D-30 批 2 评审 #3：工程模式 OFF 检查已前置到 token 块之前（被拒调用零副作用），故本用例
+  // 的目标（F10 回填两态文案）须在 eng ON 会话里断言——否则先撞「engineering mode is OFF」。
   const home = mkdtempSync(join(tmpdir(), "r6-f10-"))
   try {
     assert.ok(saveTokenRecord("r6-f10-issued", { token: "tok-issued-once", expiresAt: Date.now() + 3600_000 }, home), "预置盘上签发记录")
@@ -3768,10 +3737,12 @@ test("R6 ③⑤(D-26): eng 单飞拒绝返回带 warnPrefix 前缀 + F10 盘回�
       config: {}, signal: undefined, configDefaultEngineering: false, storPathOverride: home,
       spawn: () => { throw new Error("must not spawn before token gate") }, platform: "linux", env: {},
     })
+    sessionState("r6-f10-issued").engineering = true // 新语义：eng 检查前置，需 ON 才到 token 分支
     const outA = await runEngCoder(mkDeps("r6-f10-issued"), { task: "implement without passing token" }) // designToken 缺省未传
     assert.ok(outA.includes("本会话已签发但本次未传"), "⑤：盘有记录+未传 →「本会话已签发但本次未传」: " + outA.slice(0, 100))
     assert.ok(!outA.includes("从未签发"), "两态区分：不误落「从未签发」")
     dropSession("r6-f10-issued")
+    sessionState("r6-f10-never").engineering = true
     const outB = await runEngCoder(mkDeps("r6-f10-never"), { task: "implement with no record at all" })
     assert.ok(outB.includes("从未签发"), "⑤：无盘记录 →「从未签发」")
     assert.ok(!outB.includes("本会话已签发"), "两态区分：不误落「已签发未传」")
@@ -4006,4 +3977,592 @@ test("R6 微修③: eng/escalate codex jobs 派发返回并入配置告警（war
   assert.ok(out2.indexOf("codexCli.defaultTimeoutMs 非法") < out2.indexOf("escalate-codex-1"), "告警先于句柄文本（warnPrefix + codexJobsDispatchReply）")
   await specs2[0].hooks.done // settle 后清理
   dropSession(sid2)
+})
+
+// ═════════════════════ D-30 验收标准 ACS：token 单元类（设计档 §5 AC-1/2/3/4/5/7/23/25/26） ═════════════════════
+// 本块按设计档 §5 逐条落地**专用**用例。硬约束：不得用同义反复/恒真断言（AC-5 尤为明确——
+// 禁用「从提示词正则抠出 code 再原样回显」形式，改用固定 uuid 直接对拍 sha256(uuid).slice(0,8)）。
+
+test("AC-1: generateDesignToken yields exactly two segments — segment 0 is a UUID, segment 1 an integer expiresAt > now", () => {
+  const before = Date.now()
+  const t = generateDesignToken({})
+  const parts = t.split(":")
+  assert.equal(parts.length, 2, "恰好两段（HMAC 签名腿已随密钥链删除）: " + t)
+  assert.match(parts[0], /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "第 0 段是 UUID")
+  assert.match(parts[1], /^\d+$/, "第 1 段是纯整数")
+  const exp = Number(parts[1])
+  assert.ok(Number.isFinite(exp) && exp > before, "第 1 段 = expiresAt > now")
+  assert.equal(tokenExpiryMs(t), exp, "tokenExpiryMs 读同一段（解析路径单点）")
+  assert.equal(validateDesignToken(t), true, "新铸令牌通过校验")
+  assert.equal(designTokenShape(t), "two-part")
+})
+
+test("AC-2: validateDesignToken negatives (legacy 3-part / 1-part / empty / non-string / non-numeric exp / past exp) and positives (fresh, boundary now+50)", () => {
+  const now = Date.now()
+  const uuid = "0f8fad5b-d9cb-469f-a165-70867728950e"
+  // —— 负例 ——
+  const legacy = uuid + ":" + (now + 60_000) + ":deadbeefdeadbeef"
+  assert.equal(validateDesignToken(legacy), false, "3 段旧格式（形状合法）不通过")
+  assert.equal(designTokenShape(legacy), "legacy", "形状检测可区分旧格式")
+  assert.equal(designTokenFailureReason(legacy), "legacy", "失败原因 = legacy（FR-T9 文案依据）")
+  assert.equal(validateDesignToken(uuid), false, "1 段不通过")
+  assert.equal(designTokenShape(uuid), "malformed")
+  assert.equal(validateDesignToken(""), false, "空串不通过")
+  assert.equal(validateDesignToken(null), false, "非字符串 null 不通过")
+  assert.equal(validateDesignToken(12345), false, "非字符串 number 不通过")
+  assert.equal(designTokenFailureReason(null), "missing")
+  assert.equal(validateDesignToken(uuid + ":abc"), false, "expiresAt 非数不通过")
+  assert.equal(designTokenFailureReason(uuid + ":abc"), "malformed")
+  assert.equal(validateDesignToken(uuid + ":" + (now - 1000)), false, "expiresAt < now 不通过")
+  assert.equal(designTokenFailureReason(uuid + ":" + (now - 1000)), "expired")
+  // —— 正例 ——
+  assert.equal(validateDesignToken(generateDesignToken({})), true, "新铸通过")
+  assert.equal(validateDesignToken(uuid + ":" + (now + 50)), true, "边界 now+50 仍未过期 → 通过")
+  assert.equal(designTokenFailureReason(uuid + ":" + (now + 50)), null)
+  assert.equal(validateDesignToken(uuid + ":" + (now - 50)), false, "边界 now-50 已过期 → 不通过（判定为严格 >）")
+  assert.equal(designTokenFailureReason(uuid + ":" + (now - 50)), "expired")
+})
+
+test("AC-3: static — advisor.mjs has no secret-chain remnant and the export surface drops all six D-25 names", async () => {
+  const src = readFileSync(new URL("../lib/advisor.mjs", import.meta.url), "utf8")
+  for (const needle of ["createHmac", "TOKEN_SECRET", "token-secret", "randomBytes", "thincoder-default-secret"]) {
+    assert.equal(src.includes(needle), false, "advisor.mjs 不得再出现 " + needle)
+  }
+  const mod = await import("../lib/advisor.mjs")
+  // 密钥链 6 名（D-25 的 3 个导出 + 3 个模块级常量/函数）：导出面一个都不得残留
+  const SECRET_CHAIN_NAMES = [
+    "resolveTokenSecretPath", "resolveTokenSecret", "resetTokenSecretCacheForTests",
+    "tokenSecret", "TOKEN_SECRET_FALLBACK", "TOKEN_SECRET_FILE",
+  ]
+  for (const n of SECRET_CHAIN_NAMES) assert.equal(n in mod, false, "导出面不得残留密钥链名 " + n)
+  // [负] 防「顺手删过头」：两段式铸造面与无状态审批码派生面必须仍在
+  assert.equal(typeof mod.generateDesignToken, "function")
+  assert.equal(typeof mod.designApprovalCode, "function")
+  assert.equal(typeof mod.validateDesignToken, "function")
+})
+
+test("AC-4: no DSH_HOME + no env → mint + validate succeed with NO warning; setting THINCODER_TOKEN_SECRET changes nothing", async () => {
+  const savedHome = process.env.DSH_HOME
+  const savedSecret = process.env.THINCODER_TOKEN_SECRET
+  try {
+    delete process.env.DSH_HOME // 无 DSH_HOME（旧 D-25 链会在此响亮告警并回落公开默认密钥）
+    delete process.env.THINCODER_TOKEN_SECRET
+    const r1 = await captureWarn(() => {
+      const t = generateDesignToken({})
+      assert.equal(validateDesignToken(t), true, "无 env 无 DSH_HOME 仍铸造+校验成功")
+      return t
+    })
+    assert.equal(r1.warnings.length, 0, "无告警（D-25 的「公开默认密钥不可信」已随密钥链消失）: " + r1.warnings.join("|"))
+    assert.equal(r1.value.split(":").length, 2)
+    // [负] 设 env 不改变任何行为（密钥链已删除，该变量是 no-op）
+    process.env.THINCODER_TOKEN_SECRET = "ops-secret-that-must-not-matter"
+    const r2 = await captureWarn(() => {
+      const t = generateDesignToken({})
+      assert.equal(validateDesignToken(t), true, "设 env 后仍铸造+校验成功")
+      assert.equal(t.split(":").length, 2, "设 env 不改变形状")
+      assert.equal(designApprovalCode(t), sha256Hex(t.split(":")[0]).slice(0, 8),
+        "设 env 不改变审批码（无状态派生，无密钥参与）")
+      return t
+    })
+    assert.equal(r2.warnings.length, 0, "设 env 也不产生任何告警（advisor 路径已彻底无密钥面）")
+  } finally {
+    if (savedHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = savedHome
+    if (savedSecret === undefined) delete process.env.THINCODER_TOKEN_SECRET; else process.env.THINCODER_TOKEN_SECRET = savedSecret
+  }
+})
+
+test("AC-5: designApprovalCode(t) === sha256(fixed uuid).slice(0,8) — direct对拍, NOT a prompt-echo tautology", () => {
+  const uuid = "0f8fad5b-d9cb-469f-a165-70867728950e" // 固定 uuid：期望值与派生实现无关，可独立算出
+  const other = "11111111-2222-3333-4444-555555555555"
+  const now = Date.now()
+  const t1 = uuid + ":" + (now + 3600_000)
+  const t2 = uuid + ":" + (now + 7200_000) // 同 uuid、不同到期时间
+  // 直接对拍：若派生被改成常量串（审计 D3 指出的恒真写法正是为掩盖这种退化），本条必红。
+  assert.equal(designApprovalCode(t1), sha256Hex(uuid).slice(0, 8), "固定 uuid → 直接对拍 sha256(uuid).slice(0,8)")
+  assert.equal(designApprovalCode(t1), "c812e1ed", "硬编码期望码（= sha256('" + uuid + "')[:8]，与实现无关）")
+  assert.match(designApprovalCode(t1), /^[0-9a-f]{8}$/, "8 位十六进制")
+  assert.equal(designApprovalCode(t2), designApprovalCode(t1), "同 token（同 uuid）→ 同码；与第 1 段无关")
+  assert.notEqual(designApprovalCode(other + ":" + (now + 3600_000)), designApprovalCode(t1), "不同 uuid → 不同码")
+  // 防「常量替换」退化：两个不同 uuid 的码不得相等（上一条已锁），且非空串
+  assert.notEqual(designApprovalCode(t1), "")
+})
+
+test("AC-7: generateDesignToken({}) TTL ≈ 7d (TOKEN_TTL_DEFAULT_MS); an explicit engTokenTtlMs still wins; renewal shares the same TTL point", () => {
+  const t0 = Date.now()
+  const t = generateDesignToken({})
+  const delta = tokenExpiryMs(t) - t0
+  assert.equal(TOKEN_TTL_DEFAULT_MS, 7 * 24 * 3600 * 1000, "缺省 TTL = 7d（FR-T4）")
+  assert.ok(Math.abs(delta - TOKEN_TTL_DEFAULT_MS) < 5000, "expiresAt - now ≈ 7d（实测 " + delta + "ms）")
+  // 显式 engTokenTtlMs 仍优先（D-29 覆盖链不回退）
+  const tBase = generateDesignToken({ engTokenTtlMs: 3600000 })
+  assert.ok(Math.abs((tokenExpiryMs(tBase) - Date.now()) - 3600000) < 5000, "显式 engTokenTtlMs 优先")
+  // 非法值回落缺省（resolveEngTokenTtlMs 非有限/非正 → 7d）
+  for (const bad of [0, -1, "7d", NaN, null, Infinity]) {
+    const tb = generateDesignToken({ engTokenTtlMs: bad })
+    assert.ok(Math.abs((tokenExpiryMs(tb) - Date.now()) - TOKEN_TTL_DEFAULT_MS) < 5000,
+      "非法 engTokenTtlMs=" + String(bad) + " → 回落 7d")
+  }
+  // 续期与铸造共用 TTL 单点（FR-T5/FR-T4）：uuid 不变、expiresAt 按同一 resolveEngTokenTtlMs 顺延
+  const renewed = renewDesignToken(t, { engTokenTtlMs: 3600000 })
+  assert.equal(renewed.split(":")[0], t.split(":")[0], "续期保持同一 uuid")
+  assert.ok(Math.abs((tokenExpiryMs(renewed) - Date.now()) - 3600000) < 5000, "续期用显式 TTL")
+  assert.ok(Math.abs((tokenExpiryMs(renewDesignToken(t, {})) - Date.now()) - TOKEN_TTL_DEFAULT_MS) < 5000, "续期缺省用 7d")
+})
+
+test("AC-23: normalizeDocPath collapses relative/absolute/backslash spellings; case differences stay DISTINCT (pinned rule)", () => {
+  const abs = normalizeDocPath("docs/a.md")
+  assert.equal(abs, resolve("docs", "a.md").replace(/\\/g, "/"), "相对路径 → 绝对 + 正斜杠")
+  assert.equal(normalizeDocPath(resolve("docs", "a.md").replace(/\\/g, "/")), abs, "绝对路径与相对路径同形")
+  assert.equal(normalizeDocPath("docs\\a.md"), abs, "反斜杠与正斜杠混用 → 同形")
+  assert.equal(normalizeDocPath("./docs/../docs/a.md"), abs, "中间 .. 归一 → 同形")
+  assert.notEqual(normalizeDocPath("docs/A.md"), abs, "大小写**不**折叠 → 视为不同条目（§3 钉死规则）")
+  // 指纹层同款（续期判定与用例共用 doc-hash.mjs 单点实现）
+  const root = mkdtempSync(join(tmpdir(), "thincoder-ac23-"))
+  try {
+    mkdirSync(join(root, "docs"), { recursive: true })
+    writeFileSync(join(root, "docs", "a.md"), "hello")
+    const p = join(root, "docs", "a.md")
+    const h1 = computeDocHash([p])
+    const h2 = computeDocHash([p.replace(/\\/g, "/")])                     // 正斜杠书写
+    const h3 = computeDocHash([root + "/docs/../docs/a.md"])              // 原始串：混用分隔符 + 中间 ..
+    assert.equal(h1.ok, true, "同一文件可读 → ok")
+    assert.equal(h1.hash, h2.hash, "正/反斜杠书写 → 同一指纹")
+    assert.equal(h1.hash, h3.hash, "含 .. 的书写 → 同一指纹")
+    const hu = computeDocHash([join(root, "docs", "A.md")])
+    assert.ok(!(hu.ok && h1.ok && hu.hash === h1.hash), "大小写不同不得产生同一指纹（Windows 上文件仍可读，但路径已参与摘要）")
+  } finally { try { rmSync(root, { recursive: true, force: true }) } catch { /* 已清理 */ } }
+})
+
+test("AC-25: expiryLabel switches to a DATE once the remaining TTL exceeds 24h (unit level, advisor.mjs)", () => {
+  const now = Date.now()
+  const day = 24 * 3600 * 1000
+  assert.match(expiryLabel("u:" + (now + 7 * day), now), /^\d{4}-\d{2}-\d{2}$/, "7d → 日期而非钟点")
+  assert.match(expiryLabel("u:" + (now + day + 60_000), now), /^\d{4}-\d{2}-\d{2}$/, ">24h → 日期（阈值外）")
+  assert.match(expiryLabel("u:" + (now + day - 60_000), now), /^\d{2}:\d{2}$/, "≤24h → HH:MM（阈值内，保持既有语义）")
+  assert.equal(expiryLabel("u:garbage", now), "??", "畸形段 → ??")
+  assert.equal(expiryLabel("u:", now), "??")
+})
+
+test("AC-26: THINCODER_TOKEN_SECRET set → exactly ONE deprecation warning; unset/blank → silent; repeat call silent", async () => {
+  resetDeprecatedSecretEnvWarnForTests()
+  try {
+    const r0 = await captureWarn(() => warnDeprecatedTokenSecretEnvOnce({}))
+    assert.equal(r0.value, false, "未设 → 不打印")
+    assert.equal(r0.warnings.length, 0, "未设 → 无告警")
+    const rb = await captureWarn(() => warnDeprecatedTokenSecretEnvOnce({ THINCODER_TOKEN_SECRET: "   " }))
+    assert.equal(rb.value, false, "空白串视为未设")
+    assert.equal(rb.warnings.length, 0)
+    const r1 = await captureWarn(() => warnDeprecatedTokenSecretEnvOnce({ THINCODER_TOKEN_SECRET: "ops-secret" }))
+    assert.equal(r1.value, true, "设值 → 打印弃用告警")
+    assert.ok(r1.warnings.some((w) => w.includes("THINCODER_TOKEN_SECRET") && w.includes("NO effect")),
+      "告警说清该 env 已无任何作用: " + r1.warnings.join("|"))
+    // 进程级 once：fiber 重建 / 重复 apply 不重复刷屏
+    const r2 = await captureWarn(() => warnDeprecatedTokenSecretEnvOnce({ THINCODER_TOKEN_SECRET: "ops-secret" }))
+    assert.equal(r2.value, false, "第二次调用不打印")
+    assert.equal(r2.warnings.length, 0)
+  } finally { resetDeprecatedSecretEnvWarnForTests() }
+})
+
+// ═════════════════ D-30 验收标准 ACS：门禁 / 文案 / 静态（设计档 §5 AC-21/22/24） ═════════════════
+
+/** AC-21/AC-24 用最小 eng_coder deps：dsh 子代理 stub（不许 spawn 的用例直接抛）。 */
+function makeMinimalEngDeps(sid, { spawned } = {}) {
+  return {
+    ctx: {
+      subagents: {
+        async start(_kind, req) {
+          if (spawned) spawned.push(req)
+          return {
+            result: Promise.resolve({ output: [{ type: "text", text: "done\n\nTouched files: none" }], stopReason: "completed" }),
+            dispose: async () => {},
+          }
+        },
+      },
+    },
+    agent: { session: { id: sid, header: { cwd: tmpdir() } }, options: {} },
+    config: {}, signal: undefined, configDefaultEngineering: false,
+  }
+}
+
+test("AC-21: the write gate stays fail-open on its own faults and NEVER performs renewal (D1 boundary)", async () => {
+  // (a) 门禁自身故障 → 放行（fail-open 只此一处；续期判定是 fail-closed，两者语义互斥）
+  const brokenGate = makeWriteGate(() => { throw new Error("config unavailable (gate-internal fault)") })
+  let nexted = false
+  const r = await brokenGate(
+    { name: "write", arguments: { file_path: "src/x.ts" }, agent: { session: { id: "gate-boom", header: {} } } },
+    async () => { nexted = true; return "NEXT" })
+  assert.equal(nexted, true, "门禁内部抛错 → next() 放行（不许砖会话）")
+  assert.equal(r, "NEXT")
+
+  // (b) 门禁不执行续期：工程模式 ON + 令牌已过期 + 盘上有**可续期**记录（指纹与文档一致）
+  //     → 仍 deny，且 state 与磁盘一字未改（续期落点只在 eng_coder 过期子分支，决策 D1）
+  const home = mkdtempSync(join(tmpdir(), "thincoder-ac21-"))
+  const sid = "ac21-gate-norenew"
+  try {
+    const st = sessionState(sid)
+    st.engineering = true
+    const expired = "11111111-2222-3333-4444-555555555555:" + (Date.now() - 60_000)
+    st.designToken = expired
+    const doc = join(home, "a.md")
+    writeFileSync(doc, "A — unchanged content")
+    const dh = computeDocHash([doc])
+    assert.equal(dh.ok, true)
+    mkdirSync(join(home, ".thincoder"), { recursive: true })
+    writeFileSync(resolveTokenStorePath(home), JSON.stringify({
+      version: 1,
+      tokens: { [sid]: { token: expired, issuedAt: Date.now() - 7_200_000, expiresAt: Date.now() - 60_000, docHash: dh.hash, docPaths: dh.docPaths } },
+    }))
+    const diskBefore = readFileSync(resolveTokenStorePath(home), "utf8")
+    const gate = makeWriteGate(() => true) // config 默认 engineering=true
+    const exec = { name: "write", arguments: { file_path: "src/x.ts" }, agent: { session: { id: sid, header: { cwd: home } } } }
+    const res = await gate(exec, async () => "NEXT")
+    assert.equal(res.kind, "deny", "过期令牌 + 产品代码写 → deny（不得 fail-open 放行）: " + JSON.stringify(res))
+    assert.ok(/eng_coder/.test(res.reason), "deny 文案指向真实出路（再调 eng_coder 走续期）: " + res.reason)
+    assert.ok(!/write the design document first/.test(res.reason), "过期时不得再说「先写设计文档」（误导）")
+    assert.equal(st.designToken, expired, "门禁绝不执行续期（state 不变）")
+    assert.equal(readFileSync(resolveTokenStorePath(home), "utf8"), diskBefore, "门禁绝不写 token 存储")
+    // 文档仍可写（门禁范围边界不变）
+    const docRes = await gate({ name: "write", arguments: { file_path: "docs/plan.md" }, agent: { session: { id: sid, header: { cwd: home } } } }, async () => "NEXT")
+    assert.equal(docRes, "NEXT", "docs/**.md 豁免不受令牌状态影响")
+  } finally {
+    try { rmSync(home, { recursive: true, force: true }) } catch { /* 已清理 */ }
+    dropSession(sid)
+  }
+})
+
+test("AC-22: static — main.md drops 'bound to the current turn' and names BOTH cross-turn survival and the consultTimeoutMs bound", () => {
+  const src = readFileSync(new URL("../lib/prompts/main.md", import.meta.url), "utf8")
+  assert.ok(!src.includes("bound to the current turn"), "旧口径（与 consult.mjs D-28 实现矛盾）必须消失")
+  const consultLine = src.split("\n").find((l) => /consult/i.test(l) && /(survive|存活)/i.test(l))
+  assert.ok(consultLine, "有一行专讲会诊生命周期（跨回合口径）")
+  assert.ok(/survive across turns|cross-turn|跨回合|存活/.test(consultLine), "写明跨回合存活（打断/回合结束不杀）: " + consultLine)
+  assert.ok(consultLine.includes("consultTimeoutMs"), "同一行写明**有界**（受 consultTimeoutMs 约束）——两件事都在同一句")
+  assert.ok(/interrupt/i.test(consultLine), "点明「打断」这条显式路径")
+  assert.ok(/end of the current turn|turn/i.test(consultLine), "点明「回合结束」这条显式路径")
+})
+
+test("AC-24: a three-part legacy token → eng_coder says 旧版本令牌 (distinct from 无法续期 / 文档已变更)", async () => {
+  const uuid = "0f8fad5b-d9cb-469f-a165-70867728950e"
+  // (a) 未过期的三段式（升级后在途令牌的真实形态：形状不兼容，与 TTL 无关）
+  const sidA = "ac24-legacy-fresh"
+  const stA = sessionState(sidA)
+  stA.engineering = true
+  const legacyFresh = uuid + ":" + (Date.now() + 3600_000) + ":deadbeefdeadbeef"
+  stA.designToken = legacyFresh
+  try {
+    const spawned = []
+    const outA = await runEngCoder(makeMinimalEngDeps(sidA, { spawned }), { task: "implement x", designToken: legacyFresh })
+    assert.ok(outA.includes("旧版本令牌"), "旧版本文案: " + outA)
+    assert.ok(outA.includes("shape") || outA.includes("三段") || outA.includes("three-part"), "说明形状不兼容")
+    assert.ok(!outA.includes("文档已变更"), "不得与「文档已变更」混淆")
+    assert.ok(!outA.includes("eng_coder delivery:"), "三段式不得放行")
+    assert.equal(spawned.length, 0)
+  } finally { dropSession(sidA) }
+  // (b) 已过期的三段式：走过期子分支的 legacy 检测，同样给「旧版本」文案
+  const sidB = "ac24-legacy-expired"
+  const stB = sessionState(sidB)
+  stB.engineering = true
+  const legacyExpired = uuid + ":" + (Date.now() - 60_000) + ":deadbeefdeadbeef"
+  stB.designToken = legacyExpired
+  try {
+    const spawned = []
+    const outB = await runEngCoder(makeMinimalEngDeps(sidB, { spawned }), { task: "implement x", designToken: legacyExpired })
+    assert.ok(outB.includes("design token expired"), "先报过期: " + outB)
+    assert.ok(outB.includes("旧版本令牌"), "过期三段式同样给旧版本文案: " + outB)
+    assert.ok(outB.includes("无法续期"), "同时说明无法续期（避免与「文档已变更」混淆）")
+    assert.ok(!outB.includes("design document set has CHANGED"), "不得误报文档变更")
+    assert.equal(spawned.length, 0)
+  } finally { dropSession(sidB) }
+})
+
+// ═════════════════ D-30 验收标准 ACS：续期 / 指纹绑定（设计档 §5 AC-10） ═════════════════
+
+/** AC-10 夹具：可改名/可编辑的文档 + 「已签发但已过期」的磁盘记录（保留 docHash/docPaths）。 */
+function makeAc10Fixture(sid, home, { content }) {
+  const docDir = join(home, "docsrc")
+  mkdirSync(docDir, { recursive: true })
+  const pathA = join(docDir, "a.md")
+  writeFileSync(pathA, content)
+  const issued = computeDocHash([pathA])
+  assert.equal(issued.ok, true, "签发放下的指纹可算（夹具前提）")
+  const expired = "0f8fad5b-d9cb-469f-a165-70867728950e:" + (Date.now() - 60_000)
+  const st = sessionState(sid)
+  st.engineering = true
+  st.designToken = expired
+  mkdirSync(join(home, ".thincoder"), { recursive: true })
+  const storePath = resolveTokenStorePath(home)
+  writeFileSync(storePath, JSON.stringify({
+    version: 1,
+    tokens: {
+      [sid]: { token: expired, issuedAt: Date.now() - 7_200_000, expiresAt: Date.now() - 60_000, docHash: issued.hash, docPaths: issued.docPaths },
+    },
+  }))
+  return { pathA, issued, expired, storePath }
+}
+
+test("AC-10: renaming/moving a bound document with BYTE-IDENTICAL content → renewal REFUSED (the fingerprint binds the PATH, not only the content)", async () => {
+  // 本条的证伪力在于「内容字节不变而路径变了」这一个变量：纯内容指纹会把改名/移位判为未变
+  // （评审的指向物已消失而 hash 还绿）→ 放行续期；路径+内容双绑则必须拒绝（设计档 §3 FR-T5）。
+  const CONTENT = "A v1 — the approved design document body"
+  // ——— (a) 改名/移位：内容逐字节不变 ———
+  const homeA = mkdtempSync(join(tmpdir(), "thincoder-ac10-rename-"))
+  const sidA = "ac10-rename"
+  try {
+    const { pathA, issued, expired, storePath } = makeAc10Fixture(sidA, homeA, { content: CONTENT })
+    const pathB = join(homeA, "docsrc", "moved-a.md")
+    renameSync(pathA, pathB) // 改名/移位（同一份文档，位置变了）
+    assert.equal(existsSync(pathA), false, "旧路径已不存在（指向物确实被移位）")
+    assert.equal(readFileSync(pathB, "utf8"), CONTENT, "内容逐字节不变")
+    // 证伪证据：指纹里的**内容项**完全没变，只有路径项变了 ——
+    // 若 docHash 只绑内容，下面这条 notEqual 必红（这正是本条用例要挡的退化）。
+    assert.equal(sha256Hex(readFileSync(pathB)), sha256Hex(CONTENT), "内容摘要不变 → 纯内容指纹在此会判「未变」")
+    const moved = computeDocHash([pathB])
+    assert.equal(moved.ok, true)
+    assert.notEqual(moved.hash, issued.hash, "路径参与摘要 → 移位后指纹必不同（而记录里的 docHash 仍绑 A 的路径）")
+    // 指向物跟着走：记录里的 docPaths 更新为 B（评审指向的仍是这份文档，只是位置变了）
+    writeFileSync(storePath, JSON.stringify({
+      version: 1,
+      tokens: { [sidA]: { token: expired, issuedAt: Date.now() - 7_200_000, expiresAt: Date.now() - 60_000, docHash: issued.hash, docPaths: moved.docPaths } },
+    }))
+    // 同一 uuid 的过期场景 → 必须拒绝续期
+    const spawned = []
+    const out = await runEngCoder({ ...makeMinimalEngDeps(sidA, { spawned }), storPathOverride: homeA },
+      { task: "implement x", designToken: expired })
+    assert.ok(out.includes("the design document set has CHANGED"), "改名/移位 → 「文档已变更」: " + out)
+    assert.ok(out.includes("文档已变更"), "中文文案可区分: " + out)
+    assert.ok(out.includes(normalizeDocPath(pathB)), "点名变更后的文档集（诊断可见）: " + out)
+    assert.ok(!out.includes("eng_coder delivery:"), "拒绝路径不得 spawn")
+    assert.equal(spawned.length, 0, "no spawn")
+    assert.equal(sessionState(sidA).designToken, expired, "state 不顺延（仍为过期串）")
+    assert.equal(JSON.parse(readFileSync(storePath, "utf8")).tokens[sidA].token, expired, "磁盘未被续期改写")
+  } finally { dropSession(sidA); rmSync(homeA, { recursive: true, force: true }) }
+
+  // ——— (b) 反向对照：不改名、只改内容 → 同样拒绝（证明夹具与判定路径是活的，不是靠路径一条特例） ———
+  const homeB = mkdtempSync(join(tmpdir(), "thincoder-ac10-edit-"))
+  const sidB = "ac10-edit"
+  try {
+    const { pathA, expired, storePath } = makeAc10Fixture(sidB, homeB, { content: CONTENT })
+    writeFileSync(pathA, CONTENT + " — edited in place") // 路径不变，内容变
+    const spawned = []
+    const out = await runEngCoder({ ...makeMinimalEngDeps(sidB, { spawned }), storPathOverride: homeB },
+      { task: "implement x", designToken: expired })
+    assert.ok(out.includes("the design document set has CHANGED"), "只改内容 → 同样拒绝: " + out)
+    assert.ok(!out.includes("eng_coder delivery:") && spawned.length === 0, "拒绝路径不得 spawn")
+    assert.equal(sessionState(sidB).designToken, expired, "state 不顺延")
+    assert.equal(JSON.parse(readFileSync(storePath, "utf8")).tokens[sidB].token, expired, "磁盘未被续期改写")
+  } finally { dropSession(sidB); rmSync(homeB, { recursive: true, force: true }) }
+})
+
+// ═════════════ D-30 批 2 收口轮：代码评审 #1（dsh 后台派发漏带 warnPrefix） ═════════════
+
+/**
+ * 夹具：engineering ON + 已过期令牌（内存/磁盘同一串）+ 盘上**可续期**记录（docHash 与文档
+ * 集当前一致）。返回续期判定所需的全部素材（评审 #1 用例与 AC-8 同形，只是走后台派发）。
+ */
+function makeRenewableFixture(sid, home) {
+  const docPath = join(home, "a.md")
+  writeFileSync(docPath, "A — unchanged since the review approved it")
+  const issued = computeDocHash([docPath])
+  assert.equal(issued.ok, true, "夹具前提：签发放下的指纹可算")
+  const expired = "0f8fad5b-d9cb-469f-a165-70867728950e:" + (Date.now() - 60_000)
+  const st = sessionState(sid)
+  st.engineering = true
+  st.designToken = expired
+  mkdirSync(join(home, ".thincoder"), { recursive: true })
+  writeFileSync(resolveTokenStorePath(home), JSON.stringify({
+    version: 1,
+    tokens: { [sid]: { token: expired, issuedAt: Date.now() - 7_200_000, expiresAt: Date.now() - 60_000, docHash: issued.hash, docPaths: issued.docPaths } },
+  }))
+  return { expired, issued }
+}
+
+test("D-30 评审#1: dsh 后台派发返回并入 warnPrefix —— 续期回执（含新令牌串）在**派发文本**里可见，不再等到 job 完成", async () => {
+  const home = mkdtempSync(join(tmpdir(), "thincoder-r1-dshbg-"))
+  const sid = "r1-dsh-bg-renew"
+  try {
+    const { expired } = makeRenewableFixture(sid, home)
+    const { jobs, specs } = fakeJobsFactory()
+    const subagents = { async start() {
+      return { result: Promise.resolve({ stopReason: "completed", output: [{ type: "text", text: "eng done\n\nTouched files: none" }] }), dispose: async () => {} }
+    } }
+    const deps = {
+      ctx: { subagents, get: (s) => s === "jobs" ? jobs : null },
+      agent: { session: { id: sid, header: { cwd: home } }, options: { provider: "p", model: "m" } },
+      config: { dshBackgroundTimeoutMs: 1000 }, signal: undefined,
+      configDefaultEngineering: false, storPathOverride: home,
+    }
+    const out = await runEngCoder(deps, { task: "implement x", designToken: expired, docs: [], background: true })
+    // 前置：续期确实发生（否则下面的断言无的放矢）
+    const fresh = sessionState(sid).designToken
+    assert.notEqual(fresh, expired, "过期 + 文档未变 → 续期发生（同 uuid 顺延）")
+    assert.equal(fresh.split(":")[0], expired.split(":")[0], "续期 = 同一 uuid")
+    assert.ok(out.includes("eng-dsh-1") && out.includes("job_output"), "dsh 后台派发句柄: " + out.slice(0, 160))
+    // —— 证伪点：去掉 eng.mjs:756 的 warnPrefix()，下面两条必红（新串彼时只在 job 完成通知里） ——
+    assert.ok(out.includes("design token RENEWED"), "派发回执含续期回执（不再是裸句柄文本）: " + out)
+    assert.ok(out.includes(fresh), "**新令牌串在派发回执里**（FR-T5 返回契约：调用方此刻即拿到新串）")
+    assert.ok(out.includes("Replace the copy you hold"), "附「替换你手里的副本」指引")
+    assert.ok(out.indexOf("[thincoder-suite]") < out.indexOf("eng-dsh-1"),
+      "统一前缀先于句柄文本（warnPrefix + jobsDispatchReply，与 codex 后台路径同形）")
+    const outcome = await specs[0].hooks.done
+    assert.equal(outcome.status, "completed", "job 正常完成（槽位清理）")
+    assert.equal(checkInFlightJob(sid, "eng"), null, "settle 清槽位")
+  } finally { dropSession(sid); rmSync(home, { recursive: true, force: true }) }
+})
+
+// ═════════════ D-30 批 2 收口轮：代码评审 #2（SUPERSEDED 判定过宽 → 误报/遮蔽） ═════════════
+
+test("D-30 评审#2: SUPERSEDED 只在「与 state 同 uuid 且已过期」时成立——未签发的过期垃圾串不被误报，旧三段式拿到旧版本文案", async () => {
+  const UUID_STATE = "0f8fad5b-d9cb-469f-a165-70867728950e"  // 本会话 state 里的 uuid
+  const UUID_OTHER = "11111111-2222-3333-4444-555555555555"  // 从未由本会话签发过的 uuid
+
+  // —— 场景①：state 是有效（未过期）令牌，传入一枚**从未签发过**的过期垃圾串 ——
+  //    旧判定「传入已过期 ∧ state 未过期」即报 SUPERSEDED = 虚假因果（实际什么都没发生过）。
+  const sidA = "r2-garbage-not-superseded"
+  const stA = sessionState(sidA)
+  stA.engineering = true
+  const freshA = UUID_STATE + ":" + (Date.now() + 3600_000)
+  stA.designToken = freshA
+  try {
+    const spawned = []
+    const garbage = UUID_OTHER + ":" + (Date.now() - 60_000)
+    const outA = await runEngCoder(makeMinimalEngDeps(sidA, { spawned }), { task: "implement x", designToken: garbage })
+    assert.ok(!outA.includes("SUPERSEDED"), "不得误报「已被本次会话的续期取代」（从未签发过）: " + outA)
+    assert.ok(!outA.includes("已被本次会话的续期取代"), "中文文案同样不得误报")
+    assert.ok(outA.includes("invalid or missing design token"), "回落到 mismatch 文案（该 uuid 在本会话无签发历史）: " + outA)
+    assert.ok(!outA.includes("eng_coder delivery:"), "拒绝路径不得放行")
+    assert.equal(spawned.length, 0, "no spawn")
+    assert.equal(stA.designToken, freshA, "state 不变")
+  } finally { dropSession(sidA) }
+
+  // —— 场景②：state 已是「续期后的两段式」，传入的是旧三段式**过期**令牌 ——
+  //    旧判序里 SUPERSEDED 先命中 → AC-24 要求的「旧版本令牌」文案被遮蔽。
+  const sidB = "r2-legacy-not-shadowed"
+  const stB = sessionState(sidB)
+  stB.engineering = true
+  const renewed = UUID_STATE + ":" + (Date.now() + 3600_000) // 续期后 state（两段式、未过期）
+  stB.designToken = renewed
+  try {
+    const spawned = []
+    const legacyExpired = UUID_OTHER + ":" + (Date.now() - 60_000) + ":deadbeefdeadbeef"
+    const outB = await runEngCoder(makeMinimalEngDeps(sidB, { spawned }), { task: "implement x", designToken: legacyExpired })
+    assert.ok(outB.includes("旧版本令牌"), "旧三段式过期串 → 旧版本文案（AC-24 不被遮蔽）: " + outB)
+    assert.ok(outB.includes("three-part") || outB.includes("旧版本令牌"), "说明形状不兼容")
+    assert.ok(!outB.includes("SUPERSEDED"), "不得被 SUPERSEDED 抢先命中")
+    assert.ok(!outB.includes("eng_coder delivery:"))
+    assert.equal(spawned.length, 0, "no spawn")
+    assert.equal(stB.designToken, renewed, "state 不变（拒绝路径无副作用）")
+  } finally { dropSession(sidB) }
+
+  // —— 正向对照（防「收紧过头」）：真正的续期取代场景仍必须报 SUPERSEDED ——
+  //    state = 续期后的两段式（同 uuid、新 expiresAt），传入 = 同 uuid 的旧过期串（AC-18 形态）。
+  const sidC = "r2-superseded-still-works"
+  const stC = sessionState(sidC)
+  stC.engineering = true
+  const oldExpired = UUID_STATE + ":" + (Date.now() - 60_000)
+  stC.designToken = UUID_STATE + ":" + (Date.now() + 3600_000) // 续期后：同 uuid、未过期
+  try {
+    const spawned = []
+    const outC = await runEngCoder(makeMinimalEngDeps(sidC, { spawned }), { task: "implement x", designToken: oldExpired })
+    assert.ok(outC.includes("SUPERSEDED") && outC.includes("已被本次会话的续期取代"),
+      "同 uuid 的过期串仍是 SUPERSEDED（评审 #2 的收紧不得破坏 AC-18）: " + outC)
+    assert.ok(outC.includes("Use the NEW token returned by that eng_coder call"), "出路指引保留")
+    assert.equal(spawned.length, 0, "no spawn")
+  } finally { dropSession(sidC) }
+})
+
+// ═════════════ D-30 批 2 收口轮：代码评审 #3（续期副作用先于 engEffective 检查） ═════════════
+
+test("D-30 评审#3: engineering OFF 的调用被拒时零副作用——过期令牌不被顺延、磁盘一字未改", async () => {
+  const home = mkdtempSync(join(tmpdir(), "thincoder-r3-engoff-"))
+  const sid = "r3-eng-off"
+  try {
+    // 盘上放一枚**可续期**记录（指纹与文档一致）——若检查仍排在续期之后，本次调用会把令牌顺延并落盘
+    const { expired } = makeRenewableFixture(sid, home)
+    const storePath = resolveTokenStorePath(home)
+    const diskBefore = readFileSync(storePath, "utf8")
+    const st = sessionState(sid)
+    st.engineering = false // 显式 OFF（tri-state 显式值胜出，configDefaultEngineering 不参与）
+    assert.equal(st.designToken, expired, "前置：内存态是那枚过期令牌")
+    const spawned = []
+    // 注意：本用例**故意**不置 engineering=true——被拒路径必须在 token/续期块之前就返回
+    const deps = {
+      ctx: { subagents: { async start(k, r) { spawned.push(r); throw new Error("eng OFF must not spawn") } } },
+      agent: { session: { id: sid, header: { cwd: home } }, options: {} },
+      config: {}, signal: undefined, configDefaultEngineering: false, storPathOverride: home,
+    }
+    const out = await runEngCoder(deps, { task: "implement x", designToken: expired, docs: [] })
+    assert.ok(out.includes("engineering mode is OFF"), "先报工程模式 OFF: " + out)
+    assert.ok(!out.includes("design token RENEWED"), "被拒的调用不得产生续期回执")
+    assert.equal(sessionState(sid).designToken, expired, "state 未被顺延（评审 #3：被拒 = 零副作用）")
+    assert.equal(readFileSync(storePath, "utf8"), diskBefore, "磁盘记录一字未改（未落盘续期）")
+    assert.equal(spawned.length, 0, "no spawn")
+  } finally { dropSession(sid); rmSync(home, { recursive: true, force: true }) }
+})
+
+// ═════════════ D-30 批 2 收口轮：代码评审 #4（docPaths 缺失/为空时的文案归类） ═════════════
+
+/** 畸形盘记录夹具：带 docHash 但 docPaths 缺失或为空（手改/损坏）。 */
+function writeMalformedRecord(sid, home, { docPaths }) {
+  const expired = "0f8fad5b-d9cb-469f-a165-70867728950e:" + (Date.now() - 60_000)
+  const st = sessionState(sid)
+  st.engineering = true
+  st.designToken = expired
+  mkdirSync(join(home, ".thincoder"), { recursive: true })
+  const rec = { token: expired, issuedAt: Date.now() - 7_200_000, expiresAt: Date.now() - 60_000, docHash: sha256Hex("the approved document set") }
+  if (docPaths !== undefined) rec.docPaths = docPaths
+  writeFileSync(resolveTokenStorePath(home), JSON.stringify({ version: 1, tokens: { [sid]: rec } }))
+  return expired
+}
+
+test("D-30 评审#4: docHash 在而 docPaths 缺失/为空 → 报「无法续期（记录不完整）」，不误报「文档已变更」", async () => {
+  for (const [label, docPaths] of [["docPaths 缺失", undefined], ["docPaths 为空数组", []]]) {
+    const home = mkdtempSync(join(tmpdir(), "thincoder-r4-"))
+    const sid = "r4-malformed-" + (docPaths === undefined ? "missing" : "empty")
+    try {
+      const expired = writeMalformedRecord(sid, home, { docPaths })
+      const storePath = resolveTokenStorePath(home)
+      const diskBefore = readFileSync(storePath, "utf8")
+      const spawned = []
+      const out = await runEngCoder({ ...makeMinimalEngDeps(sid, { spawned }), storPathOverride: home },
+        { task: "implement x", designToken: expired })
+      assert.ok(out.includes("cannot be renewed automatically"), label + " → 「无法续期」类文案: " + out)
+      assert.ok(out.includes("无法续期") && out.includes("记录不完整"), label + " → 中文说清「记录不完整」: " + out)
+      assert.ok(!out.includes("has CHANGED"), label + " → 不得误报「文档已变更」（根本没有文档集可比）")
+      assert.ok(!out.includes("文档已变更"), label + " → 中文同样不得误报")
+      assert.ok(!out.includes("eng_coder delivery:"), label + " → 拒绝路径不得放行")
+      assert.equal(spawned.length, 0, label + " → no spawn")
+      assert.equal(sessionState(sid).designToken, expired, label + " → state 未顺延")
+      assert.equal(readFileSync(storePath, "utf8"), diskBefore, label + " → 磁盘未被改写")
+    } finally { dropSession(sid); rmSync(home, { recursive: true, force: true }) }
+  }
+})
+
+// ═════════ D-30 收尾轮：评审 #7（N1「零新增依赖」的专用静态断言 = AC-28） ═════════
+// 需求档 §4 N1 的度量方式原本是「`package.json` dependencies 数不变（= 0）」——但**没有任何
+// 用例读它**，于是该不变量只是一句约定：任何一次「顺手加个依赖」都不会让测试变红。
+// 本用例把它变成静态锁（与 AC-3/AC-22 同类的源级断言）。
+
+test("AC-28 (N1): package.json 零新增依赖 —— dependencies 为空或缺省（静态锁，非约定）", () => {
+  const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8")
+  const pkg = JSON.parse(raw)
+  // 判定：缺省 / null / 空对象三者皆 = 零依赖；非空对象 = 违反 N1。
+  const zeroDeps = (p) => Object.keys(p.dependencies ?? {}).length === 0
+  const deps = pkg.dependencies ?? {}
+  assert.equal(zeroDeps(pkg), true,
+    "N1 被破坏：package.json dependencies 非空 → " + JSON.stringify(Object.keys(deps)))
+  assert.deepEqual(Object.keys(deps), [], "dependencies 项数必须为 0")
+
+  // 证伪对照（审计对 AC-5/AC-6 恒真断言的教训）：同一判定对「有依赖」样本必须为 false，
+  // 否则本用例是恒真空断言，锁不住任何东西。
+  assert.equal(zeroDeps({ dependencies: { "left-pad": "^1.3.0" } }), false,
+    "判定对非空 dependencies 必须为 false（防恒真）")
+  assert.equal(zeroDeps({ dependencies: {} }), true, "空对象 = 零依赖")
+  assert.equal(zeroDeps({}), true, "缺省 = 零依赖")
+
+  // 解析面真实性对照：读到的必须是插件清单本体（防「读错文件/读成空」造成的假绿）。
+  assert.equal(pkg.name, "@dsh-external/dsh-thincoder-suite", "解析面 = 本插件 package.json")
+  // 口径说明：peerDependencies（cordis，由宿主提供）不属于 N1 的 dependencies 口径，
+  // 故此处只作存在性留档，不参与零依赖判定。
+  assert.ok(pkg.peerDependencies && pkg.peerDependencies.cordis,
+    "peerDependencies.cordis 仍在（宿主提供，不计入 N1 的零依赖口径）")
 })

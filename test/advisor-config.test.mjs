@@ -7,10 +7,10 @@
 // + 2026-09-02 扩展 F10 T1–T5（storPathOverride 注入临时目录，不碰真实 $DSH_HOME）。
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { randomUUID, createHmac } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { dirname, join, resolve } from "node:path"
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import {
   advisorGroupKey, resolveAdvisorRoute, resolveIncludeProjectGuide,
@@ -20,6 +20,7 @@ import { buildAdvisorUserMessage } from "../lib/advisor-msgs.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 import { runEngCoder, buildCoderBrief } from "../lib/eng.mjs"
 import { loadTokenRecord, saveTokenRecord, resolveTokenStorePath } from "../lib/token-store.mjs"
+import { computeDocHash, normalizeDocPath } from "../lib/doc-hash.mjs"
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -437,12 +438,7 @@ test("T16: isApprovalVerdict v3 — severity-cell anchored, fix-marked red rows 
 function makeEngRunFixture(id) {
   const state = sessionState(id)
   state.engineering = true
-  const secret = process.env.THINCODER_TOKEN_SECRET || "thincoder-default-secret"
-  const uuid = randomUUID()
-  const expiresAt = Date.now() + 3600_000
-  const payload = uuid + ":" + expiresAt
-  const sig = createHmac("sha256", secret).update(payload).digest("hex").slice(0, 16)
-  state.designToken = payload + ":" + sig
+  state.designToken = randomUUID() + ":" + (Date.now() + 3600_000) // D-30：两段式
   return state
 }
 
@@ -543,13 +539,9 @@ test("T21: effort resolved in the merged group while the model pair falls to the
 
 // ————————————— F10 design token 磁盘持久化（docs/2026-09-02 §2.1/§4 T1–T5） —————————————
 
-/** 铸造一枚格式合法的 design token（同 advisor 签发：uuid:expiresAt:hmac16，HMAC 绑 TOKEN_SECRET）。 */
+/** 铸造一枚格式合法的 design token（同 advisor 签发：uuid:expiresAt，两段；D-30 删除了 HMAC 签名腿）。 */
 function makeF10Token(expiresAt = Date.now() + 3600_000) {
-  const secret = process.env.THINCODER_TOKEN_SECRET || "thincoder-default-secret"
-  const uuid = randomUUID()
-  const payload = uuid + ":" + expiresAt
-  const sig = createHmac("sha256", secret).update(payload).digest("hex").slice(0, 16)
-  return payload + ":" + sig
+  return randomUUID() + ":" + expiresAt
 }
 const f10ExpiryOf = (t) => Number.parseInt(String(t).split(":")[1], 10)
 
@@ -575,8 +567,15 @@ function approvingLlm() {
   }
 }
 
-/** 跑一轮「裁决通过 + 批准码回显」的 design 评审（stub LLM），返回 advisor 输出文本。 */
-async function runDesignApproval(sessionId, storPathOverride) {
+/** 跑一轮「裁决通过 + 批准码回显」的 design 评审（stub LLM），返回 advisor 输出文本。
+ *  config 缺省 {}（既有调用形态不变）；D-30/AC-25 用它注入 engTokenTtlMs 驱动有效期显示。 */
+async function runDesignApproval(sessionId, storPathOverride, config = {}) {
+  return runDesignApprovalOn(sessionId, storPathOverride,
+    ["docs/2026-09-02-thincoder-suite-extensions-design.md"], config)
+}
+
+/** 同上，但可指定文档集（D-30/FR-T5 续期用例需要真实可编辑/可删除的文档）。 */
+async function runDesignApprovalOn(sessionId, storPathOverride, documents, config = {}) {
   const state = sessionState(sessionId)
   state.advisorRound = 0
   state.lastAdvisorOutput = null
@@ -587,11 +586,43 @@ async function runDesignApproval(sessionId, storPathOverride) {
   }
   return runAdvisorReview({ llm: approvingLlm() }, {
     agent,
-    config: {},
+    config,
     reviewType: "design",
-    documents: ["docs/2026-09-02-thincoder-suite-extensions-design.md"],
+    documents,
     storPathOverride,
   })
+}
+
+// ————————————— D-30/FR-T5 续期用例夹具（AC-8…AC-27） —————————————
+
+/** 临时文档集（可编辑/可删除 → 驱动「文档已变更」与「文档不可读」两路 fail-closed）。 */
+function makeDocSet(home, files) {
+  const dir = join(home, "docsrc")
+  mkdirSync(dir, { recursive: true })
+  const out = {}
+  for (const [name, content] of Object.entries(files)) {
+    const p = join(dir, name)
+    writeFileSync(p, content)
+    out[name] = p
+  }
+  return out
+}
+
+/**
+ * 把已签发的磁盘记录改写成「已过期但指纹保留」形态——确定性制造过期（不依赖 sleep/短 TTL，
+ * 也就不会因待批令牌被重铸而丢掉快照），且**保留**签发放下的 docHash/docPaths（续期判定的唯一输入）。
+ * 同步把内存态 state.designToken 换成同一串，使 eng.mjs 走进过期子分支。
+ * @returns {string} 过期令牌串（同 uuid）
+ */
+function expireIssuedRecord(sid, home) {
+  const storePath = resolveTokenStorePath(home)
+  const data = JSON.parse(readFileSync(storePath, "utf8"))
+  const rec = data.tokens[sid]
+  const expiredToken = String(rec.token).split(":")[0] + ":" + (Date.now() - 60_000)
+  data.tokens[sid] = { ...rec, token: expiredToken, expiresAt: Date.now() - 60_000 }
+  writeFileSync(storePath, JSON.stringify(data, null, 2) + "\n")
+  sessionState(sid).designToken = expiredToken
+  return expiredToken
 }
 
 // ————————————— F10-T1（§4 T1）：签发落盘，mkdir recursive 隐含验证 —————————————
@@ -768,4 +799,352 @@ test("F10-T5: unwritable store path → signing still succeeds (warn, no throw);
     dropSession(sidB)
     rmRoot(root2)
   }
+})
+
+// ————————————— D-30/AC-25：签发消息的有效期显示（TTL > 24h → 日期而非裸 HH:MM） —————————————
+// 落点 = advisor.mjs 的批准返回行「（有效至 <expiryLabel>，TTL engTokenTtlMs）」：7d 令牌下
+// 「HH:MM」显示的是某个今天/昨天的钟点，无意义 → 改日期（设计档 §3 FR-T6 末段）。
+
+test("AC-25: the issued-token message shows a DATE for a 7d TTL and keeps HH:MM for a 1h TTL (real approval path)", async () => {
+  const root = makeF10Root()
+  try {
+    const sid7 = "ac25-7d-" + randomUUID()
+    const s7 = sessionState(sid7)
+    s7.pendingDesignToken = null // 清待批令牌 → 按注入 config 重新铸造（否则复用上一枚）
+    s7.pendingDocPaths = []
+    const out7 = await runDesignApproval(sid7, join(root, "h7"), { engTokenTtlMs: 7 * 24 * 3600 * 1000 })
+    assert.match(out7, /Approved\. Pass this exact token to eng_coder/, out7)
+    assert.match(out7, /（有效至 \d{4}-\d{2}-\d{2}，TTL engTokenTtlMs）/, "7d → 日期: " + out7)
+    dropSession(sid7)
+
+    const sid1 = "ac25-1h-" + randomUUID()
+    const s1 = sessionState(sid1)
+    s1.pendingDesignToken = null
+    s1.pendingDocPaths = []
+    const out1 = await runDesignApproval(sid1, join(root, "h1"), { engTokenTtlMs: 3600_000 })
+    assert.match(out1, /（有效至 \d{2}:\d{2}，TTL engTokenTtlMs）/, "1h → HH:MM（既有语义不回退）: " + out1)
+    dropSession(sid1)
+  } finally { rmRoot(root) }
+})
+
+// ═════════════════ D-30 验收标准 ACS：审批回显负例（设计档 §5 AC-6） ═════════════════
+// 判据必须走**真实签发路径的返回值**：审计（AC-5 注记）已证明「从提示词正则抠出 code 再原样
+// 回显」是同义反复——派生被换成常量串时那种写法仍全绿。故本用例预置固定 uuid 的待批令牌，
+// 期望码用**与实现无关**的硬编码常量（sha256(uuid).slice(0,8) = c812e1ed，同 AC-5 的独立对拍），
+// 再让 stub 评审正文回显「错码 / 无码 / 旧格式」三种形态；正向对照证明同一夹具确实走得通到
+// 签发点（防「路径根本没跑到」的假绿）。
+
+/** 待批令牌（固定 uuid，故其批准码是常量 c812e1ed——本用例不调用派生函数求期望值）。 */
+const AC6_UUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+const AC6_CODE = "c812e1ed"
+/** 通过性裁决正文（与 approvingLlm 同款措辞——isApprovalVerdict 命中的前提）。 */
+const AC6_PASS_VERDICT = "The design is approved with no unresolved Critical issues."
+
+/** 脚本化评审正文的 design 评审（正文完全可控；其余走真实 runAdvisorReview）。 */
+async function runDesignReviewWithReply(sessionId, storPathOverride, replyText) {
+  const state = sessionState(sessionId)
+  state.advisorRound = 0
+  state.lastAdvisorOutput = null
+  state.advisorOverride = null
+  const agent = {
+    session: { id: sessionId, header: { cwd: PLUGIN_DIR }, deriveMessages: () => [] },
+    options: { provider: "p", model: "m" },
+  }
+  const llm = {
+    stream: () => (async function* () {
+      yield { type: "block-end", block: { type: "text", text: replyText } }
+      yield { type: "finish", reason: { kind: "stop" } }
+    })(),
+  }
+  return runAdvisorReview({ llm }, { agent, config: {}, reviewType: "design", documents: [], storPathOverride })
+}
+
+test("AC-6: approval echo negatives — wrong code / no code / legacy [DESIGN-TOKEN:...] all issue NO token (real approval path)", async () => {
+  const root = makeF10Root()
+  const pendingToken = AC6_UUID + ":" + (Date.now() + 3600_000)
+  /** 跑一条负例：预置同一待批令牌 → 注入可控评审正文 → 从**真实返回文本 + state + 落盘**判有无签发。 */
+  const runCase = async (sid, home, replyText) => {
+    const st = sessionState(sid)
+    st.engineering = true
+    st.pendingDesignToken = pendingToken // 固定 uuid 的待批令牌（未过期 → runAdvisorReview 不重铸）
+    st.pendingDocPaths = []
+    const out = await runDesignReviewWithReply(sid, home, replyText)
+    return { out, st }
+  }
+  try {
+    // ——— ① 回显**错误**批准码 → 不签发 ———
+    const sid1 = "ac6-wrong-" + randomUUID()
+    const r1 = await runCase(sid1, join(root, "h1"), AC6_PASS_VERDICT + "\n\n[APPROVE:deadbeef]")
+    assert.ok(!r1.out.includes("Approved. Pass this exact token to eng_coder"), "错码不得签发: " + r1.out)
+    assert.ok(r1.out.includes("批准码校验失败"), "裁决本身是通过的——拒绝的唯一来源是批准码（防「路径没跑到」的假绿）: " + r1.out)
+    assert.equal(r1.st.designToken, null, "错码 → state 无签发")
+    assert.equal(loadTokenRecord(sid1, join(root, "h1")), null, "错码 → 磁盘无签发记录")
+    dropSession(sid1)
+
+    // ——— ② 回复中**没有**批准码 → 不签发 ———
+    const sid2 = "ac6-nocode-" + randomUUID()
+    const r2 = await runCase(sid2, join(root, "h2"), AC6_PASS_VERDICT)
+    assert.ok(!r2.out.includes("Approved. Pass this exact token to eng_coder"), "无码不得签发: " + r2.out)
+    assert.ok(r2.out.includes("批准码校验失败"), "同上：裁决通过但缺回显: " + r2.out)
+    assert.equal(r2.st.designToken, null, "无码 → state 无签发")
+    assert.equal(loadTokenRecord(sid2, join(root, "h2")), null, "无码 → 磁盘无签发记录")
+    dropSession(sid2)
+
+    // ——— ③ 回显旧格式 [DESIGN-TOKEN:<token>] → 仍被忽略（且这里回显的是**正确**的令牌本体，
+    //        比「伪造成令牌」更强的负例：旧通道整体废除，D8 干净切换） ———
+    const sid3 = "ac6-legacy-" + randomUUID()
+    const r3 = await runCase(sid3, join(root, "h3"), AC6_PASS_VERDICT + "\n\n[DESIGN-TOKEN:" + pendingToken + "]")
+    assert.ok(!r3.out.includes("Approved. Pass this exact token to eng_coder"), "旧格式回显不得签发: " + r3.out)
+    assert.ok(r3.out.includes("批准码校验失败"), "同上：裁决通过但旧通道不触发签发: " + r3.out)
+    assert.equal(r3.st.designToken, null, "旧格式 → state 无签发")
+    assert.equal(loadTokenRecord(sid3, join(root, "h3")), null, "旧格式 → 磁盘无签发记录")
+    dropSession(sid3)
+
+    // ——— 正向对照：同一夹具 + 正确码（硬编码常量，不经派生函数）→ 必须签发 ———
+    const sid4 = "ac6-good-" + randomUUID()
+    const home4 = join(root, "h4")
+    const r4 = await runCase(sid4, home4, AC6_PASS_VERDICT + "\n\n[APPROVE:" + AC6_CODE + "]")
+    assert.ok(r4.out.includes("Approved. Pass this exact token to eng_coder"), "正确码 → 签发（夹具活着的证明）: " + r4.out)
+    assert.ok(!r4.out.includes("批准码校验失败"), "正确码不得报校验失败")
+    assert.equal(r4.st.designToken, pendingToken, "state 记录签发令牌")
+    assert.equal(loadTokenRecord(sid4, home4)?.token, pendingToken, "磁盘同步落盘（真实签发路径）")
+    dropSession(sid4)
+  } finally { rmRoot(root) }
+})
+
+// ═════════════════ D-30 验收标准 ACS：续期 / 清扫类（设计档 §5 AC-8/9/11/13/14/15/18/19/27） ═════════════════
+// 本批最重要的验收面：驱动**真实签发路径**（advisor 批准落盘 docHash）→ 确定性过期（保留指纹）
+// → eng_coder 四路判定。AC-17（清扫回归）在 session-state.test.mjs（token-store 直测）。
+
+test("AC-8: renewal happy path — document set unchanged → eng_coder proceeds and returns a NEW token (same uuid, ≈now+TTL); state + disk updated", async () => {
+  const root = makeF10Root()
+  const home = join(root, "home")
+  const sid = "ac8-" + randomUUID()
+  sessionState(sid).engineering = true // 工程模式 ON：让判定真正走到 token 分支（不因 eng OFF 误绿）
+  try {
+    const docs = makeDocSet(home, { "a.md": "A v1", "b.md": "B v1" })
+    const bound = [docs["a.md"], docs["b.md"]]
+    const out1 = await runDesignApprovalOn(sid, home, bound, {})
+    assert.match(out1, /Approved\. Pass this exact token to eng_coder/, out1)
+    const rec0 = loadTokenRecord(sid, home)
+    assert.equal(typeof rec0.docHash, "string", "签发落盘带 docHash（FR-T8 保存缺口已补）")
+    assert.deepEqual(rec0.docPaths.slice().sort(), bound.map(normalizeDocPath).sort(), "落盘路径表 = 归一后集合")
+    assert.equal(rec0.docHash, computeDocHash(rec0.docPaths).hash, "落盘指纹 = 按落盘路径表重算的结果")
+
+    const expired = expireIssuedRecord(sid, home)
+    const started = []
+    const out2 = await runEngCoder(makeEngDeps(sid, {}, started, home), { task: "implement x", designToken: expired })
+    assert.ok(out2.includes("eng_coder delivery:"), "续期后放行（不重评）: " + out2)
+    assert.ok(out2.includes("design token RENEWED"), "续期回执随工具返回带出: " + out2)
+    const fresh = sessionState(sid).designToken
+    assert.notEqual(fresh, expired, "state 换成新令牌")
+    assert.equal(fresh.split(":")[0], expired.split(":")[0], "续期 = 同一 uuid")
+    assert.ok(Math.abs((Number(fresh.split(":")[1]) - Date.now()) - 7 * 24 * 3600 * 1000) < 5000,
+      "新 expiresAt ≈ now + 缺省 7d（实测 " + (Number(fresh.split(":")[1]) - Date.now()) + "ms）")
+    assert.ok(out2.includes(fresh), "**新令牌串在返回文本里**（FR-T5 返回契约：否则下一次调用必 mismatch）")
+    assert.ok(out2.includes("Replace the copy you hold"), "附「替换你手里的副本」指引")
+    const rec1 = loadTokenRecord(sid, home)
+    assert.equal(rec1.token, fresh, "磁盘与内存同步更新")
+    assert.equal(rec1.docHash, rec0.docHash, "续期保留指纹（续期输入不被清）")
+    assert.deepEqual(rec1.docPaths, rec0.docPaths, "续期保留路径表")
+    assert.equal(started.length, 1, "续期后照常 spawn")
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+test("AC-9: editing a bound document → renewal refused with 'has CHANGED'; no spawn, state/disk untouched", async () => {
+  const root = makeF10Root()
+  const home = join(root, "home")
+  const sid = "ac9-" + randomUUID()
+  sessionState(sid).engineering = true // 工程模式 ON：让判定真正走到 token 分支（不因 eng OFF 误绿）
+  try {
+    const docs = makeDocSet(home, { "a.md": "A v1", "b.md": "B v1" })
+    await runDesignApprovalOn(sid, home, [docs["a.md"], docs["b.md"]], {})
+    const expired = expireIssuedRecord(sid, home)
+    const before = loadTokenRecord(sid, home)
+    writeFileSync(docs["a.md"], "A v2 — edited after approval") // 文档集漂移
+    const started = []
+    const out = await runEngCoder(makeEngDeps(sid, {}, started, home), { task: "implement x", designToken: expired })
+    assert.ok(out.includes("design document set has CHANGED"), out)
+    assert.ok(out.includes("文档已变更"), "中文文案可区分: " + out)
+    assert.ok(out.includes("Re-run the design review"), "指向重评")
+    assert.ok(!out.includes("eng_coder delivery:"), "拒绝路径不得 spawn")
+    assert.equal(started.length, 0, "no spawn")
+    assert.equal(sessionState(sid).designToken, expired, "state 不顺延（仍为过期串）")
+    assert.deepEqual(loadTokenRecord(sid, home), before, "磁盘记录未被改写（拒绝路径不写盘）")
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+test("AC-11: a bound document deleted / unreadable → renewal refused (fail-closed) and eng_coder does not crash", async () => {
+  const root = makeF10Root()
+  const home = join(root, "home")
+  const sid = "ac11-" + randomUUID()
+  sessionState(sid).engineering = true // 工程模式 ON：让判定真正走到 token 分支（不因 eng OFF 误绿）
+  try {
+    const docs = makeDocSet(home, { "a.md": "A", "b.md": "B" })
+    await runDesignApprovalOn(sid, home, [docs["a.md"], docs["b.md"]], {})
+    const expired = expireIssuedRecord(sid, home)
+    rmSync(docs["b.md"]) // 文档被删
+    const started = []
+    const out = await runEngCoder(makeEngDeps(sid, {}, started, home), { task: "implement x", designToken: expired })
+    assert.ok(out.includes("no longer readable"), "fail-closed 文案: " + out)
+    assert.ok(out.includes(normalizeDocPath(docs["b.md"])), "点名不可读文档（诊断可见）")
+    assert.ok(!out.includes("eng_coder delivery:"), "拒绝路径不得 spawn")
+    assert.equal(started.length, 0)
+    assert.equal(sessionState(sid).designToken, expired, "state 不变")
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+test("AC-13: a review with an EMPTY document set writes no docHash → renewal is refused", async () => {
+  const root = makeF10Root()
+  const home = join(root, "home")
+  const sid = "ac13-" + randomUUID()
+  sessionState(sid).engineering = true // 工程模式 ON：让判定真正走到 token 分支（不因 eng OFF 误绿）
+  try {
+    const out1 = await runDesignApprovalOn(sid, home, [], {})
+    assert.match(out1, /Approved\. Pass this exact token to eng_coder/, out1)
+    const rec = loadTokenRecord(sid, home)
+    assert.equal(rec.docHash, undefined, "空文档集 → 不写 docHash（决策 D6：空集 hash 恒等会让护栏真空为真）")
+    assert.equal(rec.docPaths, undefined)
+    const expired = expireIssuedRecord(sid, home)
+    const started = []
+    const out = await runEngCoder(makeEngDeps(sid, {}, started, home), { task: "implement x", designToken: expired })
+    assert.ok(out.includes("cannot be renewed automatically"), out)
+    assert.ok(out.includes("无法续期"), "中文文案可区分: " + out)
+    assert.ok(!out.includes("eng_coder delivery:"))
+    assert.equal(started.length, 0)
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+test("AC-14: restart (head-line scenario) — empty memory + expired on-disk record WITH docHash + unchanged docs → refill → renew → proceed", async () => {
+  const root = makeF10Root()
+  const home = join(root, "home")
+  const sid = "ac14-" + randomUUID()
+  try {
+    const docs = makeDocSet(home, { "a.md": "A", "b.md": "B" })
+    await runDesignApprovalOn(sid, home, [docs["a.md"], docs["b.md"]], {})
+    const expired = expireIssuedRecord(sid, home)
+    dropSession(sid)                    // 进程重启模拟：内存态全丢
+    const state = sessionState(sid)     // 新槽：designToken === null
+    assert.equal(state.designToken, null, "内存空")
+    assert.equal(loadTokenRecord(sid, home).token, expired, "盘上只剩过期记录（带 docHash）")
+    state.engineering = true
+    const started = []
+    const out = await runEngCoder(makeEngDeps(sid, {}, started, home), { task: "implement x", designToken: expired })
+    assert.ok(out.includes("eng_coder delivery:"), "回填 → 续期 → 放行（头号场景）: " + out)
+    assert.ok(out.includes("design token RENEWED"), out)
+    assert.equal(started.length, 1)
+    const fresh = sessionState(sid).designToken
+    assert.notEqual(fresh, expired, "回填后顺延")
+    assert.equal(fresh.split(":")[0], expired.split(":")[0], "同一 uuid")
+    assert.equal(loadTokenRecord(sid, home).token, fresh, "磁盘同步")
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+test("AC-15: persistence failure during renewal → token still renewed in memory + returned, with a loud warn (N2 fail-safe)", async () => {
+  const root = makeF10Root()
+  const home = join(root, "home")
+  const sid = "ac15-" + randomUUID()
+  const storeDir = join(home, ".thincoder")
+  const storePath = resolveTokenStorePath(home)
+  sessionState(sid).engineering = true // 工程模式 ON：让判定真正走到 token 分支（不因 eng OFF 误绿）
+  try {
+    const docs = makeDocSet(home, { "a.md": "A" })
+    await runDesignApprovalOn(sid, home, [docs["a.md"]], {})
+    const expired = expireIssuedRecord(sid, home)
+    // 只读化：Windows 上 rename 覆盖只读目标 → EPERM；POSIX 上目录不可写 → tmp 创建失败。
+    // 两条路径都让「读得到、写不了」，正是 N2 要模拟的持久化故障。
+    chmodSync(storePath, 0o444)
+    chmodSync(storeDir, 0o555)
+    const started = []
+    const out = await runEngCoder(makeEngDeps(sid, {}, started, home), { task: "implement x", designToken: expired })
+    assert.ok(out.includes("eng_coder delivery:"), "写盘失败不得砖化会话（内存态继续服务）: " + out)
+    assert.ok(out.includes("FAILED to persist"), "响亮告警并入返回文本: " + out)
+    assert.ok(out.includes("design token RENEWED"), out)
+    const fresh = sessionState(sid).designToken
+    assert.notEqual(fresh, expired, "内存态已顺延")
+    assert.ok(out.includes(fresh), "新令牌串照常回传（返回契约不因写盘失败而失效）")
+    assert.equal(JSON.parse(readFileSync(storePath, "utf8")).tokens[sid].token, expired,
+      "盘上仍是旧记录（证明这次续期确实没写进去，告警不是空话）")
+    assert.equal(started.length, 1, "续期有效 → 照常 spawn")
+  } finally {
+    try { chmodSync(storeDir, 0o777) } catch { /* 目录可能不存在 */ }
+    try { chmodSync(storePath, 0o666) } catch { /* 同上 */ }
+    dropSession(sid)
+    rmRoot(root)
+  }
+})
+
+test("AC-18: two eng_coder calls in one session with the SAME expired token → the second gets the SUPERSEDED message", async () => {
+  const root = makeF10Root()
+  const home = join(root, "home")
+  const sid = "ac18-" + randomUUID()
+  sessionState(sid).engineering = true // 工程模式 ON：让判定真正走到 token 分支（不因 eng OFF 误绿）
+  try {
+    const docs = makeDocSet(home, { "a.md": "A" })
+    await runDesignApprovalOn(sid, home, [docs["a.md"]], {})
+    const expired = expireIssuedRecord(sid, home)
+    const started1 = []
+    const out1 = await runEngCoder(makeEngDeps(sid, {}, started1, home), { task: "first", designToken: expired })
+    assert.ok(out1.includes("design token RENEWED"), "第一个 eng_coder 触发续期")
+    const started2 = []
+    const out2 = await runEngCoder(makeEngDeps(sid, {}, started2, home), { task: "second", designToken: expired })
+    assert.ok(out2.includes("SUPERSEDED"), out2)
+    assert.ok(out2.includes("已被本次会话的续期取代"), "中文文案: " + out2)
+    assert.ok(out2.includes("Use the NEW token returned by that eng_coder call"),
+      "指明出路：用上一次 eng_coder 返回的新令牌（§3 FR-T5 定稿）: " + out2)
+    assert.ok(!out2.includes("eng_coder delivery:"), "第二个调用必须被拒（旧串已失效）")
+    assert.equal(started2.length, 0)
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+test("AC-19: narrowing attack — round 1 binds [A,B], the approval round passes only [A] → the persisted snapshot stays [A,B]", async () => {
+  const root = makeF10Root()
+  const home = join(root, "home")
+  const sid = "ac19-" + randomUUID()
+  sessionState(sid).engineering = true // 工程模式 ON：让判定真正走到 token 分支（不因 eng OFF 误绿）
+  try {
+    const docs = makeDocSet(home, { "a.md": "A", "b.md": "B" })
+    const expected = [docs["a.md"], docs["b.md"]].map(normalizeDocPath).sort()
+    const out1 = await runDesignApprovalOn(sid, home, [docs["a.md"], docs["b.md"]], {})
+    assert.match(out1, /Approved\. Pass this exact token to eng_coder/, out1)
+    assert.deepEqual(loadTokenRecord(sid, home).docPaths, expected, "首轮快照 = [A,B]")
+    // 同一评审会话（待批令牌仍有效）的收窄轮：只传 [A]
+    const out2 = await runDesignApprovalOn(sid, home, [docs["a.md"]], {})
+    assert.match(out2, /Approved\. Pass this exact token to eng_coder/, out2)
+    assert.deepEqual(loadTokenRecord(sid, home).docPaths, expected, "收窄轮不缩窄快照（并集语义，评审 #2）")
+    // B 漂移 → 续期被拒（快照里确实还绑着 B——收窄攻击失效）
+    const expired = expireIssuedRecord(sid, home)
+    writeFileSync(docs["b.md"], "B v2")
+    const started = []
+    const out3 = await runEngCoder(makeEngDeps(sid, {}, started, home), { task: "implement x", designToken: expired })
+    assert.ok(out3.includes("design document set has CHANGED"), out3)
+    assert.equal(started.length, 0)
+  } finally { dropSession(sid); rmRoot(root) }
+})
+
+test("AC-27: union snapshot — first mint [A], a later round joins [B,C] → snapshot [A,B,C]; a B drift then refuses renewal", async () => {
+  const root = makeF10Root()
+  const home = join(root, "home")
+  const sid = "ac27-" + randomUUID()
+  sessionState(sid).engineering = true // 工程模式 ON：让判定真正走到 token 分支（不因 eng OFF 误绿）
+  try {
+    const docs = makeDocSet(home, { "a.md": "A", "b.md": "B", "c.md": "C" })
+    const expected = [docs["a.md"], docs["b.md"], docs["c.md"]].map(normalizeDocPath).sort()
+    await runDesignApprovalOn(sid, home, [docs["a.md"]], {})
+    assert.deepEqual(loadTokenRecord(sid, home).docPaths, [docs["a.md"]].map(normalizeDocPath), "首铸轮 = [A]")
+    await runDesignApprovalOn(sid, home, [docs["b.md"], docs["c.md"]], {})
+    const rec = loadTokenRecord(sid, home)
+    assert.deepEqual(rec.docPaths, expected, "后续轮并入 [B,C] → 快照 [A,B,C]（历轮并集）")
+    assert.equal(rec.docHash, computeDocHash(expected).hash, "指纹覆盖并集")
+    // 并入的 B 漂移 → 续期被拒（若快照只绑首轮 [A]，此处会误放行）
+    const expired = expireIssuedRecord(sid, home)
+    writeFileSync(docs["b.md"], "B v2 — drifted after being joined")
+    const started = []
+    const out = await runEngCoder(makeEngDeps(sid, {}, started, home), { task: "implement x", designToken: expired })
+    assert.ok(out.includes("design document set has CHANGED"), out)
+    assert.ok(out.includes("文档已变更") && out.includes(normalizeDocPath(docs["b.md"])),
+      "拒绝文案点名变更的文档集（含并入轮加入的 B）: " + out)
+    assert.ok(!out.includes("eng_coder delivery:"))
+    assert.equal(started.length, 0)
+  } finally { dropSession(sid); rmRoot(root) }
 })
