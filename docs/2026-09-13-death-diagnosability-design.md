@@ -364,3 +364,18 @@ export function shouldBudgetNudge(elapsed, totalMs, alreadyNudged) {
 
 **过程留痕（值得记一笔）**：修复轮的变异验证过程中，`lib/eng.mjs` 曾被 **PowerShell 往返写成双编码乱码**（与本仓批 3 的同类事故**同因**），实现者用「git blob + 保留 7 处真实改动 hunk」重建并逐行修复。**父侧独立核验**：7 个改动文件的 `U+FFFD` 与 mojibake 命中**均为 0**、`lib/eng.mjs` diff 恰 **37 行**、全量 **360/360**。
 > **纪律重申**：本仓**禁止**用 PowerShell 做代码文件的读-改-写（`Get-Content -Raw` 会按 ANSI 读 UTF-8，`WriteAllText` 会写成 UTF-16）。批 3 与批 6 两次事故同因——需要脚本级改写时用 **node 显式 `utf8`**，并在写后核 `U+FFFD` = 0。
+
+### §12.4 交付代码评审落档（2026-09-13 —— `VERDICT: PASS`，**本追加与上文本冲突时以本追加为准**）
+
+**背景**：交付代码评审 **PASS**（🔴0 · 🟡1 · 🔵4）。评审员**逐条回读代码**核验了 AC-AP1…AC-AP9（含 `.abort(` 计数 4/5/5/3 与 HEAD 逐文件相等、定时器第二实参逐字、`/deadline reached/` 零命中、超时尾纯追加、四家族归因链、`hostAbortSource` 的「未打标 ⇒ 宿主」判据、consult 消费面、`eng.mjs` 重建后**全文通读无 U+FFFD/mojibake**）。父侧处置如下。
+
+| # | 级别 | 处置 |
+|---|---|---|
+| **1** | 🟡 | **codex 面 AbortError 形态的归因缺口 → 归并入 R-1 延后**。事实（评审实测）：codex **同步**路径的 catch 只在 `if (signal?.aborted)` 臂接死亡行，适配器以 AbortError 抛出而**调用方信号未中止**时回落通用文案（无显式 `abort(unknown@provider)`）；同文件 **dsh** 路径的谓词是 `signal?.aborted \|\| e?.name === "AbortError"`（**同族谓词不对称**）；codex **后台 job** 的 reject 回调同样未接。**父侧裁定：不改本批**——理由三条：① 它与已登记的 **R-1**（codex `ABORTED` 信封无标签）是**同一族**（codex 面诊断闭环），统一裁定比零敲碎打更不容易漏；② **不阻塞任何 AC**（矩阵未覆盖该构造故不红，属「本可更完备」而非「判定错」）；③ 用户此刻已裁定**收尾并换新会话**，再开一轮实施的成本（含今日已是第 3 次资源耗尽崩溃的风险）大于收益。**R-1 的范围据此扩为「codex 面诊断闭环」**（ABORTED 信封 + AbortError 未中止形态 + 后台 job reject 回调），已同步进交接页 |
+| **2** | 🔵 | **T-AP7 的 git 交叉核验只容忍 `ENOENT`**（git 在装但目录不在仓库内 → exit 128 → 直接红），与 T-AP9 锚 B 的宽容降级不一致。**登记**（与 #5 同批做测试健壮性微修） |
+| **3** | 🔵 | **文档口径订正（父侧，本次已修）**：设计档 §12.2 #4 把 advisor 接线站钉为**五处**，实现实为**六处**——循环顶的 `signal?.aborted` 检查也改接了 deathLine 且被 `T-AP1a` 实证消费。**修正：advisor 接线站 = 六处**（循环顶 `signal?.aborted` 检查 · 循环 catch · 环内 `kind==="error"` 站 · codex job catch · dsh job catch · 外层 catch）。**超集不是回归**（多接一处纯增益），此处只做口径对齐 |
+| **4** | 🔵 | R-1 已登记项的**复核确认**（codex 信封确无标签）——**不重新起诉已裁定项** ✓ |
+| **5** | 🔵 | `abort-provenance.mjs` 的 `deathLine` 末尾 `return raw.slice(0, DEATH_LINE_MAX)` 是**不可达死代码**（`dLen === 0` 必返回）。**登记**（与 #2 同批微修；无害，可留作防御） |
+
+**结论**：本批**无未决 🔴**；1🟡 经父侧显式裁定**归并入 R-1 延后**（理由见上，**不是静默收口**）；🔵 #3 已修，#2/#5 登记。
+**本批终态**：v0.13.0 · `a5f9551`+`aa9f257`+`9205bc8` · 全量 **360/360**。
