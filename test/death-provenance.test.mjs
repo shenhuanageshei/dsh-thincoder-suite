@@ -949,10 +949,13 @@ test("T-AP9 (AC-AP9): 既有测试零修改（持久锚：交付提交的历史�
       + "——提交后自动生效；本锚断言的是**历史**，不是工作树")
   }
 
-  // —— 锚 B：**工作树 vs 固定历史基线**（授权例外之外零 diff）——
+  // —— 锚 B：**自固定历史基线的既有测试「修改/删除」为零**（授权例外之外）——
+  // 批 6 收口修正：原用 `--name-only` 会把**本批新增**的测试档（如本档）也算成「改动」——
+  // 提交前它未跟踪故不出现，提交后立刻出现 ⇒ 该锚在提交瞬间自行转红（正是 D-37 的同一教训：
+  // 锚必须区分「新增」与「修改」）。语义上的「既有测试零修改」= **只统计 M（修改）与 D（删除）**。
   let baseDiff = null
   try {
-    baseDiff = execFileSync("git", ["diff", "--name-only", AP_BASELINE_SHA, "--", "test"],
+    baseDiff = execFileSync("git", ["diff", "--name-only", "--diff-filter=MD", AP_BASELINE_SHA, "--", "test"],
       { cwd: PLUGIN_DIR, encoding: "utf8" }).trim().split("\n").map((s) => s.trim()).filter(Boolean)
   } catch (e) {
     if (e?.code === "ENOENT") baseDiff = null // 无 git 的机器：跳过该锚（其余锚仍生效）
