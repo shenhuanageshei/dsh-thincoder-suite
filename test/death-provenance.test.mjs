@@ -949,21 +949,26 @@ test("T-AP9 (AC-AP9): 既有测试零修改（持久锚：交付提交的历史�
       + "——提交后自动生效；本锚断言的是**历史**，不是工作树")
   }
 
-  // —— 锚 B：**自固定历史基线的既有测试「修改/删除」为零**（授权例外之外）——
-  // 批 6 收口修正：原用 `--name-only` 会把**本批新增**的测试档（如本档）也算成「改动」——
-  // 提交前它未跟踪故不出现，提交后立刻出现 ⇒ 该锚在提交瞬间自行转红（正是 D-37 的同一教训：
-  // 锚必须区分「新增」与「修改」）。语义上的「既有测试零修改」= **只统计 M（修改）与 D（删除）**。
+  // —— 锚 B：**基线时已存在的测试档，零修改**（授权例外之外）——
+  // 批 6 收口修正（两次）：① 原用 `--name-only` 会把**新增**档也算「改动」⇒ 提交瞬间自红；
+  // ② 只加 `--diff-filter=MD` 仍不够——本档自己**被修改过**（就是这次修正），于是它仍以 M 出现。
+  // 语义的正确表述 = 「**在基线 `2e6ca8b` 时就已存在**的测试档，除授权例外外零修改」——
+  // 故先取基线时点的文件清单，再与「自基线起的 M/D 集合」求交。（同一教训第二次命中：锚的谓词必须写全。）
   let baseDiff = null
+  let baselineFiles = null
   try {
     baseDiff = execFileSync("git", ["diff", "--name-only", "--diff-filter=MD", AP_BASELINE_SHA, "--", "test"],
+      { cwd: PLUGIN_DIR, encoding: "utf8" }).trim().split("\n").map((s) => s.trim()).filter(Boolean)
+    baselineFiles = execFileSync("git", ["ls-tree", "-r", "--name-only", AP_BASELINE_SHA, "--", "test"],
       { cwd: PLUGIN_DIR, encoding: "utf8" }).trim().split("\n").map((s) => s.trim()).filter(Boolean)
   } catch (e) {
     if (e?.code === "ENOENT") baseDiff = null // 无 git 的机器：跳过该锚（其余锚仍生效）
     else { baseDiff = null; console.warn("[thincoder-suite] T-AP9 锚 B 跳过：基线 " + AP_BASELINE_SHA + " 不可解析（" + (e?.message ?? e) + "）") }
   }
-  if (baseDiff !== null) {
-    assert.deepEqual(baseDiff.filter((f) => !AP_TEST_AUTHORIZED.includes(f)), [],
-      "自批 6 基线 " + AP_BASELINE_SHA + " 起既有测试档零修改（授权例外 = " + AP_TEST_AUTHORIZED.join(", ") + "）")
+  if (baseDiff !== null && baselineFiles !== null) {
+    const touchedExisting = baseDiff.filter((f) => baselineFiles.includes(f) && !AP_TEST_AUTHORIZED.includes(f))
+    assert.deepEqual(touchedExisting, [],
+      "自批 6 基线 " + AP_BASELINE_SHA + " 起**基线时已存在**的测试档零修改（授权例外 = " + AP_TEST_AUTHORIZED.join(", ") + "）")
   }
 
   // deathLine：幂等（无标注输入反复调用结果不变）+ ≤300 边界 + 截断先截 detail 不砍 message
