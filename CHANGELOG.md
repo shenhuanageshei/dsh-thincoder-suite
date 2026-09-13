@@ -2,6 +2,18 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.13.0] — 2026-09-13
+
+**批 6：死亡可诊断（守卫 D 判定换血 + 四家族 abort 溯源 + 裸 abort 灭绝）**
+
+- **总目标**：让**每一种死亡自证来源**——「哪一层按下的（provider / agent / settle）+ 因为什么（user / timeout / cancel / stop / unknown）」在一次工具返回里可判。动机有**生产事故实证**：`consult.mjs` 头注自认「2026-09-08 生产：**20 次失败全被读成「aborted 无死因」**」（D-28 当时试了 21 次才诊断出来）。
+- **新模块 `lib/abort-provenance.mjs`（唯一词汇表）**：`TRIGGERS`(5) / `LAYERS`(4) / `triggerOf` / `abortError` / `timeoutError` / `annotateAbort` / `deathLine`（截断顺序 = 先截 detail → 再拼 cause/tag → 最后整体兜底 ≤300）/ `abortTag`（`detail` 机器短标签）/ `hostAbortInfo` + `hostAbortSource`（宿主面机械判据：控制器已中止 ∧ reason **未带**我方标注 ⇒ `{cancel, settle}`）。
+- **FR-AP2 墙判定换血**：`runAdvisorToolLoop` 的 `/deadline reached/` **文本嗅探整行删除**，改由 `deadlineFired` latch 与 `abortInfo.trigger` 判定——适配器以**无声样 AbortError** 抛出时不再被误判为「用户中断」并丢掉超时统计尾。
+- **FR-AP3/AP4**：`shouldBudgetNudge` 纯函数 + 循环顶**每场至多一次**的 75% 预算提示（走 `messages` 注入，**不进**返回正文/prior）；超时尾**纯追加**——既有那句一字符未动，其后追加 `tool calls / review text produced / budget` 三要素与两条出路。
+- **FR-AP5/AP6 四家族接线 + 裸写点灭绝**：advisor 五站（循环 catch · 环内 `kind==="error"` 站 · 两条 job catch · 外层 catch）· eng 三站 · escalate 三站 · consult 五站；**`grep '\.abort()' lib/` = 0 命中**（基线 5 处裸写点全部补上 reason 载荷），**零新增写点、零定时器时长/条件变更**（`.abort(` 计数与 HEAD 逐文件相等）。
+- **流程留痕**：设计评审**轮次 1 = FAIL**（🔴 = 我自己的设计档自相矛盾：超时尾「追加」与「替换 + 逐处改断言」三处打架，而零改面纪律禁止改断言——**评审员判得对**）→ 修正为纯追加 → 轮次 2 PASS → 实施 → **独立分歧审计 1🔴/4🟡/3🔵**：🔴 = consult 的 stop/cancel 两构造的判据打在**手搓等价物**上、且生产死亡行**没有消费者**（`settleChild` 丢弃 payload）→ 修复轮**给它接了真实消费面**（死亡行进该行模型的可见文本），并给出「删生产站点即红」实测；其余含宿主面层映射（job_kill 误报 `unknown@agent` → 修成 `cancel@settle`）、环内 error 站补接线、矩阵补六站、模块实测表计数订正、定时器门禁改逐字比对、两个不可持久的锚（**D-37**/T-G9 与 T-AP9）改成历史事实锚。
+- **测试**：`node --test` **360/360**（既有 320 中 319 条原样未动 + T-G9 按 D-37 授权修为历史锚；零其余既有测试修改）。
+
 ## [0.12.0] — 2026-09-13
 
 **批 4：设计评审豁免 5 轮上限 + 三振结算护栏（成对吸收）+ D-35 评审链作用域折入**
