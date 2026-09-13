@@ -709,7 +709,7 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 11 �
     "advisor-config.test.mjs", "codex-runner.test.mjs", "config-api.test.mjs", "consult.test.mjs",
     "context-budget.test.mjs", "death-provenance.test.mjs", "design-review-guard.test.mjs",
     "preset-static.test.mjs", "session-state.test.mjs", "stages.test.mjs", "truncation.test.mjs",
-    "path-kind.test.mjs",
+    "path-kind.test.mjs", "prompt-contract.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     "测试档清单 = 既有 11 档 + 本批唯一新增档（多一个 = 越界新增，少一个 = 既有档被改名/删除）")
