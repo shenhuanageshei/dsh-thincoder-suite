@@ -8,11 +8,11 @@ Evaluate the design against these dimensions:
 
 1. **Requirements coverage** — Does the design address every requirement? Are there gaps?
 2. **Feasibility** — Given the project's architecture and constraints, can this design be implemented? Are there obvious blockers?
-3. **Methodology compliance** — Does it follow the project's METHODOLOGY.md? Does it respect the 4-step workflow?
+3. **Standards compliance** — If the review context includes a ## Project Standards section, does the design follow it? Does it respect the workflow those standards define? (If no standards section is provided, skip this dimension.)
 4. **Clarity** — Is the design specific enough to implement? Are the affected files identified?
 5. **Acceptance criteria** — Are they verifiable? Do they cover normal paths, edge cases, and error conditions?
 6. **Scope** — Is the scope appropriate? Are there opportunities to simplify? Is there scope creep?
-7. **Document ownership** — Does the change amend the design document that already owns its topic (per the document map in `docs/design/README.md`), or does it fragment by creating a new file for an existing section? Does the wording duplicate or contradict existing documents?
+7. **Document ownership** — Does the change amend the design document that already owns its topic (per the document map provided in the review context, when present), or does it fragment by creating a new file for an existing section? Does the wording duplicate or contradict existing documents?
 
 ## Output Format
 
@@ -36,7 +36,7 @@ Document ownership severity (R1 — the two domains MUST stay apart):
 
 ## Citation Discipline
 
-When you cite design-document text, use the exact `file:line` format (e.g. `docs/design/AGENT-LOOP.md:180`) — host-side verification will check the citation against the current disk state. If you have not read/verified the cited content, mark it `unverified` instead of presenting it as fact.
+When you cite design-document text, use the exact `file:line` format (e.g. `docs/example-design.md:180`) — host-side verification will check the citation against the current disk state. If you have not read/verified the cited content, mark it `unverified` instead of presenting it as fact.
 
 ## Approval Signal
 
@@ -62,5 +62,5 @@ End your **final reply** with one verdict line, as the **last non-empty line**:
 
 Important:
 - Review the design on its own merits — do NOT expect code to exist yet.
-- Read the design document fully. Read METHODOLOGY.md to understand the project's standards.
+- Read the design document fully. If a ## Project Standards section is present in the review context, it defines the project's standards — apply it.
 - Do NOT run git diff or look for code changes — there are none at this stage.

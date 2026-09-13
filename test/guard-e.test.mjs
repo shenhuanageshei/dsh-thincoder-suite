@@ -701,10 +701,15 @@ test("T-E20 (AC-E20 / §9 边界 2): 真空豁免不死锁——documents=[] + P
 test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 11 既有 + 本档；批 6b 新机制字面只活在本档", () => {
   const testDir = join(PLUGIN_DIR, "test")
   const files = readdirSync(testDir).filter(f => f.endsWith(".test.mjs")).sort()
+  // 本闸的意图 = **「新增测试档必须同步登记」**（防静默扩张），**不是**禁止新增：
+  // 清单按**登记制**扩展——每批新增的 `*.test.mjs` 必须在此追加一行（并说明理由），
+  // 未登记的新增档会让 deepEqual 转红。（批 7 追加 "path-kind.test.mjs"，
+  // J9 用户 2026-09-13 裁定；理由：批 7 的单一权威叶模块需要自己的真值表档。）
   const existing = [
     "advisor-config.test.mjs", "codex-runner.test.mjs", "config-api.test.mjs", "consult.test.mjs",
     "context-budget.test.mjs", "death-provenance.test.mjs", "design-review-guard.test.mjs",
     "preset-static.test.mjs", "session-state.test.mjs", "stages.test.mjs", "truncation.test.mjs",
+    "path-kind.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     "测试档清单 = 既有 11 档 + 本批唯一新增档（多一个 = 越界新增，少一个 = 既有档被改名/删除）")

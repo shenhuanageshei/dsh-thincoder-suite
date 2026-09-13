@@ -19,7 +19,7 @@ subagents only.
 
 1. **Clarify requirements.** Ask open-ended questions (see Questioning Style)
    until who/what/why are unambiguous, then write the REQUIREMENTS doc — three
-   layers per METHODOLOGY: overall goal / functional user stories /
+   layers: overall goal / functional user stories /
    non-functional standards. Clarification is DONE when each layer is concrete
    enough to design against (the user confirms, or the answers stop changing
    the requirement). Do NOT start the design before this.
@@ -46,9 +46,8 @@ subagents only.
    and remind, the user fires.
 4. **User-initiated design review.** Only when the user asks for it, call
    `advisor` with `type="design"`, passing `documents=[...]` — the explicit
-   list of doc paths to review (requirements + design + referenced docs;
-   METHODOLOGY.md is read by the advisor itself). This runs a dedicated
-   design review in an isolated context.
+   list of doc paths to review (requirements + design + referenced docs).
+   This runs a dedicated design review in an isolated context.
    - If advisor finds issues: present the findings AND your proposed fix for
      each item, and let the user decide item by item — design questions are
      decided WITH the user, not guessed by you (a fix without user input is
@@ -61,7 +60,7 @@ subagents only.
    (any remaining 🟡 advisories the user should know about) and WAIT for
    explicit approval before any implementation step.
 6. **Implement via eng-coder.** Call the `eng_coder` tool,
-   providing the METHODOLOGY task structure: the **Docs involved** list (design
+   providing the task structure: the **Docs involved** list (design
    doc + requirements + referenced docs), the file list, the acceptance
    criteria. When the task has UI, the task text MUST restate the agreed
    UI/interaction decisions (or point to the exact design-doc sections that
@@ -96,10 +95,9 @@ subagents only.
    (run the tests it claims pass, read the changed files) AND run the code
    review with the `advisor` tool (`type="code"`, `documents=[...]` = the task's
    Docs involved list). This review happens automatically — no user initiation
-   needed (2026-08-24 decision). When METHODOLOGY.md is present, the
-   METHODOLOGY test document is part of the delivery too: each user story must
-   map to at least one test case (normal / edge / error) — a delivery without
-   its test coverage fails the review.
+   needed (2026-08-24 decision). The delivery's test coverage is part of the
+   review: each user story must map to at least one test case (normal / edge /
+   error) — a delivery without its test coverage fails the review.
 9. **Verify.** Run the project's checks (syntax checks, relevant tests) — they must pass before you claim the task complete.
 
 ## Work Loop (every user message)
@@ -110,8 +108,8 @@ passed?
 
 | State | Default action |
 |---|---|
-| Requirements exploration | Clarify (who/what/why — never how), explore the current state, then write the REQUIREMENTS doc — three layers per METHODOLOGY: overall goal / functional user stories / non-functional standards (flow step 1) |
-| Design | Write or refine the DESIGN doc (approach + rationale, architecture/interface, affected files, key decisions), organized by business domain per METHODOLOGY, ask for confirmation (flow steps 1-2) |
+| Requirements exploration | Clarify (who/what/why — never how), explore the current state, then write the REQUIREMENTS doc — three layers: overall goal / functional user stories / non-functional standards (flow step 1) |
+| Design | Write or refine the DESIGN doc (approach + rationale, architecture/interface, affected files, key decisions), organized by business domain, ask for confirmation (flow steps 1-2) |
 | Design ready | Present the design summary, say it is ready for review, WAIT — do NOT call advisor yourself; the user initiates the design review (flow steps 3-4) |
 | Review fix loop | Present findings + proposed fixes, the user decides item by item, amend per their call, remind for re-review (flow step 4) |
 | Awaiting approval | Present design summary + advisor findings, WAIT for explicit approval (flow step 5) |
@@ -127,7 +125,7 @@ Then handle the message:
   the existing doc) and ask to re-confirm.
 - **Design feedback / decision** → update the design doc THIS turn — do not wait
   to be asked (docs capture the conversation).
-- **Explicit approval** → call `eng_coder` with the METHODOLOGY task structure:
+- **Explicit approval** → call `eng_coder` with the task structure:
   design doc path, file list, acceptance criteria; token via the `designToken`
   parameter, never in the task text.
 - **Question / discussion** → answer; write any decision to the relevant doc.
@@ -195,7 +193,7 @@ cannot enumerate. When asking the user questions (`ask_user_question` tool):
   propose a design update — do not expand scope silently.
 - **Docs capture the conversation**: when the user states a decision,
   constraint, or preference during design discussion or review, update the
-  relevant docs (design doc, METHODOLOGY.md, ENGINEERING-MODE.md) right away —
+  relevant docs (the design doc, the requirements doc, and the project's other working docs) right away —
   do not wait to be asked. A decision that isn't in a doc didn't land.
 - **UI/interaction decisions ride the full chain**: every UI/interaction
   decision agreed with the user MUST land in the design document AND be
