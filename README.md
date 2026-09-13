@@ -37,21 +37,21 @@
 - **证据不可验证** —— 报的文件 / 行号可能记错、看旧版本甚至编造
 - **运动员兼裁判** —— 同一个模型既写代码又审自己刚写的代码
 
-advisor 把它变成 `for round in 1..5 { 权限递减的对账 }`：
+advisor 把它变成 `for round in 1..5 { 权限递减的对账 }`（**轮次上限只对 code 评审生效**——design 评审豁免 cap，由三振结算护栏兜底，见下）：
 
 | 轮次 | 评审权限 |
 |------|----------|
 | Round 1 | 全量审查，建立 issue 清单 |
 | Round 2 | 核销上轮清单 + 仅限致命新问题（crashes / data loss 级） |
 | Round 3–5 | 严格只核销上轮响应表，不再找新问题 |
-| 第 6 次调用 | 不经过 LLM，机械拒绝 |
+| 第 6 次调用（**仅 code 评审**） | 不经过 LLM，机械拒绝 |
 
 配套的机械约束：
 
 - **响应表协议** —— 被评审方每轮必须回 `| # | Action | Detail |`（Fixed / Dispatched / Not an issue / Deferred），逐条对账（`Dispatched` = 修复已派给子代理/后台 job、**尚未**返回经验证的结果，属「认领」而非「已解决」；Detail 必须点名派给了什么，未落地的 `Dispatched` 🔴 与未修复 🔴 同待遇）
 - **引用验真** —— 评审报告中的 `file:line` 引用逐条与磁盘文件比对，伪造引用直接标注
 - **每轮全新上下文** —— prior 输出以原文注入新会话，防锚定
-- **预算共享 + 类型隔离（F11）** —— code review 与 design review 共用 5 轮预算，修完复审不重新计数；但 **reviewType 切换（code ↔ design）时重置轮次与 prior**——新设计文档评审总是从 round 1 开始，不携带 code 评审的收敛上下文（2026-09-02 实测事故修复：code 3 轮后 design 评审误走收敛轮、新文档未被全量评审）
+- **预算按类型隔离（F11 + 批 4 成对吸收）** —— code review 与 design review 的**轮次预算不再共享**：5 轮 cap **只对 code 评审生效**（code 侧保留「改 A 报 B」的原始护栏），**design 评审豁免 cap**（第 6、7 次发起照常执行——设计文档天生要反复修订，「改文档 → 重评审」正是本机制的设计意图）；design 侧改由**三振结算护栏**兜底：同一文档集**连续三次跑不出可用结算**（超时 / 上下文截断 / 工具轮上限 / 空响应 / 内部兜底截止 / 陈旧结算 / 凭证落盘失败 / 无可用判决）⇒ 后续同键发起被**零 LLM 直接拒**（工具层与核心层双入口），且**不可自解除**（改配置、回滚文件、编辑文档都不复位；唯一出口 = 新会话）。用户主动中断不计振。**两半必须成对**：只豁免 = 撤掉唯一的界（无结算循环无上界）；只护栏 = 设计评审仍被 cap 误杀。另：**reviewType 切换（code ↔ design）时重置轮次与 prior**，且**设计评审链按文档集作用域**（批 4 D-35 折入：换一份设计文档集等价于类型切换——轮次归 0、prior 清空、走 round-1 提示词，防「第二份文档拿到收敛轮提示词 + 别的文档的 prior」）
 - **超时硬生效（F5）** —— 单轮评审硬预算 = 该轮组 `timeoutMs`，绝对截止定时器 + chunk 墙钟双检查，静默流/稳定涓流都在预算时刻被中止（消除 606~699s 超跑）；裁决顺序绝对截止优先，stall 重试不豁免预算
 
 ## 工程模式 eng
@@ -79,7 +79,7 @@ design-before-code 的运行时门禁：
 
 ### 会话级状态持久化（F12）
 
-工程模式与评审协议推进状态（`engineering` tri-state、`advisorRound`/`lastAdvisorOutput`/`lastReviewType`、`mutatedThisRun`、`touchedFiles`、`advisorOverride`）镜像到 `$DSH_HOME/.thincoder/session-state.json`（与 `design-tokens.json` **分文件**——回滚独立：删 session-state.json 回纯内存行为，token 不受牵连）。宿主恢复会话时 `agent/session-start` 预载恢复：会话 Map 无该 key 且盘上条目在 7d TTL 内 → 白名单校验 + 规范化后整条灌入（**只填空槽**——本进程已活跃/已推进的会话不被盘上陈旧条目覆盖）；`engineering === true` 恢复后自动重挂工程模式人格 section。
+工程模式与评审协议推进状态（`engineering` tri-state、`advisorRound`/`lastAdvisorOutput`/`lastReviewType`、`mutatedThisRun`、`touchedFiles`、`advisorOverride`、`lastDesignDocKey`——后者 = 设计评审链的**文档集作用域键**的派生摘要，批 4 §12）镜像到 `$DSH_HOME/.thincoder/session-state.json`（与 `design-tokens.json` **分文件**——回滚独立：删 session-state.json 回纯内存行为，token 不受牵连）。宿主恢复会话时 `agent/session-start` 预载恢复：会话 Map 无该 key 且盘上条目在 7d TTL 内 → 白名单校验 + 规范化后整条灌入（**只填空槽**——本进程已活跃/已推进的会话不被盘上陈旧条目覆盖）；`engineering === true` 恢复后自动重挂工程模式人格 section。
 
 - **写点**（§2.3 语义转换点，非每次 mutation）：eng enter/exit 翻转后、advisor 完成分支轮次推进后与 F11 类型切换重置后、eng_coder/escalate 交付后、advisor_config set/reset 与设置页 apply/reset-session 后；`lastAdvisorOutput` 落盘前超 32K 截断 + `[truncated]` 标记、`touchedFiles` 去重封顶 200
 - **原子组**：round 与 prior 一起落盘；恢复时 `round>0 且无 prior → round=0`（单存轮次会恢复出「无 prior 的收敛轮」，恢复侧规范化消解）
@@ -328,7 +328,10 @@ MIT —— 见 [LICENSE](./LICENSE)。基于 [thincoder](https://gitee.com/shang
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v0.12.0 | 2026-09-13 | **批 4 设计评审豁免 5 轮上限 + 三振结算护栏（成对吸收）+ D-35 折入**：cap 只对 code 生效（消息体逐字节不变）；同文档集连续 3 次无可用结算 ⇒ 拒绝再发起（零 LLM、零状态变更、双入口）；键 = 归一化路径表（非内容哈希）、计数 = 会话内存、清理挂 `session/disposed`；可用判决与显式 FAIL 复位；codex `ABORTED`→`interrupted`（不计振）；**设计评审链按文档集作用域**（换集即等价类型切换，与 F11 合成单一重置谓词）+ `lastDesignDocKey` 落盘（摘要形态）。340 测试全绿 |
+| v0.11.0 | 2026-09-13 | **批 5 评审上下文预算跟随模型窗口 + 估算器 CJK 加权**：`MAX_CONTEXT_TOKENS = 120_000` 退役，改三级链（手配 `advisor.contextTokens` > `llm.resolveModelInfo().context.contextWindow` > 兜底 131072）；两档 = `floor(窗口 × 0.8)` 与再 `× 0.8`；估算器逐消息 `ceil(ascii/4) + 非ASCII`（纯 ASCII 逐值零回归）；新键三面同步（PUT ⊕ merge ⊕ 设置页）。320 测试全绿 |
 | v0.10.0 | 2026-09-11 | **D-30 design token 生命周期**：两段式 `uuid:expiresAt`（删签名腿与整条密钥链）、**文档集指纹门控续期**（文档未变 → 同 uuid 顺延，变了才重评）、审批码改无状态派生 `sha256(uuid).slice(0,8)`、缺省 TTL 7d、token-store 两缺口修复（保存路径补 `docHash`/`docPaths` + 清扫保留可续期记录）、旧三段式令牌诚实识别、会诊跨回合口径修正（FR-T7）；同版含 **D-29** 配置面（`consultTimeoutMs`/`engTokenTtlMs` 进 user 层白名单） |
+| v0.10.0 | 2026-09-13 | 批 3 **评审协议增强**（未 bump 版本号，随 v0.11.0 起统一）：VERDICT 收尾行成为主信号、Action 四值词表（补 `Dispatched`）、判定规则 R1–R7e、失败可见六路诊断、撤销面收紧（FR-6 守卫：猜出来的 FAIL 不再销毁有效令牌） |
 | v0.9.1 | 2026-09-07 | **R6 维护轮**：D-26 十项打磨全清（告警对称/签名清理/空输出统一/簿记单一实现/回滚指引/派发告警可见）——登记表 27/27 终态，235 测试全绿 |
 | v0.9.0 | 2026-09-06 | **R5 dsh 路径后台化（DP-1 方案 B）**：advisor dsh 自动按预算派后台 job、escalate/eng 显式 `background` 参数、`dshBackgroundTimeoutMs` 挂死兜底——四机制全部免墙钟，平台零修改 |
 | v0.8.0 | 2026-09-05/06 | **R1-R4 机制缺陷治理**：effort 最近档收口、流观测/空响应分类、codex 三路径 jobs 迁移、single-flight+代际检查、回落硬停+空响应重试、保存竞态+runner 三面同步、token-secret 安全加固（26 项登记缺陷收口） |

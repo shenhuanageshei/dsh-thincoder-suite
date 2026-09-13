@@ -106,7 +106,7 @@ flowchart TD
   C -- 是 --> Z2[hardStop 指引<br/>指纹失配则自愈]
   C -- 否 --> D{reviewType == design<br/>且 该文档集 strikes >= 3?}
   D -- 是 --> Z3["Advisor: design review blocked by the settlement guard (N/3)<br/>零 LLM · 零状态变更"]
-  D -- 否 --> E[F11 类型切换重置<br/>typeSwitched → round/prior]
+  D -- 否 --> E["重置判定（单一谓词——评审 #9 钉死）<br/>needReset = typeSwitched ∨ chainKeyChanged<br/>round=0 · prior=null · 代际+1 · 落盘（各一次）"]
   E --> F{cap 检查<br/>仅 code}
   F -- "code 且 round >= 5" --> Z4[cap 串逐字节不变]
   F -- 否则 --> G[路由解析 / 范围校验 / token 铸造]
@@ -285,7 +285,7 @@ recordDesignSettlement(sid, docKeyEarly, usable ? null : (persisted === false ? 
 | 硬停状态机 | `advisorHardStops` / 指纹自愈 / 解除路径零改 |
 | token 生命周期 | 铸造/续期/撤销零改（仅接住落盘返回值） |
 | `resetRouteFailureState` | **不碰**三振 |
-| `session-store` / `eng.mjs` / `prompts` | 零改动 |
+| `eng.mjs` / `prompts` | 零改动（§13 #1 改判：`session-store` 由 §12 改为 **+1 字段** `lastDesignDocKey` + 白名单同步，故退出本行） |
 | 既有测试 | `test/**` 既有文件零修改；全量原样绿 |
 
 ### §8.2 机验锚（防静默退化）
@@ -294,6 +294,8 @@ recordDesignSettlement(sid, docKeyEarly, usable ? null : (persisted === false ? 
 - **摘除即红**：临时移除护栏钩子 → 「第 4 次发起必须调用 llm」的用例转红（证明护栏真的在拦）；临时移除豁免条件 → design@round5 用例转红；
 - **键不变性**：`["b","a"]` / `["a","b"]` / `["docs\\a.md"]` / `["./docs/a.md"]` → 同键；大小写不同 → 不同键（G-4 口径）；
 - **前缀表即契约**：`classifySettlement` 的五个前缀逐条断言（改文案即红）。
+- **AC-G11（§13 #4 并入）**：① `designDocKey` 单实现锚（`lib/` 全库定义处 = 1）；② `lastDesignDocKey`
+  持久化往返锚（落盘 → 重读 → 恢复进内存，同值）——两条都必须**可失败**，不得退化成注释即锁。
 
 ---
 
@@ -309,6 +311,7 @@ recordDesignSettlement(sid, docKeyEarly, usable ? null : (persisted === false ? 
 | U-2 | 重启可规避三振（计数在内存） | 已知漂移（D-G4 的理由链），登记 G-2；不为此落盘 |
 | U-3 | 「连续」的界定 = **结算事件**连续，不按调用连续 | 代码评审穿插不打断 design 结算连败序列；实现注释钉死 |
 | U-4 | 吸收清单 §1 P3 行行号漂移（引 `:1372`） | 随批 5 收口的台账更新面一并处理（G-3） |
+| G-5（§13 #12） | `lastDesignDocKey` 落盘**继承 D-30 已登记的多进程 last-writer-wins 风险面** | 与 G-2 同格式已知漂移，不为此新增机制（session-state.json 本已是整条目替换写） |
 
 ---
 
@@ -321,7 +324,18 @@ recordDesignSettlement(sid, docKeyEarly, usable ? null : (persisted === false ? 
 | 1 | `lib/advisor.mjs` | `import { normalizeDocPath }` + `DESIGN_STRIKE_LIMIT` / `designDocKey` / 计数 Map / `designStrikes` / `clearDesignSettlementStrikes` / `recordDesignSettlement` / `classifySettlement` / `settlementGuardText`；预检（`typeSwitched` 之前）；cap 条件加类型；结算打点（逐符号见 §5.4）；接住 `saveTokenRecord` 返回值 | +~110 |
 | 2 | `lib/index.mjs` | 工具层预检；`session/disposed` 清理挂点；工具描述同步 | +~30 |
 | 3 | `README.md` | 「5 轮」表述同步（D-G12） | ±1 |
-| 4 | `test/design-review-guard.test.mjs` | 新增（T-G1–T-G9） | ~260 |
+| 4 | `test/design-review-guard.test.mjs` | 新增（T-G1–T-G11 —— §13 #4 落成 AC-G11 后由 T-G1–T-G9 扩为 11 条） | ~330 |
+| 5 | `lib/session-store.mjs` | 改：`lastDesignDocKey` 进 schema + 白名单（§13 #2；由 §8.1 的「零改动」改判为 +1 字段） | +~4 |
+
+**实施记录（2026-09-13，eng-coder 批 4 交付）**：上表 5 个文件即实际写域，另加 `lib/index.mjs` 的
+`agent/session-start` 恢复分支补 1 处 `lastDesignDocKey` 灌入（与既有 `advisorGeneration` 同一模式、
+同一文件、同一挂点——不新增文件）。**偏差 1 处（待父侧裁定）**：`lastDesignDocKey` 的**落盘值**取
+`designChainKey(documents) = sha256Hex(designDocKey(documents))` 而非 docKey 原文——因为既有测试
+`test/session-state.test.mjs` 的 **AC-20**（属「既有测试零修改」面）断言 session-state.json 里
+**一个字都不得出现**被绑定的文档路径，而 raw docKey 就是归一化绝对路径表（实测原样落盘即让 AC-20
+转红）。等值判定语义不变（该字段唯一消费者 = `chainKeyChanged` 比较）、往返同值、键派生仍只有
+`designDocKey` 一处。**若父侧要求 raw docKey 原文落盘，则必须同步修改 AC-20 的路径断言** —— 二者
+不可兼得。
 
 ### §10.2 文档域（本设计者写域）
 
@@ -344,7 +358,9 @@ recordDesignSettlement(sid, docKeyEarly, usable ? null : (persisted === false ? 
 | **AC-G6** | G4 / US-5 | T-G6 | pass∧回显∧落盘成功 → 0；显式 FAIL → 0；pass 但落盘 false → +1（`token_persist_failed`） |
 | **AC-G7** | G5 / G-4 | T-G7 | 键不变性（乱序/相对/绝对/反斜杠）与隔离（不同集独立；内容编辑**不**换键；大小写不同键） |
 | **AC-G8** | G6 / N-5 | T-G8 | `session/disposed` → 清除；路由成功（`resetRouteFailureState`）→ **不清**；硬停解除 → **不清** |
-| **AC-G9** | G7 / N-4、N-6 | T-G9 + 全量 | 零改面逐项静态锚（cap 串逐字节 / `MAX_ADVISOR_ROUNDS` 不变 / 工具描述含新表述 / `session-store`·`eng`·`prompts` 零 diff）；全量 `node --test` 既有用例**原样全绿** + 新增全绿 |
+| **AC-G9** | G7 / N-4、N-6 | T-G9 + 全量 | 零改面逐项静态锚（cap 串逐字节 / `MAX_ADVISOR_ROUNDS` 不变 / 工具描述含新表述 / **`eng.mjs`·`prompts` 面零 diff**——§13 #1 改判：`session-store` 由 §12 改为 **+1 字段**，不在此列）；全量 `node --test` 既有用例**原样全绿** + 新增全绿 |
+| **AC-G10** | §12（US-7） | T-G10 | 换文档集 ⇒ 轮次与 prior 重置（round=0 / prior 清空 / 取 round-1 设计提示词）；**同一**文档集再发起 ⇒ 轮次照常递增（只对「换集」动作重置） |
+| **AC-G11** | §13 #4（N-7） | T-G11 | ① `designDocKey` **全库单实现**（grep 定义处 = 1，无第二套字面）；② `lastDesignDocKey` **持久化往返**（写 → 读回 → 同值）且**进 `session-state.json` 白名单**（并入 §8.2 机验锚） |
 
 ---
 
@@ -353,6 +369,8 @@ recordDesignSettlement(sid, docKeyEarly, usable ? null : (persisted === false ? 
 | 日期 | 变更 |
 |---|---|
 | 2026-09-13 | 首版（设计待评审）：会诊 id 2 两份交付（另两份因 DSH 崩溃不可复得）→ 九节 + 图 1/图 2；D-G1–D-G12 决策记录（含两处分歧的父侧裁定：计数键取**纯路径形状**、预检取**类型切换之前**）；AC-G1–AC-G9 |
+| 2026-09-13 | 追加 §12（D-35 链作用域折入：FR-G9/D-G13/AC-G10 + 新增落盘字段 `lastDesignDocKey`）与 §13（设计评审轮次 1 修正块：12 条发现，#1–#7/#9/#10/#12 同链落档） |
+| 2026-09-13 | **批 4 实施交付（eng-coder）**：§10.1 补 `lib/session-store.mjs` 行（§13 #2）、T-G9→T-G11（§13 #4）+ 实施记录（含 `lastDesignDocKey` 落盘取 `designChainKey` 摘要的偏差登记，待父侧裁定）；实现见 `lib/advisor.mjs` / `lib/index.mjs` / `lib/session-store.mjs` / `README.md` / `test/design-review-guard.test.mjs` |
 
 ---
 
@@ -384,3 +402,94 @@ D-35 的修法 = 把「同一条链」的判据从会话级换成文档集级（
 **过渡缓解（如实登记，非设计的一部分）**：D-35 落地前，会话内**每两次设计评审之间插一次代码评审**即可规避
 （类型切换会重置轮次与 prior）——这正是本仓每批「设计评审 → 实施 → 交付代码评审」的既有节奏；
 本批自身即用此法取得有效的 round-1 评审（前一次「批 4 设计评审」的报告经父侧判定为**无效评审**，其令牌**不予采用**）。
+
+---
+
+## §13 设计评审轮次 1 修正块（2026-09-13 —— **本追加与上文本冲突时以本追加为准**）
+
+**背景**：设计评审**轮次 1 PASS**（🔴0 · 🟡8 · 🔵4；路由 `zai-coding-cn:glm-5.3`，900s，job `advisor-dsh-4`；**这是本批的第一次有效评审**——它确实通读了本批三份文档）。父侧裁定：**#1–#7 / #9 / #10 / #12 同链落档（无新范围，不触发重评审）**；#8 维持已登记处置；#11 转实施首轮动作。
+
+| 评审 # | 级别 | 处置（**以本追加为准**） |
+|---|---|---|
+| **#1** | 🟡 | **AC-G9 的 `session-store` 子句改判**：原「`session-store`·`eng`·`prompts` **零 diff**」→ 改为「`eng.mjs` / `prompts` 面**零 diff**；`lib/session-store.mjs` **仅 +1 字段**（`lastDesignDocKey` + 白名单同步）」。**不改就会让正确实现转红**（§12 已把该文件改为 +1 字段，但 §8.1/AC-G9 的字面没跟上） |
+| **#2** | 🟡 | **§10.1 补一行**：`lib/session-store.mjs` \| 改：`lastDesignDocKey` 进 schema + 白名单 \| +~4 |
+| **#3** | 🟡 | **图 1 已修**：原「F11 类型切换重置」节点改为 **「重置判定（单一谓词）—— `needReset = typeSwitched ∨ chainKeyChanged`；round=0 · prior=null · 代际+1 · 落盘（各一次）」**（文字为准、图随文修） |
+| **#4** | 🟡 | **新增 AC-G11**：N-7 的两条机验断言落成——① `designDocKey` **全库单实现**（grep 定义处 = 1，无第二套字面）；② `lastDesignDocKey` **持久化往返**（写 → 读回 → 同值）且**进 `session-state.json` 白名单**。AC-G11 同时并入 §8.2 机验锚 |
+| **#5** | 🟡 | **N-1 快照字段清单补 `lastDesignDocKey`**；并**钉死检查序**：**三振预检先于链重置**——预检判定失败时链重置**不得执行**（与 §12「预检先于类型切换」是同一条纪律的两个对象） |
+| **#6** | 🟡 | **§6 伪代码三元式收紧**：`token_persist_failed` **仅当** `verdictPassed && echoOk && persisted === false`；**其余非可用态一律 `review_failed`**（与 §5.4 的「false **且 verdict 通过**」对齐，消除两处口径不一致） |
+| **#7** | 🟡 | **§5.5 的按 kind 指引必须覆盖全部七 kind**：`timeout` → 提高 `timeoutMs` 或换 runner；`context_limit` → 收窄文档集或配 `advisor.contextTokens`；`empty` → 上调 `advisor.maxOutputTokens` 或换模型；`turn_cap` → 收窄范围（工具轮上限）；`stale` → 确认无并发写入后重发；`token_persist_failed` → 检查 `$DSH_HOME/.thincoder` 可写；`review_failed` → 看本轮诊断 msg（必要时换路由/模型）。允许统一兜底句式，但**七 kind 必须全覆盖** |
+| **#9** | 🔵 | **FR-G9 × F11 合成语义钉死**：实现为**单一重置谓词**（图 1 已改），重置动作**只执行一次**（代际 +1 与落盘**各一次**）；**否决**两条独立分支各重置一遍 |
+| **#10** | 🔵 | **N-1 口径收窄为「护栏自身零状态变更」**（硬停指纹自愈是更早的独立轴，其写盘不属护栏拒绝路径）；AC-G3 播种用干净态（现行做法），断言注释写明 |
+| **#12** | 🔵 | **§9 补一行登记（G-5）**：`lastDesignDocKey` 落盘继承 D-30 已登记的多进程 last-writer-wins 风险面（与 G-2 同格式） |
+
+**维持原处置**：#8（吸收清单 P3 行号漂移——已登记 G-3/U-4，收口时随台账更新面一次做完）。
+**转实施首轮动作（#11）**：三处依赖锚点以**符号检索**复核——`normalizeDocPath` 是否已从 `doc-hash.mjs` 导出、`backstopFired` 是否同闭包可得、`saveTokenRecord` 是否返回 boolean；若 `normalizeDocPath` 未导出则**顺手补导出**（不违 N-3，零新文件）。
+
+### §13.1 交付偏差裁定（D-1）—— 父侧裁定 **接受**
+
+**偏差**：§12 FR-G9 字面写 `state.lastDesignDocKey = docKey`（归一化绝对路径表），交付实现取
+`designChainKey(documents) = sha256Hex(designDocKey(documents))`（**派生摘要**）。
+
+**根因（父侧已复核，非偷工）**：既有测试 `test/session-state.test.mjs` 的 **AC-20**（`:508`）断言
+`session-state.json` 里**不得出现被绑定的文档路径**（`:531` `绑定路径不得出现`）——这是 D-30 时代立下的
+「新字段不进 session-state」契约；raw docKey 落盘会让该**既有**用例转红，而「既有测试零修改」是本批硬约束。
+**两者不可兼得，摘要形态是唯一解。**
+
+**裁定：接受**，四条理由：① 该字段唯一消费者是 `chainKeyChanged` 的**等值判定**，摘要与原文**语义等价**；
+② 键的派生仍**只有 `designDocKey` 一处实现**（AC-G11 ① 通过）；③ 落盘/读回/重启三态**同形态**
+（AC-G11 ② / T-G11b 通过）——混用会在重启后永久失配；④ 附带**不把项目路径写进会话文件**，与 AC-20 的既有取向一致。
+**护栏串不受影响**：拒绝串展示的仍是**完整归一文档集**（用 raw `docKeyEarly`），§5.5 未变。
+**§12 字面订正**：`state.lastDesignDocKey = designChainKey(documents)`（= `sha256Hex(designDocKey(documents))`）——以本追加为准。
+
+**D-2（写域补挂点）—— 父侧认可**：`lib/index.mjs` 的 `agent/session-start` 恢复分支补 1 处灌入，
+与既有 `advisorGeneration` **同文件、同挂点、同模式**；不补则「必须落盘」在重启后失效。**不属范围外**（同文件同机制）。
+
+### §14 分歧审计修复轮落档（2026-09-13 —— **本追加与上文本冲突时以本追加为准**）
+
+**背景**：批 4 首次交付（337/337）后由**独立分歧审计**（只读 explore 子代理）判 `AUDIT: 3 divergences (2🟡 / 1🔵)`；
+修复轮已交付（**340/340**，含 3 条新用例），三条发现逐条修毕、各自做过「还原即红」实验。本追加补三处**设计面**。
+
+| 审计 # | 设计面补正（**本追加为准**） |
+|---|---|
+| **🟡 #1** | **§8.2 的「摘除即红」对工具层钩子现由 `T-G3b` 承载**，其性质是**实现面锁**——锁「工具层快速路径返回**先于** `markSessionSeen` 会话注册」这一事实（可观察面 = config API `GET /session` 的 `sessionExists`）。**这是有意的耦合**：若将来把 `markSessionSeen` 前移到预检之前（本身可辩护的改动），T-G3b 会转红，需同步更新该用例——**不是缺陷，是已知代价**。原 T-G3 内「fake ctx 的 llm 缺失——若未被拦住会直接抛」的注释理由**事实错误**（核心层在碰 `deps.llm` 之前就已返回），已订正为如实边界说明 |
+| **🟡 #2** | **§5.4 的 codex 信封行补 `ABORTED → interrupted`**（原文只写 `TIMEOUT → timeout`）。**这是真 bug 的修正**：codex 适配器把中止结算为 `emptyEnvelope("ABORTED")`，而 `codexSettlementHint` 只映射 TIMEOUT ⇒ **用户主动中断被归成 `review_failed` 并 +1 振**，与 US-4 及 README「用户主动中断不计振」矛盾。修法**只在站点 hint 侧补一处映射**，豁免复用 `finalize` 既有 `kind !== "interrupted"`——**不在 `recordDesignSettlement` 内部加豁免**（那会让其他调用点语义变宽，属发明） |
+| **🔵 #3** | **§5.4 的 `stale` 定义收紧**：`stale` **只对「完成但 finalize 被跳过」**记账（打点移入 `completed` / `env.ok && env.text` 判定之内）；**失败形态按本路径既有归类**（codex：TIMEOUT→timeout、ABORTED→interrupted、其余→review_failed；dsh：backstopFired→timeout、其余按前缀表→review_failed）。原文把打点放在判定之前，会把「恰好同时换代的**失败** job」误记成 `stale`（计数都 +1，差别在护栏串显示的 kind 与其按 kind 指引） |
+
+**§10.3 用例表补三行**：`T-G3b`（工具层快速路径先于会话注册——**实现面锁**）、`T-G5f`（失败形态不记 `stale`，两臂各自可失败）、
+`T-G5g`（codex `ABORTED` → **0 振**；对照 `TIMEOUT` → +1 且 kind=`timeout`；并含**反例锚**复现审计探针
+`classifySettlement("Advisor: review failed (codex-cli ABORTED) — 已取消") === "review_failed"`，钉死「修法必须在站点 hint 侧」）。
+
+**「还原即红」实验留档（修复轮实跑）**：**A** 工具层预检条件恒假 → `T-G3b` **转红**（而 T-G3 四条断言仍绿——实证审计发现）；
+**B** 去掉 `ABORTED` 映射 → `T-G5g` **转红**；**C** 两处 `stale` 打点恢复无条件 → `T-G5f` **转红**；
+**C3** 仅破坏第二臂 → `T-G5f` 同用例第二臂**转红**（两臂各自可失败）。实验后逐字还原并复跑 340/340 绿；
+`EXPERIMENT|if (false &&` 残留扫描为空。
+
+**父侧裁定（T-G3b 的存废）**：**保留**。理由：它是这个钩子**唯一**可观察且可失败的锁；删掉它等于承认
+「工具层预检不可测」（审计已证 T-G3 对它不敏感）。代价（实现面耦合）已显式登记，换取的是 §8.2「摘除即红」
+对本批**三个**钩子（核心层护栏 / 设计豁免 / 工具层快速路径）**全部成立**。
+
+**实现判断项（父侧确认）**：codex 信封 `TIMEOUT` 用站点机械事实直传 `timeout`（否则与 dsh 侧口径分裂，违反 §5.4 第 3 行）；
+`armFallbackHardStop` 返回与「codex 连败且回落路由不可用」返回**不计振**（D-G10 预检类：零 LLM、调用方立即可自纠）；
+codex job rejection / dsh job catch / 最外层 catch **显式打点**；最外层 `interrupted` 分支不计。四条**均按设计归类**，无偏离。
+
+### §15 交付代码评审微修轮落档（2026-09-13 —— **本追加与上文本冲突时以本追加为准**）
+
+**背景**：批 4 交付代码评审 **PASS**（1🟡 / 4🔵）。父侧裁定：#1 与 #4 **修**，#2/#3 维持现状（理由见下），#5 文档面由父侧补。
+
+| 评审 # | 级别 | 处置（**本追加为准**） |
+|---|---|---|
+| **#1** | 🟡 | **设计层排序隐患已修**：原检查序「链重置 → 文档合法性校验」会让**非法文档集先摧毁在途链**——对文档集 A 已收敛到 round 3 的用户，手滑发一次含非法文档（如 `src/typo.mjs`）的评审 ⇒ `chainKeyChanged` 成立 ⇒ A 的 `prior` 被清空**且已落盘**，随后才被拒（D-G10 给非法文档的「调用方立即可自纠」定性事实上不成立）。**新检查序**：single-flight → 硬停 held → **三振预检** → **文档合法性预检** → 链重置。该校验**纯读、零状态变更**（不写 `lastDesignDocKey`、不入 `needReset`、不落盘），自足用 `reviewTypeEarly` + `opts.documents` 判断；判定谓词与错误文案**逐字不变**；原位置的后置校验已删除。**D-G2 钉死的「三振预检先于链重置」位置关系未动**（同一条纪律多了一个先行对象）。新增 **T-G12** 锁定（非法文档 ⇒ 返回错误串 / 零 LLM / `advisorRound` 仍为 3 / prior 未清 / `lastDesignDocKey` 未变 / 快照 deepEqual / **`session-state.json` 字节全等**），并实跑**还原即红**（把校验移回原位 → `AssertionError: 在途链未被摧毁：轮次仍是 3`） |
+| **#4** | 🔵 | **护栏串计数显示封顶**：`settlementGuardText` 渲染改 `Math.min(count, DESIGN_STRIKE_LIMIT)`——内部 `count` 仍是真实值（在飞 job 晚结算可推到 4，但**展示**不出现 `4/3`）。新增 **T-G13** 锁定（连打 4 振 → 串首仍 `3/3`，而 `designStrikes()` 返回 4）。**否决**：改内部计数封顶（会让「晚结算」在账上消失，丢信息） |
+| **#2** | 🔵 | **维持现状**：fiber dispose 不清三振计数——与 `codexFailureCount` / `advisorHardStops` **既有先例完全同构**（R3 立下的会话级内存态纪律）。若将来统一收口，三张会话级 Map 在同一点一次 `clear()`，属**一次修三处**的台账面，不单修 |
+| **#3** | 🔵 | **维持现状（登记为已知交互）**：工具层快速路径在 single-flight 检查**之前**返回护栏串——若「同会话有在飞 advisor job ∧ 该文档集已三振」同时成立，调用方看到护栏文本而非在飞句柄指引。两者都是零 LLM 的 `"Advisor:"` 拒绝，护栏的出口指引（新会话）依然正确，且 §5.6 对工具层的定位就是快速路径。评审建议的补句属文案级，**且会改动被 T-G3 六项断言锁死的护栏串**——收益 < 破坏锁的风险 |
+| **#5** | 🔵 | **已由父侧修**：README「近期版本」表补齐 v0.12.0 / v0.11.0，并如实补记**批 3 未 bump 版本号**这一历史错误 |
+
+**§10.3 用例表补两行**：`T-G12`（**非法文档集在链重置之前被拒**——零状态变更，含字节全等判据；还原即红）、
+`T-G13`（护栏串计数**显示**封顶：4 振 → 串首 `3/3`，内部计数仍 4）。**§8.2 机验锚补一条**：本轮「还原即红」实验（后置校验 → T-G12 转红）。
+
+**剩余风险（如实登记，不改）**：工具层**没有**文档合法性预检（只有核心层有）——非法文档在工具层会先走一次
+`markSessionSeen`，随后被核心层前移后的预检**零状态变更地**拒掉。该形态与 #3 的裁定一致（工具层是快速路径、
+正确性由核心层兜底），未动。
+
+**关联登记**：本轮暴露并登记 **D-36**（`docs/2026-09-05-defect-registry.md`）——主机重启后 `designToken` 内存态丢失，
+**写门禁拒绝主代理的合法交付后小修**（只有 `eng_coder` 有磁盘回填路径），是 fail-closed 方向安全的摩擦。
