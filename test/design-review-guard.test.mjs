@@ -760,15 +760,20 @@ test("T-G9 (AC-G9): zero-change static anchors — cap text verbatim, constant u
   assert.ok(readme.includes("只对 code 评审生效"), "README 含新表述")
 
   // eng.mjs / prompts 面零 diff（§13 #1 改判后的口径；session-store 由 §12 改为 +1 字段，不在此列）
+  // 审计 #8 / D-37 修复：原锚 `git diff --name-only HEAD -- lib/eng.mjs …` 是**工作树卫生**——
+  // 提交后 trivially 过（证明不了批 4 没碰这两个面），而**批 6 合法改 eng.mjs** 时又误红
+  // （批 6 交付实测红）。改为**历史事实锚**：断言**批 4 交付提交自身**（不可变历史）没有触及
+  // eng.mjs / prompts 面——不随工作树状态漂移，提交后依然有意义。
+  const BATCH4_SHA = "2e6ca8b" // 批 4 交付提交（feat(batch4): design-review cap exemption … v0.12.0）
   let gitOut = null
   try {
-    gitOut = execFileSync("git", ["diff", "--name-only", "HEAD", "--", "lib/eng.mjs", "lib/prompts.mjs", "lib/prompts"],
+    gitOut = execFileSync("git", ["show", "--name-only", "--format=", BATCH4_SHA, "--", "lib/eng.mjs", "lib/prompts.mjs", "lib/prompts"],
       { cwd: PLUGIN_DIR, encoding: "utf8" }).trim()
   } catch (e) {
     if (e?.code === "ENOENT") gitOut = null // 无 git 的机器：跳过该锚（其余锚仍生效）
     else throw e
   }
-  if (gitOut !== null) assert.equal(gitOut, "", "eng.mjs / prompts 面零 diff")
+  if (gitOut !== null) assert.equal(gitOut, "", "批 4 交付提交不得触及 eng.mjs / prompts 面（历史事实锚）")
 })
 
 // ————————————————————— T-G10 / AC-G10：链作用域按文档集（D-35 折入） —————————————————————
