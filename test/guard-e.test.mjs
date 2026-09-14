@@ -705,14 +705,32 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 11 �
   // 清单按**登记制**扩展——每批新增的 `*.test.mjs` 必须在此追加一行（并说明理由），
   // 未登记的新增档会让 deepEqual 转红。（批 7 追加 "path-kind.test.mjs"，
   // J9 用户 2026-09-13 裁定；理由：批 7 的单一权威叶模块需要自己的真值表档。）
+  // ── 批 9 追加三个门档 ── **理由与用户裁定引用**（AC-15 / N-5：登记处必须注明，不能只加一行）：
+  //   用户裁定（2026-09-13，见 docs/2026-09-13-test-lifecycle-requirements.md §0.3）：
+  //     J9-1 痛种 = 锁衰变 + 台账漂移 ⇒ 退役 0 档、不设配额、taxonomy 住台账不住文件系统；
+  //     J9-4 发布门 = 仓根脚本（否决纯 gate-as-test）；J9-6 阶段门 = 横幅不阻断；
+  //     J9-3 反 tautological 四律升为 AC。三项用户裁定：形态全做 · R-13 不根治 · tag 带 v。
+  //   三档理由（设计档 §7 / §10.1 · 台账 docs/test-lifecycle.md「三、逐档处置行」）：
+  //     · test-lifecycle.test.mjs = 台账-历史一致闸（元锁：台账 ↔ 工作树 ↔ 本清单 ↔ 退役授权面
+  //       四方一致 + 用例数独立算得；期望值只从 git + fs 导出）
+  //     · stage-gate.test.mjs     = 阶段门 stageGateNote 三态 + **4** 个成功交付返回点接线
+  //       （设计档 §6.4 记「5」= 4 条路径 + 「主返回点」，而「主返回点」与 dsh 同步**是同一处**；
+  //        本批实测簿记调用点 = 4，详见 docs/test-lifecycle.md 变更记录）+ 失败点反向断言
+  //     · release-check.test.mjs  = 发布门七闸的常驻断言（非计数）+ 解析/闸级比较函数单测
+  //   ★ 落地纪律（设计档 §10.3 的 #21 裁定同族，本批同款执行）：**每个新档在其落地的同一
+  //     stage 内登记于此**，不得攒到最后一次性补——否则台账-历史一致闸的
+  //     「本清单 ↔ 工作树」等值腿会在「fs 已 +1 而本表未登记」时先红。
   const existing = [
     "advisor-config.test.mjs", "codex-runner.test.mjs", "config-api.test.mjs", "consult.test.mjs",
     "context-budget.test.mjs", "death-provenance.test.mjs", "design-review-guard.test.mjs",
     "preset-static.test.mjs", "session-state.test.mjs", "stages.test.mjs", "truncation.test.mjs",
     "path-kind.test.mjs", "prompt-contract.test.mjs",
+    "test-lifecycle.test.mjs",
+    "stage-gate.test.mjs",
+    "release-check.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
-    "测试档清单 = 既有 11 档 + 本批唯一新增档（多一个 = 越界新增，少一个 = 既有档被改名/删除）")
+    "测试档清单 = 既有 11 档 + 批 7/8/9 各批登记档（多一个 = 越界新增，少一个 = 既有档被改名/删除）")
   // 既有档不得被「改造以适配本批」：批 6b 的机制字面只允许出现在本档
   for (const f of existing) {
     const src = readFileSync(join(testDir, f), "utf8")
