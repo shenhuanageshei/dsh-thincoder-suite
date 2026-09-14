@@ -737,6 +737,19 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
     //      §11.2 AC-G1…AC-G6；决策 D10-13…D10-15）。
     "ledger-parity.test.mjs",
     "eng-token-fallback.test.mjs",
+    // 批 11（D1–D7 文档纪律 + 上游失败路径语义 + DOC-HYGIENE 提示词级纪律）新增档——
+    // **在其落地的同一 stage 内登记**（批 9 §七 已立此纪律）。
+    // 理由与裁定引用：
+    //   ③ doc-hygiene.test.mjs —— **D6「回读核对」的机械网**（用户裁定 ⑥ = 建新档做两项机械检查；
+    //      裁定引用：需求档 docs/2026-09-13-doc-discipline-requirements.md §0.3 的 J11-6 =
+    //      「U+FFFD 全仓扫描 + 五个常设档 canary」；设计档
+    //      docs/2026-09-13-doc-discipline-design.md §6.4 / §8.2 V13+V14 / 决策 D11-8 /
+    //      §12.2 AC-13+AC-14）。层取 **③ 实况事故收编**：本档的**来历是三次实况写坏事故**
+    //      （PowerShell 往返双编码 · shell 单行脚本把常设标准档截为 1 行 · U+FFFD），处置 = 常驻。
+    //      ★ 构成注明（防下批误读）：本档同时承载批 11 的锚腿 V1–V12（批次脚手架性质）与
+    //        runEngCoder 失败返回串的**进程内**行为断言（② 性质）——台账层号枚举无 `①+③` 形态，
+    //        故按**来历与保留政策**记 ③，构成如实写在本行与台账理由格。
+    "doc-hygiene.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」

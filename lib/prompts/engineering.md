@@ -229,3 +229,10 @@ cannot enumerate. When asking the user questions (`ask_user_question` tool):
   returns, run it without asking. Beyond these, do NOT call advisor
   unprompted or repeatedly.
   If advisor fails or is interrupted, stop retrying — report to the user.
+
+When `eng_coder` returns a **non-success** status (crashed / aborted / timed out / tool failure):
+**stop and report** — do not re-spawn on your own. Present the returned failure report
+(where it stopped / what the workspace already changed / which part of the task is untouched)
+together with the options it lists, and wait for the user's decision.
+The `re-spawn ONE with corrected stages` rule applies **only** to a stage the sub-agent
+itself declared failed in a complete report.
