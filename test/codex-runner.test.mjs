@@ -3220,9 +3220,34 @@ test("D-29 consultTimeoutMs/engTokenTtlMs: PUT 接受合法值 ⊕ 不再告警 
   assert.equal(merged.engTokenTtlMs, 604800000, "merge 保留 engTokenTtlMs")
   assert.equal(mergeGlobalConfig({ consultTimeoutMs: 30000 }, {}).consultTimeoutMs, 30000, "无 user 层保留 base（consult）")
   assert.equal(mergeGlobalConfig({ engTokenTtlMs: 600000 }, {}).engTokenTtlMs, 600000, "无 user 层保留 base（ttl）")
+  // —— 面 3（**移植远端分叉 7b6a845 / v0.9.3 的真增量**）：会诊看门狗预算的运行时解析 ——
+  // 7b6a845 与本仓 D-29 是**同一件修复**（consultTimeoutMs 用户层化）的两次独立实现；本仓 D-29
+  // 已把两键补进三面白名单（功能完整），故只取它**独有的精炼点**：把预算解析从 consult.mjs 的
+  // 就地三元式提到 config-store 的**单一事实源**（带非法值告警、跨升级保留语义）。
+  const { resolveConsultTimeoutMs, CONSULT_TIMEOUT_DEFAULT_MS } = await import("../lib/config-store.mjs")
+  assert.equal(CONSULT_TIMEOUT_DEFAULT_MS, 600000, "缺省 600000（10min）")
+  assert.equal(resolveConsultTimeoutMs({ consultTimeoutMs: 900000 }), 900000, "合法配置值生效（未配/非法才回落）")
+  assert.equal(resolveConsultTimeoutMs({ consultTimeoutMs: 30000 }), 30000,
+    "下限侧合法值生效——30000..59999 的既有用户配置**不得**被回落（值域取下限 30000 的裁定落点）")
+  assert.equal(resolveConsultTimeoutMs({}), CONSULT_TIMEOUT_DEFAULT_MS, "未配 → 缺省")
+  assert.equal(resolveConsultTimeoutMs({ consultTimeoutMs: null }), CONSULT_TIMEOUT_DEFAULT_MS, "null 视为未配 → 缺省")
+  assert.equal(resolveConsultTimeoutMs(undefined), CONSULT_TIMEOUT_DEFAULT_MS, "无 config → 缺省（不抛）")
+  assert.equal(resolveConsultTimeoutMs([{ consultTimeoutMs: 900000 }]), CONSULT_TIMEOUT_DEFAULT_MS,
+    "数组形态 → 缺省（非配置对象）")
+  for (const bad of [0, -5, 1.5, "many", NaN, Infinity]) {
+    const r = await captureWarn(() => resolveConsultTimeoutMs({ consultTimeoutMs: bad }))
+    assert.equal(r.value, CONSULT_TIMEOUT_DEFAULT_MS,
+      "非法值回落缺省（绝不砖化会诊启动）: " + JSON.stringify(bad))
+    assert.ok(r.warnings.some((w) => w.includes("consultTimeoutMs") && w.includes("600000")),
+      "非法值告警 console.warn 留档: " + r.warnings.join("|"))
+  }
+  // 对照：合法值零告警（告警面只对非法值开口）
+  const okResolve = await captureWarn(() => resolveConsultTimeoutMs({ consultTimeoutMs: 900000 }))
+  assert.equal(okResolve.value, 900000)
+  assert.equal(okResolve.warnings.length, 0, "合法值不告警")
 })
 
-test("D-29: PUT 拒绝区间外/非整数（越界值不落盘，错误文案含合法区间）", () => {
+test("D-29: PUT 拒绝区间外/非整数（越界值不落盘，错误文案含合法区间）", async () => {
   const cases = [
     ["consultTimeoutMs", [29999, 3600001, 1.5, "x", -1], "30000..3600000"],
     ["engTokenTtlMs", [599999, 2592000001, 1.5, "x", -1], "600000..2592000000"],
@@ -3241,6 +3266,19 @@ test("D-29: PUT 拒绝区间外/非整数（越界值不落盘，错误文案含
       assert.equal(v.sanitized[field], ok, field + " 边界值进 sanitized")
     }
   }
+  // —— 值域常量锁（移植 7b6a845 时的**裁定**）：下限取本仓批 1 已发布的 30000，**不取远端的 60000** ——
+  // 远端独立选了 60000，没有任何依据要求我们跟随；跟随它会让**已存在的合法用户配置**
+  //（30000..59999）静默变成非法而回落缺省——那是行为回归。故 MIN/MAX 继续复用批 1 的两常量
+  //（不重复声明），并把「下限没被抬高」钉在**行为**上（30001 合法 / 29999 非法）。
+  const { CONSULT_TIMEOUT_MIN_MS, CONSULT_TIMEOUT_MAX_MS, CONSULT_TIMEOUT_DEFAULT_MS, isValidConsultTimeoutMs } =
+    await import("../lib/config-store.mjs")
+  assert.equal(CONSULT_TIMEOUT_MIN_MS, 30000, "MIN 必须是批 1 已发布的 30000（远端口径 60000 会让既有配置静默变非法）")
+  assert.equal(CONSULT_TIMEOUT_MAX_MS, 3600000, "MAX 1h（与 dshBackgroundTimeoutMs 同域）")
+  assert.equal(CONSULT_TIMEOUT_DEFAULT_MS, 600000, "DEFAULT 10min")
+  assert.equal(isValidConsultTimeoutMs(30000), true, "PUT 面 30000 合法")
+  assert.equal(isValidConsultTimeoutMs(30001), true, "PUT 面 30001 合法（远端口径下会非法）")
+  assert.equal(isValidConsultTimeoutMs(29999), false, "PUT 面 29999 非法")
+  assert.equal(isValidConsultTimeoutMs(60000), true, "PUT 面 60000 合法（未被排除）")
 })
 
 test("D-29: 设置页表单接线齐全（静态核对——client.js 无既有 UI 测试面，至少锁住接线不丢字段）", () => {
@@ -3269,6 +3307,21 @@ test("D-29: 设置页表单接线齐全（静态核对——client.js 无既有 
     "client.js 的 consultTimeoutMs 区间常量须与 config-store 同值")
   assert.ok(src.includes("var ENG_TTL_MIN = 600000") && src.includes("var ENG_TTL_MAX = 2592000000"),
     "client.js 的 engTokenTtlMs 区间常量须与 config-store 同值")
+  // —— 结构配对（**移植远端 7b6a845**）：看门狗预算解析必须**单点化**在 config-store，consult 只消费 ——
+  // 移植的判据是「结构」而非字节：远端那两个文件是本仓的**旧版本**（0.9.3 时代），照搬会回退其后
+  // 17 个提交的改动 ⇒ 只取「resolver 这个函数 + consult 改调它」两处结构，内容按当前 HEAD 写。
+  const consultSrc = readFileSync(new URL("../lib/consult.mjs", import.meta.url), "utf8")
+  assert.ok(consultSrc.includes("resolveConsultTimeoutMs(config)"),
+    "consult.mjs 消费点改调 config-store 的单一事实源（resolveConsultTimeoutMs(config)）")
+  assert.ok(!consultSrc.includes("CONSULT_TIMEOUT_MS"),
+    "就地常量 CONSULT_TIMEOUT_MS 已删除（预算解析不再有第二处数字）")
+  assert.ok(!/Number\.isFinite\(config\.consultTimeoutMs\)/.test(consultSrc),
+    "就地三元式判定已移除（否则单一事实源名存实亡）")
+  assert.ok(consultSrc.includes('from "./config-store.mjs"'), "consult.mjs 从 config-store 导入 resolver")
+  assert.ok(consultSrc.includes('from "./abort-provenance.mjs"'),
+    "既有的 abort-provenance 导入保留（与 config-store 两条 import 并存，不得互相覆盖）")
+  assert.ok(consultSrc.includes("abortTag") && consultSrc.includes("deathLine"),
+    "abort-provenance 消费点仍在（导入未被架空——D-28 的死亡溯源词汇表）")
 })
 
 test("D-29: user 层落盘 → loadUserConfig → merge → 到达运行时消费点（effective 值真的变）", async () => {
@@ -3302,7 +3355,6 @@ test("D-29: user 层落盘 → loadUserConfig → merge → 到达运行时消�
     rmSync(home, { recursive: true, force: true })
   }
 })
-
 
 // ————————————— R5（D-27，设计 §7.1/§7.2）：advisor dsh 循环后台化 —— Stage 2 —————————————
 // route.timeoutMs > budgetCapMs 且 ctx.jobs 可用 → 自动派后台 job（与 codex 分支完全对称）：

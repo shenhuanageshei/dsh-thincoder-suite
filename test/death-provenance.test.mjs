@@ -924,8 +924,17 @@ test("T-AP8 (AC-AP8): TRIGGERS/LAYERS 只在 abort-provenance.mjs 定义；四�
 // 两者都显式标注「断言的是历史还是工作树」。
 
 const AP_TEST_ADDED = "test/death-provenance.test.mjs"
-/** 本批**父侧显式授权**的唯一既有测试改动（D-37 / T-G9 的不可持久锚修，审计 #8）。 */
-const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs"]
+/**
+ * 父侧**显式授权**的既有测试改动（本闸的唯一合法通道——基线档改动必须逐档登记在此）。
+ *   ① `test/design-review-guard.test.mjs` —— D-37 / T-G9 的不可持久锚修（批 6 修复轮，审计 #8）；
+ *   ② `test/codex-runner.test.mjs` —— 移植远端分叉 `7b6a845`（v0.9.3）增量时并入的看门狗预算
+ *      resolver 断言（父侧任务书明言「`test/codex-runner.test.mjs` 是授权档，可加断言」）。该档在
+ *      基线 `2e6ca8b` 时点**已存在**（`git ls-tree 2e6ca8b -- test` 含之）且自基线起零 diff ⇒
+ *      **必须**逐档登记，否则锚 B 必红。**本清单自身住基线之后的档**（`death-provenance.test.mjs`
+ *      由批 6 `a5f9551` 引入）⇒ 扩清单不触发锚 B
+ *      （对照 `docs/test-lifecycle.md` §一 / `docs/2026-09-13-test-lifecycle-consult-minutes.md:26`）。
+ */
+const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */
 const AP_BASELINE_SHA = "2e6ca8b"
 

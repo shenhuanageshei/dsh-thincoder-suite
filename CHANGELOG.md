@@ -2,6 +2,20 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.17.0] — 2026-09-13（补记 · 移植远端分叉 7b6a845 的增量）
+
+**移植远端分叉 `7b6a845`（v0.9.3）的唯一真增量：把会诊看门狗预算的解析提到单一事实源**
+
+- **背景（避免重造）**：`7b6a845` 与本仓批 1 的 D-29（`9ae1277`）是**同一件修复的两次独立实现**——都让 `consultTimeoutMs` 在 user 层可配。本仓 D-29 已把两键补进三面白名单（PUT 校验 ⊕ merge 白名单 ⊕ 运行时读取）并含设置页接线与全链路测试，**功能是完整的**。故本批**只取它独有的那个精炼点**：把看门狗预算的解析从 `lib/consult.mjs` 的就地三元式提到 `lib/config-store.mjs` 的**单一事实源**（`resolveConsultTimeoutMs`，带非法值告警与跨升级保留语义），而不是散在消费点。
+- **值域裁定（重要）**：**下限取 `30_000`，不取远端的 `60_000`**。理由：批 1（D-29）已发布并测试了 `CONSULT_TIMEOUT_MIN_MS = 30_000`，把下限抬到 60000 会让**已存在的合法用户配置**（30000..59999）静默变成非法而回落缺省——那是行为回归。远端那个 60000 是它独立选的，没有任何依据要求我们跟随。⇒ `CONSULT_TIMEOUT_MIN_MS` / `CONSULT_TIMEOUT_MAX_MS` **继续复用批 1 已发布的两常量（未重复声明）**，新增的只有 `CONSULT_TIMEOUT_DEFAULT_MS = 600_000`。
+- **不是照搬，是移植结构**：远端的 `config-store.mjs` / `consult.mjs` 是本仓 **0.9.3 时代的旧版本**，照搬会**回退其后 17 个提交的改动**。本批只取「resolver 这个函数 + consult 改调它」两处**结构**，内容按当前 HEAD 写；`consult.mjs` 的 D-28 `abort-provenance` 导入**保留**（两条 import 并存，静态断言锁住不得互相覆盖）。
+- **落点**：`lib/config-store.mjs`（`CONSULT_TIMEOUT_DEFAULT_MS` + `resolveConsultTimeoutMs`，置于 `resolveDshBackgroundTimeoutMs` 旁保持命名习惯）· `lib/consult.mjs`（删本地 `const CONSULT_TIMEOUT_MS = 600_000` 与就地三元式，改 `resolveConsultTimeoutMs(config)`）· `test/codex-runner.test.mjs`（验收断言）。
+- **测试**：`node --test` **434/434**（基线 434 + 本批 0 用例——四条验收断言**并入** `test/codex-runner.test.mjs` 的三条既有用例，顶层 `test(` 计数不变 177，形态理由见下）· **变异矩阵 10/10 逐条自证会红**（resolver 恒回落 / 非法值不告警 / `DEFAULT` 改值 / `MIN` 改 60000 / `MAX` 改值 / 消费点回落就地三元式 / 恢复就地常量字面 / 删 config-store 导入 / 删 abort-provenance 导入 / 删授权登记 ⇒ 各命中目标用例红，还原后绿、还原逐字节核验）· 零新依赖 · 基线 10 档零改动（**唯一例外 = `test/codex-runner.test.mjs`——即本批的授权档本身，已在 T-AP9 的 `AP_TEST_AUTHORIZED` 逐档登记**）。
+- **形态说明（诚实登记 · 两条）**：
+  1. **断言并入既有用例而非新建顶层 `test(`**——因为 `test/test-lifecycle.test.mjs` 的 **T-LC2** 是「台账 §三 用例数 ↔ fs 实测 `test(` 计数」的**等值锁**，新增顶层用例会立刻让它红，而 `docs/test-lifecycle.md` **不在本批写域**。这与批 9 交付代码评审修复轮的先例同一形态（父侧当时裁定接受）。若父侧希望四条断言各占一条独立顶层用例（全量 **438/438**），需**同一交付内**把台账 §三 `codex-runner.test.mjs` 行由 **177 改为 181**——该授权不在本批写域。
+  2. **写域外的一行（需父侧裁可）**：`test/death-provenance.test.mjs` 的 `AP_TEST_AUTHORIZED` 由 `["test/design-review-guard.test.mjs"]` 扩为含 `"test/codex-runner.test.mjs"`（+ 注释说明来历）。**动因（实测证据）**：任务书声明 `test/codex-runner.test.mjs` 是授权档，但 **T-AP9 锚 B** 的真值是「基线 `2e6ca8b` 时点**已存在**的测试档零修改，除 `AP_TEST_AUTHORIZED` 例外」——而实测 `git diff --stat 2e6ca8b HEAD -- test/codex-runner.test.mjs` **为空**（该档自基线起零改动、确属基线档），故任何断言并入都会让锚 B 必红（本批实测：全量 **433/434**，唯一失败即 T-AP9）。该清单是仓内文档确立的**唯一合法通道**（`docs/test-lifecycle.md` §一；`docs/2026-09-13-test-lifecycle-consult-minutes.md:26`「授权通道存在……基线**后**档 ⇒ 可改」），且 `death-provenance.test.mjs` 本身由批 6 `a5f9551` **建于基线之后**（`git ls-tree 2e6ca8b -- test` 不含它）⇒ 扩清单**不触发**锚 B。**未削弱锚的语义**：仍是「逐档显式例外」，任何**其他**基线档改动照旧红；变异自证 **M10**（删去该登记）⇒ T-AP9 红、失败文本点名该档、还原逐字节一致。
+- **版本号**：本小节是 `[0.17.0]` 的**同版本补记**（置于 CHANGELOG 顶部，沿用同名版本头——机器契约 `G-常驻2` 要求「CHANGELOG 顶部版本头 == `package.json#version`」，改写成「未发布」会让常驻断言立刻红）；最终版本号由父侧在收口时定。
+
 ## [0.17.0] — 2026-09-13
 
 **批 9：测试生命周期三层 + 发布门 + verify 宿主侧门禁 —— 给「只进不出」的套件立规矩，给 git tag 发布装一道会真的被跑的体检**
