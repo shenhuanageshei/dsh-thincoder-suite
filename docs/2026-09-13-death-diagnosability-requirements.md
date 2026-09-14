@@ -4,7 +4,7 @@
 - 批次：批 6（批次排序见 [`2026-09-12-absorption-inventory.md`](./2026-09-12-absorption-inventory.md) §6；上游来源 = `REVIEW-CHAIN-GUARDS` 守卫 D / §14.6 + `ABORT-PROVENANCE` §20）
 - 设计输入：**会诊 id 1**（2 模型并发，**两份均交付**：deepseek-v4-pro / glm-5.3）
 - 设计档：[`2026-09-13-death-diagnosability-design.md`](./2026-09-13-death-diagnosability-design.md)
-- 状态：**设计待评审**
+- 状态：**已实施（v0.13.0）** —— 批 6 已交付（**本行此前滞后写「设计待评审」，2026-09-13 批 10 文档卫生订正**；全流程与验收面见 [`README.md`](./README.md) 地图该行）
 
 ---
 

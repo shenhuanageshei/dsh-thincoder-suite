@@ -933,8 +933,15 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *      **必须**逐档登记，否则锚 B 必红。**本清单自身住基线之后的档**（`death-provenance.test.mjs`
  *      由批 6 `a5f9551` 引入）⇒ 扩清单不触发锚 B
  *      （对照 `docs/test-lifecycle.md` §一 / `docs/2026-09-13-test-lifecycle-consult-minutes.md:26`）。
+ *   ③ `test/config-api.test.mjs` —— **批 10（D-31）**：该档是**基线档**（`2e6ca8b` 时点在册），
+ *      U3c 把「未知顶层键 → note + `ok:true` + 静默丢弃」的**旧行为逐字编码成期望值**；D-31 取
+ *      **报错**（`unknownTop` → `errors` ⇒ PUT 400 ⇒ 写盘前拦下），故期望值必须**翻转**——这是
+ *      T-AP9 存在的意义（不是障碍）。**裁定引用**：用户 2026-09-12 裁定 D-31 单独成批；批 10
+ *      决策 **D10-11**（U3c 走 `AP_TEST_AUTHORIZED` 授权通道，先例 = 批 9 的 ②）与 **J10-6**
+ *      （取报错、否决回显）；同档**另加** D10-10 白名单一致性锁（`draftToPayload` 键集 ⊆
+ *      `topAllowed`，与该档既有面同族）⇒ **本授权同时覆盖这两处改动**（设计档 §11.1 评审 #2）。
  */
-const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs"]
+const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */
 const AP_BASELINE_SHA = "2e6ca8b"
 

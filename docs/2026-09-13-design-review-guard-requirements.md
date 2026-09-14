@@ -4,7 +4,7 @@
 - 批次：批 4（批次排序见 [`2026-09-12-absorption-inventory.md`](./2026-09-12-absorption-inventory.md) §6；上游来源 = `REVIEW-ATTENTION` G1 + `ADVISOR-CONVERGENCE` F3 / §17 F28·F29，陷阱栏 §4 #3）
 - 设计输入：**会诊 id 2**（4 模型并发：deepseek-v4-pro / glm-5.3 交付完整裁定 → **随后 DSH 非正常结束，进程重启，consult 控制器随之销毁，另 2 份（kimi-k3 / gpt-6-astra）不可复得**；纪律要求如实登记）
 - 设计档：[`2026-09-13-design-review-guard-design.md`](./2026-09-13-design-review-guard-design.md)
-- 状态：**设计待评审**
+- 状态：**已实施（v0.12.0）** —— 批 4 已交付（**本行此前滞后写「设计待评审」，2026-09-13 批 10 文档卫生订正**；全流程与验收面见 [`README.md`](./README.md) 地图该行）
 
 ---
 

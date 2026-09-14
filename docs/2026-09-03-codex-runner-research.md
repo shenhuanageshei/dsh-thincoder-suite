@@ -1,6 +1,8 @@
 # Codex CLI 接入 thincoder 子代理体系 — 调研与设计 v2
 
-- 日期：2026-09-03　|　状态：调研完成，设计定稿待评审，未实现
+- 日期：2026-09-03　|　状态：调研完成，设计定稿待评审 → **已实施**（codex runner 已按本档的边界与 schema 交付：`lib/codex-adapter.mjs` + `test/codex-runner.test.mjs`；R1–R6 沿革见 `CHANGELOG.md` 0.7.0…0.9.2）
+  - **2026-09-13 批 10 文档卫生订正**（**分歧审计 #5**）：本行原写「未实现」，与工作树/CHANGELOG 事实矛盾——它**逃过了 AC-H1 的字面 grep**，因为它写的是「**设计定稿待评审**」而非规范形态「设计待评审」。本档同时**补登记进 `README.md` 文档地图**（此前不在图上）。判据见 [`2026-09-13-ledger-discipline-design.md`](./2026-09-13-ledger-discipline-design.md) §11.2 的 **AC-H1**（全仓滞后状态行扫荡——其字面 grep 抓不到本行这种「非规范形态」的滞后）
+  - **逐档用例数见 [`test-lifecycle.md`](./test-lifecycle.md) §三**（那是机械副本与计数单点；本档**不复写**计数，避免再造一个会漂的自报数——本批 P1 的病根）
 - 环境：Windows 11 · codex-cli 0.150.1（npm 安装，能力探测后兼容 ≥0.150）· ChatGPT 登录态
 - 评审来源：codex gpt-5.6-sol（high effort，66k tokens，179s）深度评审已逐条采纳；GLM-5.3 会诊三次尝试全部 child aborted（会诊池环境故障，见附录 B）。本文档由 codex 评审 + 作者综合执笔。
 - 术语表（首次出现先解释）：**runner** = 模型后端适配器，决定任务交给谁跑；**headless** = 无交互命令行模式，跑完退出；**resume** = 继续上一次 codex 会话接着聊；**AGENTS.md** = codex 启动时自动读取的项目规则文件；**envelope** = 统一返回信封，不管后端是谁返回结构一致；**fail-closed** = 校验不过就拒绝，绝不带病运行、绝不静默换后端；**watchdog** = 看门狗定时器，超时强杀进程。

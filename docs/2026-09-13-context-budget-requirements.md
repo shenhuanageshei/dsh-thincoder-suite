@@ -4,7 +4,7 @@
 - 批次：批 5（批次排序见 [`2026-09-12-absorption-inventory.md`](./2026-09-12-absorption-inventory.md) §6；上游来源 = 第 25 批 `ADVISOR-CONTEXT-BUDGET` + 群 B `ADVISOR-CONVERGENCE` §18）
 - 设计输入：**会诊 id 1**（4 模型并发：glm-5.3 / deepseek-v4-pro / kimi-k3 交付完整裁定；codex-cli:gpt-6-astra 超时 20 分钟）+ **父侧只读勘察**（DSH 运行时窗口通道，见 §0.2）
 - 设计档：[`2026-09-13-context-budget-design.md`](./2026-09-13-context-budget-design.md)
-- 状态：**设计待评审**（本档落笔于设计评审之前）
+- 状态：**已实施（v0.11.0）**（原括注「本档落笔于设计评审之前」是**历史说明**——批 5 早已交付 ⇒ 该括注随之作废；2026-09-13 批 10 文档卫生订正。全流程见 [`README.md`](./README.md) 地图该行）
 
 ---
 

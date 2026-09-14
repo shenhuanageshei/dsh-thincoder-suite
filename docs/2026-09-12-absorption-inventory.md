@@ -1,10 +1,10 @@
-# thincoder 吸收清单（43 批次档全量、可追溯）
+# thincoder 吸收清单（吸收面全量、可追溯）
 
 - 日期：2026-09-12
 - 来源：**会诊 id 1**（4 模型并发，**2 份有效回复**：glm-5.3 + deepseek-v4-pro；gpt-6-astra / kimi-k3 超时）。
-  两份独立读完 43 档全文并各自给出分类 —— 本档是**合并 + 父侧逐条核验**的产物。
-- 定位：这是「**吸收面的单一事实源**」——批次排序、优先级、以及「哪些明确不做」都以本档为准。
-- 上游：`D:\workspace\thincoder`（v0.12.61，43 份 `docs/batches/*.md`）
+  两份独立读完**上游全量批次档**全文并各自给出分类 —— 本档是**合并 + 父侧逐条核验**的产物。
+- 定位：本档是**吸收面单一事实源**；**共 42 档**（批次排序、优先级、以及「哪些明确不做」都以本档为准）。
+- 上游：`D:\workspace\thincoder`（v0.12.61，`docs/batches/*.md` 全量）
 - 我方：`dsh-thincoder-suite`（DSH cordis 插件，非 TUI/VSC）
 
 ## §0 口径与可信度声明（先读）
@@ -12,7 +12,7 @@
 1. **两份报告在主要结论上收敛**（120K 预算、CJK 估算、METHODOLOGY 退役、abort 溯源、豁免+三护栏成对、公共层去重），但在**批次排序**与**少数细节**上分歧 —— 分歧处本档已标明并给出父侧裁定。
 2. **父侧对高影响条目逐条回代码核验**，发现报告有**至少一处误报**（见 §4 陷阱栏第 1 条：写门禁判据）。**报告的「我们现状」列不可全信**，凡涉及安全/门禁/数据面的结论，落地前须再核。
 3. 报告给的行号**不完全准确**（我实测 `advisor.mjs:44` 正确、但 METHODOLOGY 处数被低估：报告称 5-7 处，**实测 19 处**）。本档的行号以**父侧实测**为准。
-4. 上游 43 档里，**约 20 档对我方是 T-ONLY**（TUI / VSC 扩展 / provider 传输 / 批次档工具载体）——不是价值判断，是宿主不同构的硬裁剪。
+4. 上游批次档里，**约 20 档对我方是 T-ONLY**（TUI / VSC 扩展 / provider 传输 / 批次档工具载体）——不是价值判断，是宿主不同构的硬裁剪。
 
 ---
 
@@ -30,56 +30,60 @@
 
 ---
 
-## §2 全量对照表（43 档）
+## §2 全量对照表（档数见定位行——本档自报计数单点）
 
 > 「我们现状」列**已按父侧核验修正**；未核验处标「未核实」。
 
-| 批次档 | 它做了什么 | 我们现状 | 可移植性 | 建议批次 | 价值 |
-|---|---|---|---|---|---|
-| ENGINEERING-MODE | 工程模式定性 + 批次档六段 + batchDoc 门禁 + 失败路径 11 条 | PARTIAL：流程已备；无批次档体系 | 载体 T-ONLY；**失败路径 11 条 PORTABLE** | 批 11（只取语义） | 中 |
-| ENG-DESIGNER | eng-designer 角色 + 文档更新纪律 D1–D7 + V1/V2 校验 | MISSING（角色）/ D1–D7 未成文 | NEEDS-ADAPT | 批 11（只取 D1–D7） | 中 |
-| MODEL-SELECTION | 模型清单运行期拉取、删候选白名单 | 不适用（宿主管） | T-ONLY | — | 低 |
-| BATCH-SEGMENT-TOOL | 批次档段写入工具（无路径参数/段白名单/剥凭证） | MISSING（无载体） | T-ONLY | — | 低 |
-| VSC-MIRROR | 三批机制搬 VSC + 两层验收 | 不适用 | T-ONLY | — | 低 |
-| DEEPSEEK-V41-FLASH | MODEL_SPECS 数据 | ALREADY-HAVE（effort 枚举已覆盖） | T-ONLY | — | 低 |
-| SUBAGENT-TAIL | TUI 嵌套行并入父块 | 不适用 | T-ONLY | — | 低 |
-| **POOL-LEDGER** | 台账指针化 + 触发字段 + 老化 + 机检 | PARTIAL（登记表 30 条，无指针/触发/老化） | NEEDS-ADAPT | 批 11 | 中 |
-| SETTINGS-NULL-DEFAULT | null 默认值类型校验失效修复 | 该 bug 类不存在；**但 D-31 同族** | NEEDS-ADAPT | 并入 D-31 批 | 中 |
-| MECH-DEBT-SWEEP | F16 sync 记账 + 宽度豁免 + parseValue 统一 | PARTIAL（记账谓词我们已有单点） | PORTABLE（F16） | 已覆盖 | 低 |
-| **PORTABILITY** | 去本仓绑定：conventions 单一权威、METHODOLOGY 退役、提示词去指涉 | **MISSING（同族缺陷原样在）**：见 §1 P4 | **PORTABLE** | **批 7** | **高** |
-| NORMAL-MODE-AUDIT | 普通模式审计 + 会话上下文轮退役 | ALREADY-HAVE（结论参考） | PORTABLE（结论） | — | 低 |
-| **ABORT-PROVENANCE** | abort trigger×layer 标注 + deathLine 合成 | PARTIAL（D-28 修一半；eng/escalate 仍裸报） | **PORTABLE** | **批 8** | **高** |
-| ACP-CHANNEL-FIXES | ACP 通道修整 | 不适用 | T-ONLY | — | 低 |
-| **ADVISOR-CONTEXT-BUDGET** | 预算按模型窗口派生（判死=窗×0.8） | **MISSING（同一 bug 原样）**：见 §1 P1 | **PORTABLE** | **批 5** | **高** |
-| ADVISOR-BUDGET-VSC-MIRROR | 上行的 VSC 镜像 | 同上 | T-ONLY（其设计档是批 5 最佳参考） | — | 低 |
-| ARROW-EDITING | TUI 输入框竖移 | 不适用 | T-ONLY | — | 低 |
-| **COMMON-LAYER** | 提示词公共层 4→10 节 + 同句上移删源 | **PARTIAL**：10 单体文件无公共层；**已有重复症状**（`engineering.md:173-174` 重复标题） | **PORTABLE** | **批 9** | **高** |
-| DOC-HYGIENE | 文档卫生 6 条 | PARTIAL（无机械检查） | NEEDS-ADAPT（V1 段引用可解析起步） | 批 11 | 中 |
-| HOME-EXPANSION | `~` 展开单点 | MISSING（无适用字段） | T-ONLY | — | 低 |
-| INPUT-FIXES-SMALL | TUI await 缺失 + IME | 不适用 | T-ONLY | — | 低 |
-| **PROMPT-REVIEW-ORDER** | 严格序 + 四值词表（Dispatched） | **MISSING**：见 §1 P6 | **PORTABLE** | **批 3（在途）** | **高** |
-| PROVIDER-HEADERS | 静态头铺通路 | 不适用 | T-ONLY | — | 低 |
-| **REVIEW-ATTENTION** | G1 失败三振护栏（N=3）+ G2 UI 态 | **G1 MISSING**：见 §1 P3 | G1 **PORTABLE**；G2 T-ONLY | **批 4** | **高** |
-| **REVIEW-CHAIN-GUARDS** | A 未完成不签发 · B 信号自愈+启动断言 · C cite 候选链 · D 预算硬墙+0.75 提示 · E 冻结窗口 | PARTIAL：A/B/C 已有强形态；**D 半有**；**E 未核实** | PORTABLE（D、E） | **批 6** | **高** |
-| ROLE-REDEFINITION | 主代理=PM / eng-designer=唯一写稿人 | PARTIAL（无独立 designer） | NEEDS-ADAPT | 批 9 可选件 | 中 |
-| SPAWN-QUEUE-DISCIPLINE | 「提交即走」提示词句 | PARTIAL（单 spawn 架构无此痛点） | PORTABLE（若将来并行） | 暂不立项 | 低 |
-| STOP-HOOK | 回合结束钩子 | 不适用（宿主管） | T-ONLY | — | 低 |
-| **TEST-LIFECYCLE** | 测试三层制（单元退役/集成常驻/生产收编）+ 发布门 | **MISSING**：275 单测同一寿命层，无退役机制 | **PORTABLE**（理念+处置行） | **批 10** | 中高 |
-| TUI-SELECTION | picker 渲染 | 不适用 | T-ONLY | — | 低 |
-| TURN-ACROSS-SEGMENTS | turn 跨段累计 | 不适用 | T-ONLY | — | 低 |
-| VSC-ACTIVITY-REGION-RESTORE | 活动区回摆收口 | 不适用 | T-ONLY | — | 低 |
-| **VSC-ASYNC-PARITY** | 中止可见通知 + `discarded` 墓碑终态 | PARTIAL（job 有 done/cancel；无 discarded 区分） | PORTABLE（墓碑思想） | 批 6 顺带 | 中 |
-| VSC-ASYNC-VISIBILITY | 池可查可取消 | ALREADY-HAVE 大部分（jobs 句柄+通知） | T-ONLY | — | 低 |
-| VSC-GUARD-COMPLETION | 守卫收尾（启动断言直达调用方） | PARTIAL | PORTABLE（一条纪律句） | **批 6 顺带**（2026-09-12 对齐：原记「批 3 附带」，但权威排序 §6 的批 3 行不含它，且批 3 已定为纯评审协议三件；按 §7 规则在此记一行变更理由） | 中 |
-| VSC-GUARD-MIRROR | 第 11 批 VSC 镜像 | 同 REVIEW-CHAIN-GUARDS | T-ONLY | — | 低 |
-| VSC-INDEX-PERCEPTION | 向量索引 6 条 | 不适用 | T-ONLY | — | 低 |
-| VSC-MIRROR-SWEEP | 群 A 镜像 13 项 | 不适用 | T-ONLY | — | 低 |
-| **VSC-REVIEW-ASYNC-SWEEP** | 含 **B4 `estimateTokens` CJK 加权（双端）** | **B4 MISSING**：见 §1 P2 | **PORTABLE**（B4） | **批 5** | **高** |
-| VSC-WEBVIEW-ESCAPE | 行内代码转义 | 不适用 | T-ONLY | — | 低 |
-| WEBSEARCH-PROVIDER-KEY | 死键移除 | 精神已内化（D-22/D-30） | T-ONLY | — | 低 |
-| PORTABILITY-VSC-MIRROR | 可移植性 VSC 镜像 | 同 PORTABILITY | T-ONLY | — | 低 |
+| 批次档 | 它做了什么 | 我们现状 | 可移植性 | 建议批次 | 触发 | 价值 |
+|---|---|---|---|---|---|---|
+| ENGINEERING-MODE | 工程模式定性 + 批次档六段 + batchDoc 门禁 + 失败路径 11 条 | PARTIAL：流程已备；无批次档体系 | 载体 T-ONLY；**失败路径 11 条 PORTABLE** | 批 11（只取语义） | 批 11 | 中 |
+| ENG-DESIGNER | eng-designer 角色 + 文档更新纪律 D1–D7 + V1/V2 校验 | MISSING（角色）/ D1–D7 未成文 | NEEDS-ADAPT | 批 11（只取 D1–D7） | 批 11 | 中 |
+| MODEL-SELECTION | 模型清单运行期拉取、删候选白名单 | 不适用（宿主管） | T-ONLY | — | 永不（T-ONLY：模型清单由宿主提供） | 低 |
+| BATCH-SEGMENT-TOOL | 批次档段写入工具（无路径参数/段白名单/剥凭证） | MISSING（无载体） | T-ONLY | — | 永不（T-ONLY：批次档载体工具面照搬等于在不拥有的层造机制） | 低 |
+| VSC-MIRROR | 三批机制搬 VSC + 两层验收 | 不适用 | T-ONLY | — | 永不（T-ONLY：单仓插件无双仓镜像面） | 低 |
+| DEEPSEEK-V41-FLASH | MODEL_SPECS 数据 | ALREADY-HAVE（effort 枚举已覆盖） | T-ONLY | — | —（已闭环） | 低 |
+| SUBAGENT-TAIL | TUI 嵌套行并入父块 | 不适用 | T-ONLY | — | 永不（T-ONLY：TUI 嵌套行渲染由宿主提供） | 低 |
+| **POOL-LEDGER** | 台账纪律（可落地版：计数有据 + 指针/触发字段）——上游原文另含**老化**与**机检三件套**，我方只取可落地版 | PARTIAL（批 10 已补**指针/触发两列** + **计数有据**；老化/机检**不吸收**，见 §5） | NEEDS-ADAPT | **批 10**（2026-09-13 已交付） | 条件：条目量使人工巡检失效 或 并行架构出现 | 中 |
+| SETTINGS-NULL-DEFAULT | null 默认值类型校验失效修复 | 该 bug 类不存在；**但 D-31 同族** | NEEDS-ADAPT | 并入 D-31 批 | —（已闭环） | 中 |
+| MECH-DEBT-SWEEP | F16 sync 记账 + 宽度豁免 + parseValue 统一 | PARTIAL（记账谓词我们已有单点） | PORTABLE（F16） | 已覆盖 | —（已闭环） | 低 |
+| **PORTABILITY** | 去本仓绑定：conventions 单一权威、METHODOLOGY 退役、提示词去指涉 | **MISSING（同族缺陷原样在）**：见 §1 P4 | **PORTABLE** | **批 7** | —（已闭环） | **高** |
+| NORMAL-MODE-AUDIT | 普通模式审计 + 会话上下文轮退役 | ALREADY-HAVE（结论参考） | PORTABLE（结论） | — | —（已闭环） | 低 |
+| **ABORT-PROVENANCE** | abort trigger×layer 标注 + deathLine 合成 | PARTIAL（D-28 修一半；eng/escalate 仍裸报） | **PORTABLE** | **批 6** | —（已闭环） | **高** |
+| ACP-CHANNEL-FIXES | ACP 通道修整 | 不适用 | T-ONLY | — | 永不（T-ONLY：ACP 通道由宿主提供） | 低 |
+| **ADVISOR-CONTEXT-BUDGET** | 预算按模型窗口派生（判死=窗×0.8） | **MISSING（同一 bug 原样）**：见 §1 P1 | **PORTABLE** | **批 5** | —（已闭环） | **高** |
+| ADVISOR-BUDGET-VSC-MIRROR | 上行的 VSC 镜像 | 同上 | T-ONLY（其设计档是批 5 最佳参考） | — | 永不（T-ONLY：VSC 镜像面不适用；其设计档已作批 5 参考） | 低 |
+| ARROW-EDITING | TUI 输入框竖移 | 不适用 | T-ONLY | — | 永不（T-ONLY：TUI 输入框交互由宿主提供） | 低 |
+| **COMMON-LAYER** | 提示词公共层 4→10 节 + 同句上移删源 | **PARTIAL**：10 单体文件无公共层；**已有重复症状**（`engineering.md:173-174` 重复标题） | **PORTABLE** | **批 8** | —（已闭环） | **高** |
+| DOC-HYGIENE | 文档卫生 6 条 | PARTIAL（无机械检查） | NEEDS-ADAPT（V1 段引用可解析起步） | 批 11 | 批 11 | 中 |
+| HOME-EXPANSION | `~` 展开单点 | MISSING（无适用字段） | T-ONLY | — | 永不（T-ONLY：路径展开由宿主提供） | 低 |
+| INPUT-FIXES-SMALL | TUI await 缺失 + IME | 不适用 | T-ONLY | — | 永不（T-ONLY：TUI 输入面由宿主提供） | 低 |
+| **PROMPT-REVIEW-ORDER** | 严格序 + 四值词表（Dispatched） | **MISSING**：见 §1 P6 | **PORTABLE** | **批 3（在途）** | —（已闭环） | **高** |
+| PROVIDER-HEADERS | 静态头铺通路 | 不适用 | T-ONLY | — | 永不（T-ONLY：provider 传输层不拥有） | 低 |
+| **REVIEW-ATTENTION** | G1 失败三振护栏（N=3）+ G2 UI 态 | **G1 MISSING**：见 §1 P3 | G1 **PORTABLE**；G2 T-ONLY | **批 4** | —（已闭环） | **高** |
+| **REVIEW-CHAIN-GUARDS** | A 未完成不签发 · B 信号自愈+启动断言 · C cite 候选链 · D 预算硬墙+0.75 提示 · E 冻结窗口 | PARTIAL：A/B/C 已有强形态；**D 半有**；**E 未核实** | PORTABLE（D、E） | **批 6** | —（已闭环） | **高** |
+| ROLE-REDEFINITION | 主代理=PM / eng-designer=唯一写稿人 | PARTIAL（无独立 designer） | NEEDS-ADAPT | 批 9 可选件 | 条件：单会话形态出现需要独立设计写稿人的实测痛 | 中 |
+| SPAWN-QUEUE-DISCIPLINE | 「提交即走」提示词句 | PARTIAL（单 spawn 架构无此痛点） | PORTABLE（若将来并行） | 暂不立项 | 条件：并行会话架构出现 | 低 |
+| STOP-HOOK | 回合结束钩子 | 不适用（宿主管） | T-ONLY | — | 永不（T-ONLY：回合生命周期由宿主提供） | 低 |
+| **TEST-LIFECYCLE** | 测试三层制（单元退役/集成常驻/生产收编）+ 发布门 | **MISSING**：275 单测同一寿命层，无退役机制 | **PORTABLE**（理念+处置行） | **批 9** | —（已闭环） | 中高 |
+| TUI-SELECTION | picker 渲染 | 不适用 | T-ONLY | — | 永不（T-ONLY：TUI picker 由宿主提供） | 低 |
+| TURN-ACROSS-SEGMENTS | turn 跨段累计 | 不适用 | T-ONLY | — | 永不（T-ONLY：回合生命周期由宿主提供） | 低 |
+| VSC-ACTIVITY-REGION-RESTORE | 活动区回摆收口 | 不适用 | T-ONLY | — | 永不（T-ONLY：VSC 活动区不适用） | 低 |
+| **VSC-ASYNC-PARITY** | 中止可见通知 + `discarded` 墓碑终态 | PARTIAL（job 有 done/cancel；无 discarded 区分） | PORTABLE（墓碑思想） | 批 6 顺带 | 条件：出现 dependsOn 调度 或 status 单查 或 digest 自动注入通道 | 中 |
+| VSC-ASYNC-VISIBILITY | 池可查可取消 | ALREADY-HAVE 大部分（jobs 句柄+通知） | T-ONLY | — | —（已闭环） | 低 |
+| VSC-GUARD-COMPLETION | 守卫收尾（启动断言直达调用方） | PARTIAL | PORTABLE（一条纪律句） | **批 6 顺带**（2026-09-12 对齐：原记「批 3 附带」，但权威排序 §6 的批 3 行不含它，且批 3 已定为纯评审协议三件；按 §7 规则在此记一行变更理由） | —（已闭环） | 中 |
+| VSC-GUARD-MIRROR | 第 11 批 VSC 镜像 | 同 REVIEW-CHAIN-GUARDS | T-ONLY | — | 永不（T-ONLY：VSC 镜像面不适用） | 低 |
+| VSC-INDEX-PERCEPTION | 向量索引 6 条 | 不适用 | T-ONLY | — | 永不（T-ONLY：向量索引面不拥有） | 低 |
+| VSC-MIRROR-SWEEP | 群 A 镜像 13 项 | 不适用 | T-ONLY | — | 永不（T-ONLY：单仓无双仓镜像面） | 低 |
+| **VSC-REVIEW-ASYNC-SWEEP** | 含 **B4 `estimateTokens` CJK 加权（双端）** | **B4 MISSING**：见 §1 P2 | **PORTABLE**（B4） | **批 5** | —（已闭环） | **高** |
+| VSC-WEBVIEW-ESCAPE | 行内代码转义 | 不适用 | T-ONLY | — | 永不（T-ONLY：webview 不适用） | 低 |
+| WEBSEARCH-PROVIDER-KEY | 死键移除 | 精神已内化（D-22/D-30） | T-ONLY | — | —（已闭环） | 低 |
+| PORTABILITY-VSC-MIRROR | 可移植性 VSC 镜像 | 同 PORTABILITY | T-ONLY | — | 永不（T-ONLY：VSC 镜像面不适用） | 低 |
 
-> 说明：43 档中**约 20 档为 T-ONLY**（TUI / VSC / provider 传输 / 批次档载体）。这不是「没价值」，而是**宿主不同构**——我方是 DSH 插件，UI/传输/回合生命周期由宿主提供。
+> 说明：档数见定位行——本档自报计数单点；**T-ONLY 的规模与理由见 §0 第 4 条**。这不是「没价值」，而是**宿主不同构**——我方是 DSH 插件，UI/传输/回合生命周期由宿主提供。
+
+> **2026-09-13 订正（批 10 · 按 §7 规则记理由）**：① 本表新增**触发**列（42 行逐行填充，J10-3 闭合四值）——落实 AC-P3；② **不给本表加指针列**（D10-6：其指针指向**上游**批次档 `D:\workspace\thincoder\...`，**本地不可验** ⇒「不可验的指针列比没有更糟」；§2 的 file:line 已内嵌在「我们现状」列，约定保留）；③ POOL-LEDGER 行的**建议批次**由 批 11 → **批 10**、内容改为**可落地版**（删「老化」「机检」与跨档计数引用）；④ **全量对账**（设计 §6.4-#3 要求「不能假设只有两处」）：本表「建议批次」列里的 **批 11** 行**共 4 条**（ENGINEERING-MODE「只取语义」/ ENG-DESIGNER「只取 D1–D7」/ POOL-LEDGER「已订正为批 10」/ DOC-HYGIENE），§6 据此补**批 11 行**；⑤ 另有三行「建议批次」与 §6 的权威排序**早已漂移**（ABORT-PROVENANCE 8→**6** · COMMON-LAYER 9→**8** · TEST-LIFECYCLE 10→**9**），按 D10-7「订正以 §6 为排期权威」一并对齐。
+
+> 剩余陈旧项（**不在本批写域，如实登记**，防下轮当遗漏读）：本表 §1 P1/P2/P3 的行号（U-5/U-6/G-3 已登记，属批 5/批 4 的收口面）、TEST-LIFECYCLE 行「275 单测」的规模值、COMMON-LAYER 行的重复症状（R-12 已认定为陈旧记载）。
 
 ---
 
@@ -117,13 +121,18 @@
 
 ## §5 明确不吸收（及理由）
 
-1. **VSC 全家族**（8 档）：我方是 DSH **单仓**插件，无 webview/双仓——「双端镜像」模式不适用；其可移植内核已在对位批次计入，镜像批本身零增量。
-2. **provider / 传输 / 模型层**（MODEL-SELECTION、DEEPSEEK-V41-FLASH、PROVIDER-HEADERS、HOME-EXPANSION、WEBSEARCH-PROVIDER-KEY、STOP-HOOK、ACP-CHANNEL-FIXES）：全是 DSH 平台职责面，照抄等于在不拥有的层造机制。
-3. **TUI 家族**（ARROW-EDITING、TUI-SELECTION、SUBAGENT-TAIL、INPUT-FIXES-SMALL、TURN-ACROSS-SEGMENTS、REVIEW-ATTENTION G2）：DSH GUI 提供我方 UI。
-4. **批次档载体机制**（BATCH-SEGMENT-TOOL、batchDoc 门禁、六段档工具面）：上游仓内工作流；**其行为纪律**（一段一作者/写后回读/核销同步清单）可在提示词层少量吸收，工具不搬。
-5. **独立 eng-designer 子代理角色**：工作流重设计，我方单会话形态**无实测痛点**，收益未证、成本高。只顺手吸收「内容权=主代理」一句口径。
-6. **文档机器检查器**（check-doc-width V1–V3 / check-ledger）：我方 repo 几十文件，建检查器是过度投资；背后纪律随批 11 以提示词级补。
+1. `永不（宿主不同构：我方是 DSH 单仓插件，无 webview/双仓）` **VSC 全家族**（8 档）：我方是 DSH **单仓**插件，无 webview/双仓——「双端镜像」模式不适用；其可移植内核已在对位批次计入，镜像批本身零增量。
+2. `永不（DSH 平台职责面：照抄等于在不拥有的层造机制）` **provider / 传输 / 模型层**（MODEL-SELECTION、DEEPSEEK-V41-FLASH、PROVIDER-HEADERS、HOME-EXPANSION、WEBSEARCH-PROVIDER-KEY、STOP-HOOK、ACP-CHANNEL-FIXES）：全是 DSH 平台职责面，照抄等于在不拥有的层造机制。
+3. `永不（UI 由宿主提供）` **TUI 家族**（ARROW-EDITING、TUI-SELECTION、SUBAGENT-TAIL、INPUT-FIXES-SMALL、TURN-ACROSS-SEGMENTS、REVIEW-ATTENTION G2）：DSH GUI 提供我方 UI。
+4. `永不（上游仓内工作流的面，工具不搬）` **批次档载体机制**（BATCH-SEGMENT-TOOL、batchDoc 门禁、六段档工具面）：上游仓内工作流；**其行为纪律**（一段一作者/写后回读/核销同步清单）可在提示词层少量吸收，工具不搬。
+5. `永不（我方单会话形态无实测痛点，收益未证、成本高）` **独立 eng-designer 子代理角色**：工作流重设计，我方单会话形态**无实测痛点**，收益未证、成本高。只顺手吸收「内容权=主代理」一句口径。
+6. `永不（我方 repo 几十文件，建检查器是过度投资）` **文档机器检查器**（check-doc-width V1–V3 / check-ledger）：我方 repo 几十文件，建检查器是过度投资；背后纪律随批 11 以提示词级补。
 7. **POOL-LEDGER 机检三件套 / SPAWN-QUEUE-DISCIPLINE**：待条目量或并行架构出现再评估。
+8. `条件：条目量使人工巡检失效 或 并行架构出现` **老化**（staleness 标记）：形态**从未定义**（全仓无 schema、无字段表、无示例），且需引入**新状态机** ⇒ 本批（批 10）明文不做；再评估触发即上句。**本条是批 10 新增的不吸收项**（此前「老化」只被点名、从未落过立场）。
+
+> **表述纪律（批 10 · J10-5 / 设计 §6.4-6b）**：本表每条以**闭合句式**开头——`永不（<理由>）` 或
+> `条件：<可判定谓词>`；句式之后的散文只是展开，**立场一字不改**。**第 7 条（POOL-LEDGER 机检三件套）
+> 本批一字不改**（D10-8：§2 删去「机检」后立场冲突自然消解，**不放松 §5**）。
 
 ---
 
@@ -140,7 +149,8 @@
 | **批 7** | 可移植性三件（METHODOLOGY 退役 / 提示词去本仓引用 / 判据单一权威） | 实测痛 P4（**19 处**） | ⚠️ glm 排批 8、deepseek 排批 7 —— 父侧取**批 7**（有实测痛，应前于纯能力缺口） |
 | **批 8** | 提示词公共层（裁减版） | 能力缺口 + 去重 | ⚠️ glm 排批 7、deepseek 排批 9 —— 父侧取**批 8**。**2026-09-13 追加（订正本行内部矛盾，按 §7 规则记理由）**：本行原文写作「提示词公共层（裁减版）+ **D1–D7 文档纪律**」，但 **§2 的 ENG-DESIGNER 行明写 D1–D7 归「批 11（只取 D1–D7）」**——同一份档内两处冲突。父侧裁定**以 §2 为准**：**D1–D7 留在批 11**，本行移除该半件（批 8 = 纯提示词公共层）。该冲突曾被抄进交接页 §1 的批 8 行，同日一并订正 |
 | **批 9** | 测试生命周期三层 + 发布门 + `verify` 宿主侧执行评估 | 能力缺口 | ⚠️ 分歧最大（glm 中高 / deepseek 中）—— 父侧取**批 9**，因 275 测试且持续增长 |
-| **批 10** | 台账纪律（指针/触发字段/核销清单）+ D-31 静默丢弃 | 能力缺口 | 仅供参考 |
+| **批 10** | **台账纪律（可落地版：计数有据 + 指针/触发字段）+ D-31 静默丢弃 + D-36 重启后写门禁 + 文档卫生** | 实测痛 P1/P3（自报计数漂 + 排期三处矛盾）+ **数据丢失**（D-31：全未知键 PUT 静默清空 user 层）+ 摩擦（D-36） | 仅供参考（本行 = 实际交付四件）。**2026-09-13 追加（按 §7 规则记理由）**：① 本行原写「台账纪律（指针/触发字段/**核销清单**）+ D-31 静默丢弃」——**「核销清单」废除**（全仓唯一出处即此处，从未定义、无实测痛），内容按实际交付改写为四件；② **新增批 11 行**（见下）；③ **排序对账**：§2 建议批次列的 **批 11 行共 4 条**（ENGINEERING-MODE「只取语义」/ ENG-DESIGNER「只取 D1–D7」/ DOC-HYGIENE + 已订正为批 10 的 POOL-LEDGER），故本表新行覆盖前三条；④ 同批把 §2 另外三行与本节权威排序的对齐（ABORT-PROVENANCE 8→6 · COMMON-LAYER 9→8 · TEST-LIFECYCLE 10→9，D10-7「订正以 §6 为排期权威」） |
+| **批 11** | **D1–D7 文档纪律**（ENG-DESIGNER 的文档更新纪律）+ 上游 **ENGINEERING-MODE 的失败路径语义**（只取语义，载体 T-ONLY）+ **DOC-HYGIENE 的提示词级纪律**（机械检查器**不吸收**，见 §5-6） | §2 建议批次列的**批 11 列**（全量对账：4 条命中，见批 10 行的变更理由③） | 仅供参考（§2 的批 11 行 = 本行的域，逐条已对账） |
 | **不立项** | §5 全部 | 宿主不同构或无实测痛 | — |
 
 ### 两份报告的分歧与裁定

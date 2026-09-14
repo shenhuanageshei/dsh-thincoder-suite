@@ -146,7 +146,10 @@ test("T-PK8 (锚 B4, AC-P10): eng.mjs 仍持有 isProductCode 绑定；子问题
   // D-P14：guard-e.test.mjs 的 WRITE_GATE_FIXTURE 逐字节锁着 makeWriteGate 函数体，
   // 其中 `isProductCode(target)` 行要求 eng.mjs **文件内**仍有可解析的 isProductCode 绑定。
   const engSrc = readFileSync(join(LIB_DIR, "eng.mjs"), "utf8")
-  const wg = srcSlice(engSrc, "export function makeWriteGate(getConfigDefault) {", "\n\n/**\n * 守卫 E 预闸")
+  // ★ 批 10（D-36）：切片起点由 `makeWriteGate(getConfigDefault) {` 改为**不带签名**的
+  //   `makeWriteGate(`——该函数新增了**可选**第二参 `storPathOverride`（测试缝，向后兼容）。
+  //   锚断言的是**函数体内**的绑定与调用行，签名不参与锚（写死签名会让合法扩参时定位失败）。
+  const wg = srcSlice(engSrc, "export function makeWriteGate(", "\n\n/**\n * 守卫 E 预闸")
   assert.ok(wg.includes("if (!target || !isProductCode(target)) return await next()"),
     "锚 B4: makeWriteGate 切片内 isProductCode(target) 调用行逐字存在")
   assert.ok(engSrc.includes("export function isProductCode(p) {"),

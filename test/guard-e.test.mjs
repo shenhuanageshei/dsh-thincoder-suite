@@ -698,7 +698,7 @@ test("T-E20 (AC-E20 / §9 边界 2): 真空豁免不死锁——documents=[] + P
   } finally { cleanSid(sid); rmHome(home) }
 })
 
-test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 11 既有 + 本档；批 6b 新机制字面只活在本档", () => {
+test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下方登记清单 + 本档；批 6b 新机制字面只活在本档", () => {
   const testDir = join(PLUGIN_DIR, "test")
   const files = readdirSync(testDir).filter(f => f.endsWith(".test.mjs")).sort()
   // 本闸的意图 = **「新增测试档必须同步登记」**（防静默扩张），**不是**禁止新增：
@@ -728,9 +728,22 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 11 �
     "test-lifecycle.test.mjs",
     "stage-gate.test.mjs",
     "release-check.test.mjs",
+    // 批 10（台账纪律）新增档——**在其落地的同一 stage 内登记**（批 9 §七 已立此纪律：
+    // 台账-历史一致闸的「T-E19 ↔ fs」等值腿会在「fs 已 +1 而本表未登记」时先红）。
+    // 理由与裁定引用：
+    //   ① ledger-parity.test.mjs —— 计数有据 + 指针/触发两条结构断言（用户 2026-09-13 裁定
+    //      J10-11 = 加；设计档 docs/2026-09-13-ledger-discipline-design.md §6.1 / §8.2 M1–M5）；
+    //   ② eng-token-fallback.test.mjs —— D-36 写门禁回退腿三态（设计档 §6.3 / §8.2 M9–M12 /
+    //      §11.2 AC-G1…AC-G6；决策 D10-13…D10-15）。
+    "ledger-parity.test.mjs",
+    "eng-token-fallback.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
-    "测试档清单 = 既有 11 档 + 批 7/8/9 各批登记档（多一个 = 越界新增，少一个 = 既有档被改名/删除）")
+    // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」
+    //   ——**会漂的自报枚举**（数组本体已登记批 10 两档，而口径仍停在批 9）⇒ 改为**计数无关**表述
+    //   （本条断言的有效性不依赖任何计数：期望值 = 上方 `existing` 数组本身）。同理本用例**标题**的
+    //   「11 既有」也一并去掉——它与本消息是同一族的漂移。
+    "测试档清单 = 上方 existing 登记清单 + 本档（多一个 = 越界新增，少一个 = 既有档被改名/删除）")
   // 既有档不得被「改造以适配本批」：批 6b 的机制字面只允许出现在本档
   for (const f of existing) {
     const src = readFileSync(join(testDir, f), "utf8")
@@ -744,10 +757,25 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 11 �
 
 // ═══════════════════════════ 机验锚（AC-E17 / AC-E18 / AC-E21） ═══════════════════════════
 
-/** `makeWriteGate` 函数体（本批**逐字节不动**的零改面）——持久形态：内容子串比对，
- *  不用 `git diff --name-only HEAD`（那是「只在提交前成立」的形态）。 */
+/** `makeWriteGate` 函数体（**批 10 起的新基线**：字节夹具）——持久形态：内容子串比对，
+ *  不用 `git diff --name-only HEAD`（那是「只在提交前成立」的形态）。
+ *  ★ 批 10（D-36）**重新基线说明**（D-37 的教训：锚必须写清「何时点 + 何谓改」）：
+ *    批 6b 立此夹具时的语义是「**本批**未改 makeWriteGate」；而批 10 的 D-36 **依法**改动它
+ *    （内存态为空时读盘回退腿 + `storPathOverride` 可选第二参测试缝，设计档 §7/§6.3）⇒
+ *    夹具随该合法改动**重新基线**。此后任何对 `makeWriteGate` 函数体的改动**仍然会红**
+ *    （这正是本锚的价值：它是**永久契约**，不是一次性的时点事实——F4 的裁定维持）。
+ *  ★ 批 10 **第二次重新基线**（**审计 #3 的病灶 = 第一次未自白 ⇒ 本次显式自白**）：
+ *    本轮改的是回退腿上方那 4 行**注释**（承重层订正，见设计档 §13.4-⑦ / §12），**代码零改**。
+ *  ★ 批 10 **第三次重新基线**（收尾轮 · **交付代码评审 🔵#4 的修复**，**显式自白**——同上一轮的
+ *    口径：自白是纪律，不是可选项）：
+ *    本轮改的是 `diskState` 的第三态——**代码改动**（`validateDesignToken(…) ? "valid" : "expired"`
+ *    → 形不可解析一律路由 `missing`，失败原因取 `designTokenFailureReason`）**+ 其上方 9 行注释**
+ *    （见设计档 §13.4-⑦ / §12）。**触发接口**：`makeWriteGate` 函数体是**逐字节**锁 ⇒ 函数体任何
+ *    改动（含注释）都必须随之重新基线——这是**第三次**，代价见设计档 §9 边界-12。
+ *  ★ **本锁的已知维护代价**（设计档 §9 边界-12）：锁定面 = 函数体**全文含注释** ⇒
+ *    **任何注释改动都必须重新基线**。将来的可选方向 = **缩小锁面（只锁可执行行）**，**本批不做**。 */
 const WRITE_GATE_FIXTURE = [
-  "export function makeWriteGate(getConfigDefault) {",
+  "export function makeWriteGate(getConfigDefault, storPathOverride) {",
   "  return async (exec, next) => {",
   "    try {",
   "      const name = exec?.name",
@@ -763,18 +791,63 @@ const WRITE_GATE_FIXTURE = [
   "      if (state.designToken && validateDesignToken(state.designToken)) return await next()",
   "      const target = targetPathOf(name, exec?.arguments)",
   "      if (!target || !isProductCode(target)) return await next()",
+  "      // ————— 批 10（D-36）回退腿：**仅内存态为空时**读盘（六条件 a–f，设计档 §6.3）—————",
+  "      // ★ 层级区分（D10-15 / 边界 7）：**读盘失败 ≠ 门禁故障** ⇒ 一律按「无记录」**拒**，",
+  "      //   **绝不**落入下方「门禁自身故障 → 放行」的 catch（fail-open）——两者方向相反、**不同层**。",
+  "      // ★ **承重层 = 内层**（批 10 分歧审计 #8 **订正**：此前口径「外层 catch 承载 fail-closed」**已推翻**）：",
+  "      //   真保证 fail-closed 的是 `loadTokenRecord` **自身**的 fail-safe（缺失/损坏/不可读 → null ⇒",
+  "      //   三态 \"missing\" ⇒ 拒）——实测**删掉内层 fail-safe ⇒ 11 条用例转红**（宿主 = 无第二层的调用点，",
+  "      //   如 `eng_coder` 的读盘路径）；**本门禁内实测差异 = 0**（下一行的 catch 同样归零到 null，",
+  "      //   故 T-TF2/T-TF4 保持绿）。⇒ 下一行括的这层是**第二层纯防御**：本实现下**走不到**",
+  "      //   （`loadTokenRecord` 不抛），但**非装饰**——它归零的方向与下方 fail-open 的 catch **相反**。",
+  "      let diskRec = null",
+  "      if (!state.designToken) {",
+  "        try { diskRec = loadTokenRecord(agent.session.id, storPathOverride, agent.session?.header?.cwd) } catch { diskRec = null }",
+  "      }",
+  "      const diskToken = diskRec && typeof diskRec.token === \"string\" && diskRec.token !== \"\" ? diskRec.token : null",
+  "      // ★ **显式三态路由**（设计评审 #3：不得用单 `if` 落穿——那会让过期盘记录拿到「没有令牌」文案）：",
+  "      //   valid ⇒ 放行并回填；expired ⇒ 走既有 expired 文案；missing ⇒ 走既有 no-token 文案。",
+  "      // ★ **交付评审 #4 订正**：盘记录 `token` **非空但形状不可解析**（畸形串 / 旧版式 /",
+  "      //   `expiresAt` 段不可解析）时路由为 **missing**——**只有「真过期」才归 expired**，与",
+  "      //   `loadTokenRecord` 对畸形记录的 fail-safe **同向**（判据 = 「这枚凭证**不可用**」，",
+  "      //   不是「这枚凭证**过期了**」）。旧写法把**一切**校验失败都归 \"expired\"",
+  "      //   （`validateDesignToken(…) ? \"valid\" : \"expired\"`），而 `tokenExpiryMs(畸形串)` 为 null",
+  "      //   ⇒ `gateExpired` 为假 ⇒ 渲染 **no-token 文案**：**态与文案不符**（拒绝方向不变，但诊断",
+  "      //   在骗人）；第二段恰可解析为**过去时间戳**的畸形串更会渲染出**假的**「expired at …」。",
+  "      //   ★ 失败原因取**单一权威** `designTokenFailureReason`（token 形状知识不在此复制第二份；",
+  "      //   `validateDesignToken` 即其「原因 === null」）。",
+  "      const diskState = !state.designToken",
+  "        ? (diskToken === null ? \"missing\"",
+  "          : (validateDesignToken(diskToken) ? \"valid\"",
+  "            : (designTokenFailureReason(diskToken) === \"expired\" ? \"expired\" : \"missing\")))",
+  "        : null",
+  "      if (diskState === \"valid\") {",
+  "        // (e) 回填 state（避免每次写操作重复读盘）+ (d) 落**一行可见日志**——把 D1 反对的「静默」",
+  "        //     改成「可审计」（决策 D10-13：推翻的是路径，不是终态）。",
+  "        state.designToken = diskToken",
+  "        console.warn(\"[thincoder-suite] gate: design token restored from token-store (session \"",
+  "          + agent.session.id + \", expires \"",
+  "          + new Date(typeof diskRec.expiresAt === \"number\" && Number.isFinite(diskRec.expiresAt)",
+  "            ? diskRec.expiresAt : (tokenExpiryMs(diskToken) ?? Date.now())).toISOString() + \")\")",
+  "        return await next()",
+  "      }",
   "      // D-30 / FR-T6：令牌**已过期**时不得再说「先写设计文档」（误导——文档早就写完了）。",
   "      // 指向真实出路：再调一次 eng_coder 走续期（文档未变则自动顺延，无需重评）。",
   "      // 本门禁**绝不执行续期**（AC-21 [负]）：续期落点是 eng_coder 的过期子分支（决策 D1）",
   "      // ——门禁契约是 fail-open 的纪律护栏，续期判定必须 fail-closed，两者语义互斥。",
-  "      const gateExp = state.designToken ? tokenExpiryMs(state.designToken) : null",
+  "      // ★ (b) 判据与内存路径**完全同构**：盘记录过期 ⇒ 置起同一个 `gateExp` 输入，使既有 expired",
+  "      //   文案**原样复用**（不新造第二条文案）。",
+  "      // ★ **docHash 不进门禁判据**（D10-14）：内存路径今天也不查 ⇒ 盘路径查会造成两路径判据不一",
+  "      //   （那才是真的不一致）；「文档被改后令牌是否失效」是另一个命题，若做须两路径同做、另立批次。",
+  "      const gateExp = state.designToken ? tokenExpiryMs(state.designToken)",
+  "        : (diskState === \"expired\" ? tokenExpiryMs(diskToken) : null)",
   "      const gateExpired = gateExp !== null && Date.now() > gateExp",
   "      return {",
-  '        kind: "deny",',
+  "        kind: \"deny\",",
   "        reason: gateExpired",
-  '          ? "denied: engineering mode is ON and the current design token expired at " + new Date(gateExp).toLocaleString()',
-  '            + " — call eng_coder again with your token: if the design document set is unchanged the token is renewed automatically (no re-review); if it changed, re-run the design review. Docs (*.md under docs/ or at the root) stay writable."',
-  '          : "denied: engineering mode is ON and no design token — write the design document first, have the user initiate advisor(type=\'design\'), then implement via eng_coder (the designToken parameter). Docs (*.md under docs/ or at the root) stay writable.",',
+  "          ? \"denied: engineering mode is ON and the current design token expired at \" + new Date(gateExp).toLocaleString()",
+  "            + \" — call eng_coder again with your token: if the design document set is unchanged the token is renewed automatically (no re-review); if it changed, re-run the design review. Docs (*.md under docs/ or at the root) stay writable.\"",
+  "          : \"denied: engineering mode is ON and no design token — write the design document first, have the user initiate advisor(type='design'), then implement via eng_coder (the designToken parameter). Docs (*.md under docs/ or at the root) stay writable.\",",
   "      }",
   "    } catch {",
   "      return await next() // 门禁自身故障 → 放行（fail-open 只在此处：门禁 bug 不能瘫痪整个会话）",
@@ -809,11 +882,15 @@ test("T-E17 (AC-E17, 锚 A1/A2/A7/A8): 漂移分支不读活 state · 写门禁�
   assert.ok(driftCode.includes("state.advisorRound = 0") && driftCode.includes("state.lastAdvisorOutput = null")
     && driftCode.includes("persistSessionState(agent, state, opts)"), "D-E9: 复位轮次 + 清 prior + 落盘")
 
-  // —— A2：makeWriteGate 函数体逐字节不动（内容子串 + 整体比对；非「工作树 vs HEAD」形态） ——
-  const wgStart = engSrc.indexOf("export function makeWriteGate(getConfigDefault) {")
+  // —— A2：makeWriteGate 函数体逐字节等于**本批更新后的夹具**（内容比对；非「工作树 vs HEAD」形态） ——
+  //    ★ 批 10 起切片起点改为 `export function makeWriteGate(`（不带签名）：D-36 给它加了
+  //      **可选**第二参 `storPathOverride`（测试缝，向后兼容）——起点写成带签名会在合法扩参时
+  //      定位失败（本批实测踩中）；签名不参与锚，函数体参与。
+  const wgStart = engSrc.indexOf("export function makeWriteGate(")
   const wgEnd = engSrc.indexOf("\n\n/**\n * 守卫 E 预闸")
   assert.ok(wgStart >= 0 && wgEnd > wgStart, "A2: 函数体切片边界可定位")
-  assert.equal(engSrc.slice(wgStart, wgEnd), WRITE_GATE_FIXTURE, "A2: makeWriteGate 函数体逐字节等于今日")
+  assert.equal(engSrc.slice(wgStart, wgEnd), WRITE_GATE_FIXTURE,
+    "A2: makeWriteGate 函数体逐字节等于批 10 更新后的夹具（此后任何改动 ⇒ 红）")
   assert.ok(!engSrc.slice(wgStart, wgEnd).includes("frozen"), "A2: 守卫 E 未被并进写门禁（D-E1）")
   const mkCount = (engSrc.match(/export function makeWriteGate\s*\(/g) ?? []).length
   assert.equal(mkCount, 1, "A2: 唯一实现点")

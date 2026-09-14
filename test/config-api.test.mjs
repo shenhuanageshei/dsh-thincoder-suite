@@ -4,7 +4,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { join, dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { tmpdir } from "node:os"
 import {
   mergeGlobalConfig, effectiveGlobalConfig,
@@ -12,12 +13,14 @@ import {
 } from "../lib/config-store.mjs"
 import {
   validateGlobalUserConfig, applySessionOverride, resetSessionOverride,
-  sanitizeSessionAdvisor, describeSessionView, registerConfigApi, CONFIG_API_PREFIX,
+  sanitizeSessionAdvisor, describeSessionView, registerConfigApi, CONFIG_API_PREFIX, makeApiHandler,
 } from "../lib/index.mjs"
 import { resolveAdvisorRoute } from "../lib/advisor.mjs"
 
 const mkHome = () => mkdtempSync(join(tmpdir(), "thincoder-cfg-"))
 const rmHome = (h) => { try { rmSync(h, { recursive: true, force: true }) } catch { /* 已清理 */ } }
+/** 插件根（U3c2 的白名单一致性锁要读两侧**源码字节**）。 */
+const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
 // 屏蔽宿主 DSH_HOME（本机指向真实 profile）：本文件全部走显式 dshHomeOverride/临时目录，
 // 避免真实 user 层（config.json）污染 effectiveGlobalConfig 相关断言。进程内生效。
@@ -276,7 +279,12 @@ test("U3b: provider existence checked when registry is available; skipped with a
   assert.equal(hit.errors.length, 0)
 })
 
-test("U3c: valid payload validates ok and returns sanitized whitelist payload (unknown dropped as notes)", () => {
+test("U3c: valid payload validates ok and returns sanitized whitelist payload；未知顶层键 ⇒ errors（批 10 / D-31 翻转）", () => {
+  // ★ 批 10（D-31 / D10-9 · 决策 J10-6「取报错不取回显」）**翻转本用例的期望值**：
+  //   `engineering: true` 是**白名单外的顶层键**——旧契约把它归 `notes`（`ok:true` + 静默丢弃，
+  //   实测后果 = 全未知键 PUT ⇒ 200「已保存」而 user 层被**整体替换清空**）；
+  //   新契约把它归 **`errors`** ⇒ `ok:false` ⇒ PUT **400** ⇒ **在写盘之前拦下**（数据丢失路径灭绝）。
+  //   本档是**基线档**（受 T-AP9 保护）⇒ 改动经 `AP_TEST_AUTHORIZED` 显式授权通道（见其注释）。
   const v = validateGlobalUserConfig({
     advisor: {
       round1: { provider: "qax", model: "glm-5.3", effort: "medium", timeoutMs: 900000 },
@@ -285,11 +293,28 @@ test("U3c: valid payload validates ok and returns sanitized whitelist payload (u
     consultModels: [{ provider: "qax", model: "glm-5.3", effort: "high" }],
     engCoderMaxTokens: 65536,
     engCoderEffort: "low",
-    engineering: true, // 白名单外 → note，不进 sanitized
+    engineering: true, // 白名单外顶层键 ⇒ **errors**（不再是 note）
   }, ["qax"])
-  assert.equal(v.ok, true)
-  assert.ok(v.notes.some((e) => e.includes("engineering")))
-  assert.deepEqual(v.sanitized, {
+  assert.equal(v.ok, false, "未知顶层键 ⇒ ok:false（D-31 新契约：报错，不再静默丢弃）")
+  assert.ok(v.errors.some((e) => e.includes("engineering") && e.includes("not a supported top-level field")),
+    "400 的 errors 必须**点名**未知键 + 白名单提示（镜像嵌套分支的既有形态）：" + JSON.stringify(v.errors))
+  assert.ok(!("engineering" in (v.sanitized ?? {})), "sanitized 不得含未知键：" + JSON.stringify(v.sanitized))
+  assert.ok(!(v.notes ?? []).some((n) => n.includes("ignoring unknown top-level field")),
+    "旧形态的 note 必须消失（否则同一事实两处口径）：" + JSON.stringify(v.notes))
+  // 合法键照常净化（同一请求里的合法部分不受影响——报错面只针对未知键）
+  assert.deepEqual(v.sanitized.advisor, {
+    round1: { provider: "qax", model: "glm-5.3", effort: "medium", timeoutMs: 900000 }, includeProjectGuide: false,
+  })
+  assert.deepEqual(v.sanitized.consultModels, [{ provider: "qax", model: "glm-5.3", effort: "high" }])
+  // 全已知键 ⇒ 行为逐字不变（零回归面）
+  const ok = validateGlobalUserConfig({
+    advisor: { round1: { provider: "qax", model: "glm-5.3", effort: "medium", timeoutMs: 900000 }, includeProjectGuide: false },
+    consultModels: [{ provider: "qax", model: "glm-5.3", effort: "high" }],
+    engCoderMaxTokens: 65536,
+    engCoderEffort: "low",
+  }, ["qax"])
+  assert.equal(ok.ok, true)
+  assert.deepEqual(ok.sanitized, {
     advisor: { round1: { provider: "qax", model: "glm-5.3", effort: "medium", timeoutMs: 900000 }, includeProjectGuide: false },
     consultModels: [{ provider: "qax", model: "glm-5.3", effort: "high" }],
     engCoderMaxTokens: 65536,
@@ -301,6 +326,30 @@ test("U3c: valid payload validates ok and returns sanitized whitelist payload (u
   const v3 = validateGlobalUserConfig({ advisor: { convergence: { effort: "low" } } }, undefined)
   assert.equal(v3.ok, true)
   assert.deepEqual(v3.sanitized.advisor.convergence, { effort: "low" })
+})
+
+test("U3c2 (D10-10 / AC-D5 / 锚 M6): 设置页可产出的顶层键 ⊆ 服务端白名单（两侧都从**源码字节**解析）", () => {
+  // 报错方案（D-31）唯一的顾虑 = 「客户端能产出服务端不认的键 ⇒ 设置页死锁」。用**一条锁**消除它：
+  // 断言 `draftToPayload` 可产出的顶层键 **⊆** `topAllowed`。**两侧都从源码字面解析**（不手写清单、
+  // 不 import 私有实现）——任一侧将来加键忘同步 ⇒ 本用例红。
+  const indexSrc = readFileSync(join(PLUGIN_DIR, "lib", "index.mjs"), "utf8")
+  const mAllowed = /const topAllowed = \[([^\]]*)\]/.exec(indexSrc)
+  assert.ok(mAllowed, "index.mjs 的 topAllowed 字面不可定位（服务端白名单形态变了 ⇒ 本锁必须随之复核）")
+  const allowed = [...mAllowed[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])
+
+  const clientSrc = readFileSync(join(PLUGIN_DIR, "lib", "client.js"), "utf8")
+  const i0 = clientSrc.indexOf("function draftToPayload(draft) {")
+  const i1 = clientSrc.indexOf("\n\t\t\treturn config;", i0)
+  assert.ok(i0 >= 0 && i1 > i0, "client.js 的 draftToPayload 函数体不可定位（形态变了 ⇒ 本锁必须随之复核）")
+  const body = clientSrc.slice(i0, i1)
+  const payloadKeys = [...new Set([...body.matchAll(/\bconfig\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=/g)].map((x) => x[1]))]
+
+  // 解析器自证段（D10-10 明文要求）：两侧都必须真的解析出 ≥N 键，否则本锁退化为恒真空断言。
+  assert.ok(allowed.length >= 5, "服务端白名单解析自证：实得 " + allowed.length + " 键 " + JSON.stringify(allowed))
+  assert.ok(payloadKeys.length >= 5, "客户端载荷键解析自证：实得 " + payloadKeys.length + " 键 " + JSON.stringify(payloadKeys))
+  const extra = payloadKeys.filter((k) => !allowed.includes(k))
+  assert.deepEqual(extra, [],
+    "设置页可产出的顶层键必须 ⊆ 服务端 topAllowed（否则 D-31 的 400 会让设置页死锁）：多出 " + JSON.stringify(extra))
 })
 
 // ————————————— U7：apply-session / reset-session（stub sessionState） —————————————
@@ -465,6 +514,62 @@ test("U3d: advisor exported validators are reused by index validation (single so
   // 与 validateGlobalUserConfig 走同一实现：非法 effort 在两边都拒绝
   const direct = validateGlobalUserConfig({ advisor: { round1: { provider: "p", model: "m", effort: "turbo" } } }, undefined)
   assert.equal(direct.ok, false)
+})
+
+// ————————————— 批 10 / D-31：PUT 的**静默清盘灭绝**（handler 级；AC-D1/AC-D2/AC-D3 + 锚 M7/M8） —————————————
+
+test("T-D31 (AC-D1/AC-D2/AC-D3 / 锚 M7+M8): 含未知顶层键的 PUT ⇒ 400 + 点名 + **盘字节不变**；全已知键/空配置照旧", async () => {
+  // 旧态（批 10 前，父侧实测复现）：全未知键 PUT ⇒ **200「已保存」** + `sanitized === {}` ⇒
+  // `saveUserConfig({})` **整体替换** ⇒ **既有 user 层配置被整档清空**。本用例是那条路径的
+  // **独立回归锚**：判据 = HTTP 状态 + errors 点名 + **磁盘字节前后快照比对**。
+  const home = mkHome()
+  try {
+    const seeded = { advisor: { round1: { provider: "qax", model: "glm-5.3" } }, engCoderMaxTokens: 65536 }
+    assert.equal(saveUserConfig(seeded, home), true)
+    const storePath = resolveConfigStorePath(home)
+    const before = readFileSync(storePath, "utf8")
+
+    const handler = makeApiHandler({}, {
+      baseConfig: {}, sessionExists: () => false, agentOptionsOf: () => ({}),
+      stateOf: () => ({}), settingsGet: () => null, cwdHint: undefined, dshHomeOverride: home,
+    })
+    const call = async (method, path, body) => {
+      let status = 0, payload = ""
+      const res = { writeHead: (c) => { status = c }, end: (t) => { payload = String(t) } }
+      const text = JSON.stringify(body)
+      const req = { url: "http://localhost" + path, method, [Symbol.asyncIterator]: async function* () { yield text } }
+      await handler(req, res)
+      return { status, payload: payload ? JSON.parse(payload) : null }
+    }
+    const PUT = (body) => call("PUT", CONFIG_API_PREFIX + "/config", body)
+
+    // ① 全未知键 ⇒ 400 + **每个**未知键都被点名 + 白名单提示 + 盘字节**一字不变**
+    const r1 = await PUT({ config: { bogusField: 123, anotherBogus: "x" } })
+    assert.equal(r1.status, 400, "全未知键 ⇒ 400（不是 200「已保存」）：" + JSON.stringify(r1.payload))
+    for (const k of ["bogusField", "anotherBogus"]) {
+      assert.ok((r1.payload.errors ?? []).some((e) => e.includes(k)),
+        "errors 必须点名未知键 " + k + "：" + JSON.stringify(r1.payload.errors))
+    }
+    assert.ok((r1.payload.errors ?? []).some((e) => e.includes("user-layer whitelist")),
+      "errors 必须带白名单提示（可行动）：" + JSON.stringify(r1.payload.errors))
+    assert.equal(readFileSync(storePath, "utf8"), before, "**盘字节必须不变**（静默清盘路径灭绝）")
+    assert.deepEqual(loadUserConfig(home), seeded, "既有配置原样保留")
+
+    // ② 混合（合法 + 未知）⇒ 仍 400 且盘不变（报错面优先于部分成功）
+    const r2 = await PUT({ config: { engCoderMaxTokens: 65536, nope: 1 } })
+    assert.equal(r2.status, 400, "混合请求同样 400")
+    assert.equal(readFileSync(storePath, "utf8"), before, "混合请求同样不动盘")
+
+    // ③ 全已知键 ⇒ 200 且真的落盘（零回归）
+    const r3 = await PUT({ config: { engCoderMaxTokens: 32768 } })
+    assert.equal(r3.status, 200, "全已知键照旧 200：" + JSON.stringify(r3.payload))
+    assert.deepEqual(loadUserConfig(home), { engCoderMaxTokens: 32768 }, "整体替换语义不变（D10-12）")
+
+    // ④ `{config:{}}` = 有意清空 ⇒ 仍 200 且盘为空配置（边界 6：删除键靠「缺席」表达）
+    const r4 = await PUT({ config: {} })
+    assert.equal(r4.status, 200, "空配置是有意清空，不是错误：" + JSON.stringify(r4.payload))
+    assert.deepEqual(loadUserConfig(home), {}, "盘上留下空配置（语义不受损）")
+  } finally { rmHome(home) }
 })
 
 // ————————————— 评审 #1 回归：handler 级集成（生产形状 opts，防「stateOf 未接线被 stub 掩盖」） —————————————
