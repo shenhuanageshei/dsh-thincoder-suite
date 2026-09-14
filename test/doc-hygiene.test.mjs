@@ -1,6 +1,6 @@
 // doc-hygiene.test.mjs — 批 11：DOC-HYGIENE 的机械层（D6「回读核对」的一般规则 → 机械网）。
 // 设计档：docs/2026-09-13-doc-discipline-design.md
-//   §6.4 两项机械检查（U+FFFD 全仓 + 常设档 canary）· §8.2 机验锚 V1…V14 · §11 不可信真机清单
+//   §6.4 两项机械检查（U+FFFD 全仓 + 常设档 canary）· §8.2 机验锚 V1…V14 · §11 本批**不可真机验证**清单（未重启 DSH）
 //   §8.1-8 六串锁的权威作用域（`lib/**` 内命中 = 0）· §6.1 冻结交付文本 · §6.2 失败后缀块
 //
 // 本档四项用例（顶层 `test(` 数 = 4，台账 docs/test-lifecycle.md §三 同数）：
@@ -308,8 +308,11 @@ test("DOC-HYGIENE T4（锚 V6 / V7 / V8）: 失败后缀块挂在每个终态失
     assert.ok(!BLOCK_SRC.includes(banned), "V8：后缀块不得含字面 " + JSON.stringify(banned))
   }
   assert.ok(!BLOCK_SRC.includes("stageGateNote"), "V8：后缀块不得引入阶段门字样")
-  for (const m of MENU.slice(0, 2).concat(MENU.slice(2))) {
-    assert.ok(BLOCK_SRC.includes(m.replace("\n", "\\n")), "V6：后缀块必须含逐字菜单/声明项：" + JSON.stringify(m.slice(0, 40)))
+  // ★ 交付代码评审 🔵3 订正：初写 `MENU.slice(0, 2).concat(MENU.slice(2))` 是**恒等表达式**
+  //   （重构残留，读起来像做了特殊切片），且 `m.replace("\n", "\\n")` 永不触发（MENU 项无换行）
+  //   ⇒ 直接遍历 MENU，语义不变（七项逐字全查）。
+  for (const m of MENU) {
+    assert.ok(BLOCK_SRC.includes(m), "V6：后缀块必须含逐字菜单/声明项：" + JSON.stringify(m.slice(0, 40)))
   }
 
   // —— V6：映射表逐点接线（每个终态失败返回点在源码内确实调用 wrapper） ——
