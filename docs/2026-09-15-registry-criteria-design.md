@@ -379,7 +379,7 @@ const unregisteredDocs = (readme, onDisk) =>
 | 1 | **R-5**：追加第 7 维 + 两条回归锚（正向 + **负向**）+ `portability-design.md:292` 的 as-of 括注 | `node --test`（design/code 两向锚绿） |
 | 2 | **R-4a**：三处容忍形态 | `node --test test/death-provenance.test.mjs test/design-review-guard.test.mjs` |
 | 3 | **R-4b**：删死码 | `node --test test/abort-provenance*.test.mjs` 或全量 |
-| 4 | **R-6 服务端**：`index.mjs` 白名单/校验 + `config-store.mjs` merge + `advisor.mjs` 下探 + `advisor-msgs.mjs` 三态 | `node --test test/config-api.test.mjs test/path-kind.test.mjs` |
+| 4 | **R-6 服务端**：`index.mjs` 白名单/校验 + `config-store.mjs` merge + `advisor.mjs` 下探 + `advisor-msgs.mjs` 三态；**★ 同批必改 D13-17/D13-18 的三处散文**（PUT 循环上方注释「项目标准文档/文档地图」→ 涵盖三类 · 错误前缀 `"path to the " + label` → 逐键 label · `config-store` merge 注释「两个」→「三个」） | `node --test test/config-api.test.mjs test/path-kind.test.mjs` |
 | 5 | **R-6 客户端**：`PROJECT_DOC_KEYS` + **`projectdocs` 卡片内第三个文本框**（`consultPoolCard()` 之前）+ 种子 + eff；**同步五处同批必改点**（见 §9 边界 10）+ `:450` 的 `PK_KEYS` | `node --test test/path-kind.test.mjs` |
 | 6 | **R-9 + R-6 注释**（**同一次编辑**，两文件）+ **R-8** + **D-38** | 全量 + V1/V9/V10 |
 | 7 | **R-25**：谓词并入既有块 + 自证 | `node --test test/doc-hygiene.test.mjs` |
