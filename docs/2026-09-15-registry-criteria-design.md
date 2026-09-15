@@ -5,7 +5,7 @@
 - 会诊纪要：[`2026-09-15-registry-criteria-consult-minutes.md`](./2026-09-15-registry-criteria-consult-minutes.md)（会诊 id 2，**4/4 交付**；§1 实测 13 条 · §2 四问裁定 · §3 D12-13…D12-16）
 - 章节：九节（§1 背景 · §2 问题 · §3 目标 · §4 决策与理由 · §5 方案 · §6 机制伪代码 · §7 状态与 schema · §8 防偏离 · §9 边界）+ §10 前置订正 · §11 受影响文件与验收 · §12 变更记录 · §13 评审落档
 - 图示：**图 1（七项的落点与锁关系）** / **图 2（`criteriaDoc` 的三态与遗留链）**
-- 状态：**设计待评审**
+- 状态：**设计评审轮次 1 = PASS（十条已全部折入 §12）· 本批实现已交付、待父侧交付代码评审**
 
 > ## ⚠️ 读前必读
 >
@@ -101,6 +101,8 @@
 | **D13-16** | **R-8 泛化示例** | 去掉本仓形状，与「提示词不得指涉本仓」同族 |
 | **D13-17** | **PUT/merge 的「散文连带面」必须同批改**（父侧呈递前自查发现） | `lib/index.mjs` 的 PUT 循环有**两处描述面**会因加第三键而**语义错**：① 循环上方的注释逐字写「语义 = 「**项目标准文档 / 文档地图**在哪」（**项目属性**，global-only）」——第三键**不是**标准文档；② 错误前缀逐字写 `"path to the " + label`，而 `label` 恒为 `"project standards document"`/`"document map"` ⇒ 新键的**类型错误消息会把它叫成「标准文档」**。⇒ 两处**必须与数组同一次编辑改**（注释改为「三类项目文档声明键」，错误前缀改为**逐键 label**）。**只加数组不改这两处 = 新的语义漂移**，正是本批要治的物种 |
 | **D13-18** | **`config-store` 的注释面同理** | `lib/config-store.mjs` 的 merge 段注释写「（两个「**项目属性**」声明键，global-only；照抄 `contextTokens` 的 loose-scalar 先例）」⇒ 「两个」须改「三个」、且「项目属性」的口径要涵盖 code 判据档 |
+| **D13-19** | **★ 🔴 `status === 128` 必须同时匹配 stderr**（**交付期发现，父侧实测**） | **实施者自报 E + 父侧实测证实**：`git show HEAD:<path>` 在**两种**情形下都退 **128** —— ① **不在仓库内**（stderr = `fatal: not a git repository …`）· ② **在仓库内但该 path 在该 revision 不存在**（stderr = `fatal: path '…' does not exist in 'HEAD'`）。⇒ **只看 `status` 会把「① 环境问题」与「② 真回归」一起静默跳过**——**② 原本是红的**（真实仓库问题），收窄后变成只 warn ⇒ **这正是 G9 要防的「引入新漂移」，而且比本条原问题更糟**。**修法**：容忍条件改为 **`e?.status === 128 && /not a git repository/.test(String(e?.stderr ?? ""))`**；**其余 128 仍 `throw`**。⇒ 三处同改 |
+| **D13-20** | **`test/path-kind.test.mjs` 的 T-PK13b 真调用覆盖**（**交付期发现，实施者上报 H**） | T-PK13b 用**硬编码两键数组**跑 `validateDraft` / `effectiveToDraft` / `mergeDraftPreservingTouched` **真调用**；⇒ **`criteriaDoc` 不过那条真调用路径**（它的客户端行为仅由 `PK_KEYS` 驱动的家族 + 卡片绑定断言覆盖）。**一行改动即可补齐**：把该硬编码数组换成 `PK_KEYS`。⇒ **本批做**（属 R-6 客户端面，且末句「不引入漂移」要求三键一致） |
 
 ---
 
@@ -254,10 +256,10 @@ const unregisteredDocs = (readme, onDisk) =>
 | `lib/abort-provenance.mjs` | 修改 | 删 `:293` 死码 |
 | `lib/eng.mjs` | 修改（**注释 only**） | D-38 两处订正 |
 | `cordis.patch.yml` + `README.md` | 修改 | 白名单注释补 **4 + 1** 项（R-9 与 R-6 **同一次编辑**） |
-| `test/death-provenance.test.mjs` | 修改 | R-4a 两处容忍 + 既有块内加 R-5 的两条回归锚 |
+| `test/death-provenance.test.mjs` | 修改 | R-4a 两处容忍。**★ 交付期订正（实施者上报 A）**：R-5 的两条回归锚**不在此档**——见下行 |
 | `test/design-review-guard.test.mjs` | 修改 | R-4a 第三处容忍（**该档已在 `AP_TEST_AUTHORIZED`**） |
 | `test/doc-hygiene.test.mjs` | 修改 | R-25 谓词并入既有块 |
-| `test/path-kind.test.mjs` | 修改 | **`PK_KEYS` 加一键** ⇒ T-PK14 家族四面自动扩；**`:321` 卡片文本框数 2→3 必须同改**；`:475` 散文串同改 |
+| `test/path-kind.test.mjs` | 修改 | **`PK_KEYS` 加一键** ⇒ T-PK14 家族四面自动扩；**`:321` 卡片文本框数 2→3 必须同改**；`:475` 散文串同改；**★ R-5 的两条回归锚落在此档**（**交付期订正，实施者上报 A/B**：本档已有 `advisorMsg` 助手与 design/code 边界断言 ⇒ **语义最贴**，且本档已在授权面内。**原 §7 写 `death-provenance`、而任务书 stage 1 写本档——不一致源自父侧，实施者按任务书并在语义上更合理**）；**★ `criteriaDoc` 三态锚（AC-9/AC-10/AC-11 的覆盖点）也在此** |
 | `docs/2026-09-13-portability-design.md` | 修改 | `:292` 逐字引用的 6 维文加 as-of 括注 |
 | `docs/2026-09-13-guard-e-consult-minutes.md` | 修改 | O-E5 行订正 + §6 历史行 |
 | 本批三档 + `docs/README.md` + `docs/test-lifecycle.md` + `docs/2026-09-05-defect-registry.md` + 交接页 + `CHANGELOG.md` + `package.json` | 收口面 | R-33…R-36 登记；D-38 状态改「已修」 |
@@ -405,6 +407,7 @@ const unregisteredDocs = (readme, onDisk) =>
 |---|---|
 | 2026-09-15 | 首版（设计待评审）：会诊 id 2 **4/4 交付** → 九节 + §10 前置订正 + 图 1/图 2；**J13-1…J13-10**；**D13-1…D13-16**；US-1…US-12；N-1…N-8；**AC-1…AC-22**；锚 V1–V10；§11.3 **九 stage（含 stage 0 只读勘察）**。用户对 R-6 遗留链的裁定已落（**保留 + 标 legacy**）。 |
 | 2026-09-15 | **呈递前补明确（父侧自查）**：§9 新增**边界 9**（第三个文本框**必须**落在 `projectdocs` 卡片内、`consultPoolCard()` 之前 ⇒ **不得另开卡片**——那张卡片的测试切片以 `consultPoolCard(),` 为终界，同卡片内加框让改动局限在一个切片；另开卡片反而要**新增切片与断言**，成本更高且易与既有锁错位）与**边界 10**（**五处同批必改点**逐一点名：`:313` 注释 · `:317` 行注释 · `:321` 数字 2→3 · `:324-326` 旁加第三键绑定断言 · `:475` 散文串）。§11.1 与 stage 5 同步。**动机**：初稿的「卡片第三个输入框」没错但**留了岔路口**——实现者若另开卡片就会在锁面上走更贵且更易错的路。 |
+| 2026-09-15 | **交付落档（eng_coder，九 stage 全 passed）**：§13.2 写入交付事实（16 档）· **锚 V1–V10 逐条 PASS** · **零改面七项逐条保持** · **登记文本订正四顶逐项落点**（O-E5 落 `guard-e-consult-minutes.md` §3/§3.1/§6；R-5/R-9/R-4a 三顶设计阶段已落、本批以源码与落地件收口）· **变异自证九条**（含三处 git 容忍的 `status = 128` 路径、第三态三态、谓词自证、第 7 维正负两向、`:321` 的 2→3）；状态行由「设计待评审」改为「**设计评审轮次 1 = PASS · 实现已交付待代码评审**」。全量 `node --test` = **453/453**。**★ 一项未落档、上报父侧裁决**：`handoff.md` §4 的登记行与批 13 状态行仍为旧文本（任务书「不得触碰」第 7 条把一切历史记录划为禁改、点名例外恰两处，与本档 §7 收口面列出「交接页」冲突 ⇒ 取严者不写、如实上报）。 |
 | 2026-09-15 | **设计评审轮次 1 落档（`VERDICT: PASS`，🔴0 · 🟡5 · 🔵5，job `advisor-dsh-9`）——十条全部采纳**：① G9 的验收面补 AC-22 · ② 「读前必读」注 2 改为**三类交付物**并补全枚举（原漏 R-4a 与 R-25）· ③ §10 标题「已完成并推送」→「**回盘结果，随本批一次交付**」（原与同节末行自相矛盾）· ④ stage 0 补「`criteriaDoc` 传参链确认」· ⑤ V1 补**解析规则**且 V10 标注为**一次性 diff 核对** · ⑥ §12 补 D13-17/18 行 · ⑦ stage 3 的测试档名订正（**实测无 `abort-provenance*.test.mjs`**，覆盖在 `death-provenance.test.mjs`）· ⑧ AC-16 与 V9 对齐为**两处短语** · ⑨ R-25 谓词补「**只认纯文件名链接形态**」口径 · ⑩ D13-17 的锁面影响**父侧预先实测**（`path-kind:459-460` 锁前缀 `"advisor." + k + " must be a string"`，而 D13-17 改的是后缀 ⇒ `includes` 形态保持绿）。**评审员总评**：「本会话里 grounding 最扎实的一批设计」。**★ 其中 #1 是同物种自证**：我漏了 AC-22 回填 —— **「枚举与列表不同步」，正是本批立项要治的病**。 |
 
 ---
@@ -413,4 +416,74 @@ const unregisteredDocs = (readme, onDisk) =>
 
 ### §13.1 设计评审轮次 1 落点（预留）
 
-### §13.2 交付核验与两款评审落档（预留）
+### §13.2 交付核验与两款评审落档
+
+> **分工**：**a–e 五项由本批实现的 eng_coder 落档**（交付事实，可复核）；**「代码评审」行仍归父侧**（交付代码评审是本流程的自动节点，由父侧运行 `advisor`）。
+
+**a. 交付事实**
+
+- §11.3 的**九 stage 全部 passed**；每 stage 的自检命令与实测输出见 eng_coder 交付报告（报告以 stage 状态表开头）。
+- 全量 `node --test` = **453 / pass 453 / fail 0**（AC-21），**零新增用例数**、**零新增测试档**（§8.1-4 保持）。
+- **改动 16 档**（15 修改 + 本档 §13 落档；**零新增 / 零删除**）：
+  `lib/advisor-msgs.mjs` · `lib/index.mjs` · `lib/config-store.mjs` · `lib/advisor.mjs` · `lib/client.js` · `lib/abort-provenance.mjs` · `lib/eng.mjs` · `cordis.patch.yml` · `README.md` · `test/death-provenance.test.mjs` · `test/design-review-guard.test.mjs` · `test/doc-hygiene.test.mjs` · `test/path-kind.test.mjs` · `docs/2026-09-13-portability-design.md` · `docs/2026-09-13-guard-e-consult-minutes.md` · 本档。
+  ⇒ 与 §11.1 实施域**逐档相符**（含两处**订正**），**排除表零触碰**。
+
+**b. 锚 V1–V10 逐条实测**
+
+| 锚 | 结果 | 实测 |
+|---|---|---|
+| **V1** | **PASS** | 判据集（= `topAllowed` \ {advisor} ∪ advisor 子键 ∪ 组字段，**20 名**，批 13 后含 `criteriaDoc`）在两文件注释里**零缺项**：`cordis.patch.yml:10-14` = ∅、`README.md:169-172` = ∅（stage 0 只读态为**两文件各缺 4 项**：`contextTokens` · `standardsDoc` · `documentMapDoc` · `runner`） |
+| **V2** | **PASS** | design round-1 用户消息含 `document ownership`（并入 `path-kind` T-PK11 既有块的正向锚） |
+| **V3** | **PASS** | code round-1 用户消息**不含**该子句（负向锚，同块） |
+| **V4** | **PASS** | 三处 catch（`death-provenance` 的 T-AP7 与 T-AP9 锚 A · `design-review-guard` 的 T-G9）在 `status === 128` 下 warn + skip；ENOENT 仍 skip；其余错误仍 throw |
+| **V5** | **PASS** | `abort-provenance.mjs` 循环后不可达 `return` 已删；既有断言全绿 |
+| **V6** | **PASS** | `loadAdvisorMd` 四条出口齐（声明可读 / 声明不可读响亮句 / legacy 可读 / legacy 回落），三条锚在 `path-kind` T-PK11 既有块 |
+| **V7** | **PASS** | 五面均含 `criteriaDoc`：`topAllowed` 子键集 · PUT 校验循环 · merge 白名单 · `advisor.mjs` 下探 · `PROJECT_DOC_KEYS` |
+| **V8** | **PASS** | `unregisteredDocs(docs/README.md, docs/*.md) === []`（域 46 档、例外恰一条 = `README.md`），且**谓词自证会失败**（合成未登记名 ⇒ 红；恒真谓词 ⇒ 红） |
+| **V9** | **PASS** | `lib/eng.mjs` 已无「逐字节锁该切片」与「`WRITE_GATE_FIXTURE` 逐字节锁着」两串（AC-16） |
+| **V10** | **PASS** | `git diff --name-only -- docs/test-lifecycle.md` 为空（**一次性 diff 核对**，§8.2 的评审 #5 补注）；常设断言 = 既有 T-LC2 |
+
+**c. 零改面七项（§8.1）逐条保持**
+
+| # | 面 | 实测 |
+|---|---|---|
+| 1 | `test/fixtures/**` | `git status --porcelain -- test/fixtures` = **空** |
+| 2 | 基线 10 档 | `git ls-tree 2e6ca8b -- test` 的 10 个 `.test.mjs` 中，工作树只改 `design-review-guard.test.mjs`（**已在 `AP_TEST_AUTHORIZED`**） |
+| 3 | `stripComments` 两条正则 | `lib/eng.mjs` 本批**只改注释**（T-AP9 / guard-e 全绿） |
+| 4 | 不新增测试档 | `readdirSync(test).filter(.test.mjs)` = **20**（批前后同值） |
+| 5 | 不新增顶层 `test(` | 全部新断言**并入既有块**（`doc-hygiene` 顶层 `test(` 仍为 **4**）⇒ 台账 §三零改 |
+| 6 | `lib/**` 六串零命中 | T-PK15 + doc-hygiene T3 全绿 |
+| 7 | `failStop(` 计数恒 18 | 实测 **18** |
+
+**d. 登记文本订正四顶 —— 逐项落点**
+
+| # | 订正 | 落点 |
+|---|---|---|
+| 1 | **O-E5 三要素**（已证事实 / 残余风险 / **修法方向预授权 + 前置条件**） | `docs/2026-09-13-guard-e-consult-minutes.md`：**§3 的 O-E5 行**（「归属」列改写，点名机制描述错与 fail-open）+ **新增 §3.1 订正块**（三要素逐条）+ **§6 历史行**新增 2026-09-15 一行 |
+| 2 | **R-5 父侧简报**（「6 维句 design 与 code 都发」⇒ **只在 design**） | 设计阶段已落：需求档 §2 表 P2 · 需求档 §0.2 第 3 条 · 会诊纪要 §1 第 5 条与 §4 第 3 行 · 本档 §10 第 4 行。本批以**源码证伪**收口（`advisor-msgs.mjs` 的句在 `reviewType === "design"` 块内），并由 V2/V3 两向锚锁死 |
+| 3 | **R-9 范围**（登记的「1 键 1 文件」⇒ **4 项 + 2 文件**，含组字段 `runner`） | 设计阶段已落：需求档 §0.2 第 1 条 · 会诊纪要 §1 第 1 条 · 本档 §10 第 1 行；本批**落地**于 `cordis.patch.yml:10-14` + `README.md:169-172` 两处注释补全 4 项，并由 R-6 同一次编辑补第 5 项（V1 复核 = 零缺项） |
+| 4 | **R-4a 处数**（登记的「1 处」⇒ **3 处同类**） | 设计阶段已落：需求档 §0.2 第 2 条 · 会诊纪要 §1 第 6 条 · 本档 §10 第 2 行；本批**落地**于三处 catch（V4 复核） |
+
+> **★ 未落档项（须父侧裁决）**：`docs/2026-09-13-handoff.md` §4 的登记行仍写旧描述（R-9「1 键 1 文件」· R-4a「1 处」· O-E5「miss」· R-5「待裁定」），且其批 13 行的状态仍是「设计已就绪，待发起设计评审（`273bad9`）」。**本批未触碰该档**——stage 8 的 Files 只列本档，且任务书的「不得触碰」第 7 条把**一切历史记录**划为禁改（点名例外**恰两处** = `portability-design.md` 的 as-of 括注与 `guard-e-consult-minutes.md` 的 O-E5 行），与本档 §7 收口面把「交接页」列为收口文件**存在冲突**。两者取严者（不写），如实上报父侧裁决。
+
+**e. 变异自证（律 3；每条注明「打红的是哪条断言」）**
+
+| 变异 | 打红的断言 | 真红/假红 |
+|---|---|---|
+| 从 design 分支句尾**摘掉**第 7 维 | `AC-3/V2: design round-1 用户消息必须含第 7 维 document ownership` | **真红**（阳性锚非恒真） |
+| 把该子句**注入** code 分支 | `AC-4/V3: code round-1 用户消息不得含 document ownership（负向锚）` | **真红**（负向锚非恒绿） |
+| **无 `.git` 副本**里跑三处 git 锚（改前文本） | `T-AP7` / `T-AP9` / `T-G9` **三条同时红**（均为 `status = 128` 逃出 ENOENT 判据）；改**后**同环境 40/40 绿且三条 warn 各现一次 | **真红**（容忍分支确为唯一使绿因素） |
+| 把第三个输入框的 `type: "text"` 改成 `type: "search"` | `一张卡片内恰好三个文本输入框` | **真红**（2→3 口径生效） |
+| 让 `loadAdvisorMd` **忽略**已声明键（恒走 legacy） | `AC-9 态①：声明且可读 ⇒ 注入文件内容` | **真红** |
+| 态② 摘掉响亮句（只回落内置判据） | `AC-10 态②：响亮句点名 advisor.criteriaDoc` | **真红** |
+| legacy 链改探不存在的文件名 | `AC-11 态③：未声明 ⇒ legacy 链照旧探 .thincoder/advisor.md` | **真红** |
+| `docs/` 注入一个合成的未登记档 | `AC-14：docs/ 顶层每个 basename 必须已登记在 docs/README.md 全文里` | **真红** |
+| 把 R-25 谓词改成**恒真**（`filter(() => false)`） | `谓词自证①：域内注入合成未登记名 ⇒ 必判违规` | **真红**（自证腿能抓死谓词） |
+
+> **假红（已排除）**：`failStop(` 计数在 stage 6 后仍为 **18**（注释改动不进计数）；`path-kind:459-460` 在 D13-17 改后缀后**保持绿**（父侧预实测结论复核为真，见 stage 0 第 ⑦ 项）。
+
+**f. 留待父侧**
+
+- **代码评审行**（`advisor type="code"`，`documents` = 本批 Docs involved）：未运行。
+- **未落档项**（上表 §13.2-d 的 blockquote）：`handoff.md` §4 登记行与批 13 状态行是否本批一并订正。
+- **本批不可真机验证三项**（§5.5）：进程 cwd 与会话 cwd 是否分叉 · 设置页第三个输入框的交互 · 补第 7 维后评审员的实际行为（均需重启 DSH 后另验）。
