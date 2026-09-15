@@ -238,7 +238,7 @@ const unregisteredDocs = (readme, onDisk) =>
 | `lib/index.mjs` | 修改 | `topAllowed` 子键集 + 错误散文（**追加在尾部**）；PUT 校验循环加一键；`:960` 示例泛化 |
 | `lib/config-store.mjs` | 修改 | merge 白名单加一键 |
 | `lib/advisor.mjs` | 修改 | 生效配置下探加一行 |
-| `lib/client.js` | 修改 | `PROJECT_DOC_KEYS` 加一键（三面自动跟上）+ 卡片第三输入框 + 种子 + eff 变量 |
+| `lib/client.js` | 修改 | `PROJECT_DOC_KEYS` 加一键（三面自动跟上）+ **`projectdocs` 卡片内（`consultPoolCard()` 调用之前）新增第三个文本框** + 种子 + eff 变量。**★ 必须同一张卡片**（见 §9 边界 9） |
 | `lib/abort-provenance.mjs` | 修改 | 删 `:293` 死码 |
 | `lib/eng.mjs` | 修改（**注释 only**） | D-38 两处订正 |
 | `cordis.patch.yml` + `README.md` | 修改 | 白名单注释补 **4 + 1** 项（R-9 与 R-6 **同一次编辑**） |
@@ -298,6 +298,8 @@ const unregisteredDocs = (readme, onDisk) =>
 | 6 | **卡片文本框数 2→3** | `path-kind:321` 的口径**同批订正** | 那是**锁面变更**，须在设计阶段声明显式 |
 | 7 | **不改 `cordis.patch.yml` 的 base 专属段语义** | 只订正注释文本 | 语义变更另议 |
 | 8 | **将来的 R-6 键化不再叫 `criteriaDoc` 之外的别名** | 命名随家族（短、`Doc` 后缀） | 一致 |
+| 9 | **★ 第三个文本框必须落在 `projectdocs` 卡片内**（`consultPoolCard()` 调用**之前**） | 实现者**不得另开一张卡片** | 那张卡片的测试切片以 **`consultPoolCard(),` 为终界**（`test/path-kind.test.mjs` 的 `srcSlice(src, 'h("div", …, key: "projectdocs" }', "\n\t\t\t\tconsultPoolCard(),")`）⇒ **同卡片内加框**让改动**局限在这一个切片**，只需把 `:321` 的「恰两个文本框」改成**三个**并在既有绑定断言旁**加一条**；**另开卡片**则要**新增切片与新增断言**——**成本更高且更容易与既有锁错位** |
+| 10 | **五处同批必改点**（改锁面必须显式声明） | ① `test/path-kind.test.mjs` 的**注释** `:313`（「一张卡片两个文本框」）· ② 同档 `:317` 的行注释（「**两个** text 输入框」）· ③ **`:321` 的数字 2 → 3** · ④ `:324-326` 的三条绑定断言旁**加第三键的一条** · ⑤ **`:475` 的白名单散文串**（`"standardsDoc\|documentMapDoc"` → 含第三键）。**另**：`:450` 的 `PK_KEYS` 加一键（⇒ T-PK14 家族四面自动扩） | 需求档 US-12 要求「不引入新的 doc-code 漂移」——**改数字而不改描述它的注释**正是那种漂移 |
 
 ---
 
@@ -376,7 +378,7 @@ const unregisteredDocs = (readme, onDisk) =>
 | 2 | **R-4a**：三处容忍形态 | `node --test test/death-provenance.test.mjs test/design-review-guard.test.mjs` |
 | 3 | **R-4b**：删死码 | `node --test test/abort-provenance*.test.mjs` 或全量 |
 | 4 | **R-6 服务端**：`index.mjs` 白名单/校验 + `config-store.mjs` merge + `advisor.mjs` 下探 + `advisor-msgs.mjs` 三态 | `node --test test/config-api.test.mjs test/path-kind.test.mjs` |
-| 5 | **R-6 客户端**：`PROJECT_DOC_KEYS` + 卡片第三框 + 种子 + eff；**同步 `path-kind:321` 口径与 `:475` 散文** | `node --test test/path-kind.test.mjs` |
+| 5 | **R-6 客户端**：`PROJECT_DOC_KEYS` + **`projectdocs` 卡片内第三个文本框**（`consultPoolCard()` 之前）+ 种子 + eff；**同步五处同批必改点**（见 §9 边界 10）+ `:450` 的 `PK_KEYS` | `node --test test/path-kind.test.mjs` |
 | 6 | **R-9 + R-6 注释**（**同一次编辑**，两文件）+ **R-8** + **D-38** | 全量 + V1/V9/V10 |
 | 7 | **R-25**：谓词并入既有块 + 自证 | `node --test test/doc-hygiene.test.mjs` |
 | 8 | **收口**：全量 + 锚 V1–V10 + 零改面七项 + **登记文本订正**（O-E5/R-5 父侧/R-9 范围/R-4a 处数）+ 交付报告 | `node --test` |
@@ -388,6 +390,7 @@ const unregisteredDocs = (readme, onDisk) =>
 | 日期 | 变更 |
 |---|---|
 | 2026-09-15 | 首版（设计待评审）：会诊 id 2 **4/4 交付** → 九节 + §10 前置订正 + 图 1/图 2；**J13-1…J13-10**；**D13-1…D13-16**；US-1…US-12；N-1…N-8；**AC-1…AC-22**；锚 V1–V10；§11.3 **九 stage（含 stage 0 只读勘察）**。用户对 R-6 遗留链的裁定已落（**保留 + 标 legacy**）。 |
+| 2026-09-15 | **呈递前补明确（父侧自查）**：§9 新增**边界 9**（第三个文本框**必须**落在 `projectdocs` 卡片内、`consultPoolCard()` 之前 ⇒ **不得另开卡片**——那张卡片的测试切片以 `consultPoolCard(),` 为终界，同卡片内加框让改动局限在一个切片；另开卡片反而要**新增切片与断言**，成本更高且易与既有锁错位）与**边界 10**（**五处同批必改点**逐一点名：`:313` 注释 · `:317` 行注释 · `:321` 数字 2→3 · `:324-326` 旁加第三键绑定断言 · `:475` 散文串）。§11.1 与 stage 5 同步。**动机**：初稿的「卡片第三个输入框」没错但**留了岔路口**——实现者若另开卡片就会在锁面上走更贵且更易错的路。这正是批 11/12 两次「实现者按自己的理解做出偏差」的教训。 |
 
 ---
 
