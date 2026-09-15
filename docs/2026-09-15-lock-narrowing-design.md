@@ -155,7 +155,7 @@ flowchart TD
 ```js
 /** 归一化到「可执行行」：★ 先把四个行终止符统一为 `\n`（见下，**这是本次修订的要害**）
  *  → 剥离器（实现零改）→ 逐行 rtrim → 丢空行。
- *  ★ **为什么必须先统一行终止符（设计修订 §14.1 的 🔴#1）**：`stripComments` 的行注释规则是
+ *  ★ **为什么必须先统一行终止符（设计档 §13.2.0 的 🔴#1——复评 #2 订正：初写「§14.1」，而本档止于 §13，指针悬空）**：`stripComments` 的行注释规则是
  *    `(^|[^:])\/\/[^\n]*` —— **只认 LF**；而 JS 的 **LineTerminator 是 LF | CR | U+2028 | U+2029**。
  *    于是 `//` 之后插入 **CR / U+2028 / U+2029** 时：**解析器认为注释在其处结束、后面的代码是真的**，
  *    而**剥离器把那一行整段吃掉** ⇒ **代码在锁眼里消失**。父侧实测：该形态下
@@ -234,11 +234,15 @@ assert.equal(mkCount, 1, "A2: 唯一实现点")
 ### §6.3 夹具的重推导（**机械推导，禁止手抄**）
 
 ```js
-// 交付报告须附此行输出，并以机器比对确认
+// 交付报告须附此行输出，并以机器比对确认。
+// ★ 复评 #6 订正：初版缺「统一行终止符」那一步（今天两者输出一致，因为源是 LF 且 rtrim 吞 \r；
+//   但「机械推导、禁止手抄」的权威命令必须与 normalizeExec **逐 token 同构**，否则未来源里出现
+//   U+2028/29 时重推导结果会与 normalizeExec 分歧（幂等自检会兜底转红——方向安全，但费解）。
 node -e "const{readFileSync}=require('fs');const e=readFileSync('lib/eng.mjs','utf8');\
 const sc=(s)=>s.replace(/\/\*[\s\S]*?\*\//g,'').replace(/(^|[^:])\/\/[^\n]*/g,'$1');\
+const lt=(s)=>s.replace(/\r\n?|[\u2028\u2029]/g,'\n');\
 const a=e.indexOf('export function makeWriteGate('),b=e.indexOf('\n\n/**\n * 守卫 E 预闸');\
-const n=sc(e.slice(a,b)).split('\n').map(l=>l.replace(/\s+$/,'')).filter(l=>l!=='').join('\n');\
+const n=sc(lt(e.slice(a,b))).split('\n').map(l=>l.replace(/\s+$/,'')).filter(l=>l!=='').join('\n');\
 console.log(JSON.stringify(n.split('\n').length),JSON.stringify(n.length))"
 ```
 
