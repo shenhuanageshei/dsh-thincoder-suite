@@ -292,7 +292,7 @@ const unregisteredDocs = (readme, onDisk) =>
 | **V1** | 注释与判据一致 | **评审 #5 补解析规则**：从 `cordis.patch.yml:10-14` 与 `README.md:169-172` 的**注释文本**中提取 **`advisor.<name>` 形态标识符集**与**顶层键名集**，与 `index.mjs` 的 `topAllowed` ∪ advisor 子键集 ∪ 组字段集比对 ⇒ **两文件均须无缺项**。**落点 = stage 0 只读态跑一次 + stage 6 交付态复核**（**不新增顶层 `test(`**） |
 | **V2** | design 含第 7 维 | design round-1 用户消息**含** `document ownership` |
 | **V3** | **code 不含第 7 维** | code round-1 用户消息**不含**该子句（**负向锚**） |
-| **V4** | 三处容忍 | 三处 catch 在 `code === undefined && status === 128` 时 warn+skip；ENOENT 仍 skip |
+| **V4** | 三处容忍 | **★ 复评 #1 订正（本行初写「`code === undefined && status === 128` 时 warn+skip」，已被 D13-19 取代——照本行字面实现会把真回归降级成静默 warn）**：三处 catch 的谓词 = **`ENOENT ⇒ skip` · `status === 128 && /not a git repository/.test(stderr) ⇒ warn + skip` · 其余（含 `128` 但 stderr 是 `bad revision` / `path '…' does not exist`）一律 `throw`** |
 | **V5** | 死码已删 | `abort-provenance.mjs` 无循环后的不可达 `return`；既有断言全绿 |
 | **V6** | 三态齐 | `loadAdvisorMd` 四条出口齐（声明可读 / 声明不可读响亮句 / legacy 可读 / legacy 回落） |
 | **V7** | 声明键五面 | `topAllowed` 子键集 · PUT 校验循环 · merge 白名单 · `advisor.mjs` 下探 · `PROJECT_DOC_KEYS` 五处均含 `criteriaDoc` |
@@ -368,7 +368,7 @@ const unregisteredDocs = (readme, onDisk) =>
 | **AC-2** | 缺项已补：`contextTokens` · `standardsDoc` · `documentMapDoc` · `runner` · `criteriaDoc` | 核心 |
 | **AC-3** | design round-1 用户消息**含** `document ownership` | 核心 |
 | **AC-4** | code round-1 用户消息**不含**（**负向锚**） | **核心** |
-| **AC-5** | 三处 catch 在 `status === 128` 时 **warn + skip** | 核心 |
+| **AC-5** | 三处 catch 在 **`status === 128` 且 stderr 命中 `/not a git repository/`** 时 **warn + skip**（**★ 复评 #1 订正**：本行初写「`status === 128` 时 warn + skip」，**无 stderr 条件**——照字面实现会把「path 在该 revision 不存在」与「bad object」两种 128 一并降级成静默 warn，**那正是 D13-19 判定为「比原问题更糟」的情形**） | **核心** |
 | **AC-6** | ENOENT 仍 skip；其他错误仍 throw | 核心 |
 | **AC-7** | `deathLine` 死码已删且**既有断言全绿** | 核心 |
 | **AC-8** | O-E5 登记文本三要素齐（已证事实 / 残余风险 / 修法方向 + 前置条件） | 核心 |
@@ -411,6 +411,8 @@ const unregisteredDocs = (readme, onDisk) =>
 | 2026-09-15 | **呈递前补明确（父侧自查）**：§9 新增**边界 9**（第三个文本框**必须**落在 `projectdocs` 卡片内、`consultPoolCard()` 之前 ⇒ **不得另开卡片**——那张卡片的测试切片以 `consultPoolCard(),` 为终界，同卡片内加框让改动局限在一个切片；另开卡片反而要**新增切片与断言**，成本更高且易与既有锁错位）与**边界 10**（**五处同批必改点**逐一点名：`:313` 注释 · `:317` 行注释 · `:321` 数字 2→3 · `:324-326` 旁加第三键绑定断言 · `:475` 散文串）。§11.1 与 stage 5 同步。**动机**：初稿的「卡片第三个输入框」没错但**留了岔路口**——实现者若另开卡片就会在锁面上走更贵且更易错的路。 |
 | 2026-09-15 | **交付落档（eng_coder，九 stage 全 passed）**：§13.2 写入交付事实（16 档）· **锚 V1–V10 逐条 PASS** · **零改面七项逐条保持** · **登记文本订正四顶逐项落点**（O-E5 落 `guard-e-consult-minutes.md` §3/§3.1/§6；R-5/R-9/R-4a 三顶设计阶段已落、本批以源码与落地件收口）· **变异自证九条**（含三处 git 容忍的 `status = 128` 路径、第三态三态、谓词自证、第 7 维正负两向、`:321` 的 2→3）；状态行由「设计待评审」改为「**设计评审轮次 1 = PASS · 实现已交付待代码评审**」。全量 `node --test` = **453/453**。**★ 一项未落档、上报父侧裁决**：`handoff.md` §4 的登记行与批 13 状态行仍为旧文本（任务书「不得触碰」第 7 条把一切历史记录划为禁改、点名例外恰两处，与本档 §7 收口面列出「交接页」冲突 ⇒ 取严者不写、如实上报）。 |
 | 2026-09-15 | **设计评审轮次 1 落档（`VERDICT: PASS`，🔴0 · 🟡5 · 🔵5，job `advisor-dsh-9`）——十条全部采纳**：① G9 的验收面补 AC-22 · ② 「读前必读」注 2 改为**三类交付物**并补全枚举（原漏 R-4a 与 R-25）· ③ §10 标题「已完成并推送」→「**回盘结果，随本批一次交付**」（原与同节末行自相矛盾）· ④ stage 0 补「`criteriaDoc` 传参链确认」· ⑤ V1 补**解析规则**且 V10 标注为**一次性 diff 核对** · ⑥ §12 补 D13-17/18 行 · ⑦ stage 3 的测试档名订正（**实测无 `abort-provenance*.test.mjs`**，覆盖在 `death-provenance.test.mjs`）· ⑧ AC-16 与 V9 对齐为**两处短语** · ⑨ R-25 谓词补「**只认纯文件名链接形态**」口径 · ⑩ D13-17 的锁面影响**父侧预先实测**（`path-kind:459-460` 锁前缀 `"advisor." + k + " must be a string"`，而 D13-17 改的是后缀 ⇒ `includes` 形态保持绿）。**评审员总评**：「本会话里 grounding 最扎实的一批设计」。**★ 其中 #1 是同物种自证**：我漏了 AC-22 回填 —— **「枚举与列表不同步」，正是本批立项要治的病**。 |
+| 2026-09-15 | **设计修订块（独立分歧审计 `32f433ca` 的 🔴1 🟡4 🔵5 处置，提交 `a5329d1`）**：① **🔴 D13-19**——收紧 `status === 128` 的容忍面（初版只看 status ⇒ 会把「path 在该 revision 不存在」这种**真回归**降级成静默 warn，**比原问题更糟**；改为**同时匹配 stderr `/not a git repository/`**）；② **D13-20**——两处硬编码两键换 `PK_KEYS`（T-PK13b 与 **T-PK14d**，后者是 **AC-13 的唯一覆盖点**）；③ §9 边界 10 的「家族四面自动扩」订正（**被审计 F3 证伪**）；④ §5.3 的档数 43→**46** 并标注时点；⑤ §13.2.0 落审计全表（F1–F10）+ **收口时点说明**；⑥ **F9 登记为 R-39**。 |
+| 2026-09-15 | **交付代码复评轮次 1 落档（`VERDICT: FAIL`，🔴1 · 🟡2 · 🔵2，job `advisor-dsh-11`）——🔴 已当场同步四处副本**：评审指出**同一机制在本批两份文档里有两套互斥规格**——收紧后的谓词已写进 **§4 D13-19** 与 **§11.3 stage 2**，但下游四处**副本未同步**：**§8.2 V4**（「`code === undefined && status === 128` 时 warn+skip」）· **§11.2 AC-5**（「`status === 128` 时 warn + skip」，**无 stderr 条件**）· **§13.2-b 的 V4 PASS 行**（按**修订前**谓词记录验收）· **需求档 US-3**（同）。⇒ **照那四处字面实现，会把 D13-19 判定为「比原问题更糟」的真回归降级成静默 warn**。**父侧四处齐改 + 在每处留痕「本行初写…已被 D13-19 取代」**。**★ 这是本批「规格不追列表」第三次打中本批自己**（前两次：AC-22 未回填 G 行被设计评审 #1 抓出 · 边界 10 的「家族四面自动扩」被审计 F3 证伪）。**🟡2 状态行滞后已修**（需求档状态行 + §6 历史行三行）；**🟡3 收口面**按既定流程留父侧收口；**🔵4 锚 A 第二句假 warn** 与 **🔵5 D-38 点名补行号** 见 §13.2.0 的待办。 |
 
 ---
 
@@ -460,7 +462,7 @@ const unregisteredDocs = (readme, onDisk) =>
 | **V1** | **PASS** | 判据集（= `topAllowed` \ {advisor} ∪ advisor 子键 ∪ 组字段，**20 名**，批 13 后含 `criteriaDoc`）在两文件注释里**零缺项**：`cordis.patch.yml:10-14` = ∅、`README.md:169-172` = ∅（stage 0 只读态为**两文件各缺 4 项**：`contextTokens` · `standardsDoc` · `documentMapDoc` · `runner`） |
 | **V2** | **PASS** | design round-1 用户消息含 `document ownership`（并入 `path-kind` T-PK11 既有块的正向锚） |
 | **V3** | **PASS** | code round-1 用户消息**不含**该子句（负向锚，同块） |
-| **V4** | **PASS** | 三处 catch（`death-provenance` 的 T-AP7 与 T-AP9 锚 A · `design-review-guard` 的 T-G9）在 `status === 128` 下 warn + skip；ENOENT 仍 skip；其余错误仍 throw |
+| **V4** | **PASS**（**修复轮后按 D13-19 收紧口径复核**） | 三处 catch（`death-provenance` 的 T-AP7 与 T-AP9 锚 A · `design-review-guard` 的 T-G9）**谓词逐字同款**（父侧正则取出 ⇒ `distinct = 1`）；`ENOENT` ⇒ skip · **`status === 128` 且 stderr 命中 `/not a git repository/` ⇒ warn + skip** · **其余一律 `throw`**。**★ 复评 #1 订正**：本行初写「在 `status === 128` 下 warn + skip；其余错误仍 throw」——那是**修订前**的谓词，对「path 不存在」与「bad object」两种 128 **为假**。**父侧独立实测三形态**：不在仓库内 ⇒ **skip** · path 在该 revision 不存在 ⇒ **throw** · bad object ⇒ **throw**（3/3 相符） |
 | **V5** | **PASS** | `abort-provenance.mjs` 循环后不可达 `return` 已删；既有断言全绿 |
 | **V6** | **PASS** | `loadAdvisorMd` 四条出口齐（声明可读 / 声明不可读响亮句 / legacy 可读 / legacy 回落），三条锚在 `path-kind` T-PK11 既有块 |
 | **V7** | **PASS** | 五面均含 `criteriaDoc`：`topAllowed` 子键集 · PUT 校验循环 · merge 白名单 · `advisor.mjs` 下探 · `PROJECT_DOC_KEYS` |
