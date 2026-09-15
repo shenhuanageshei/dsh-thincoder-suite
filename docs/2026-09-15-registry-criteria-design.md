@@ -5,7 +5,7 @@
 - 会诊纪要：[`2026-09-15-registry-criteria-consult-minutes.md`](./2026-09-15-registry-criteria-consult-minutes.md)（会诊 id 2，**4/4 交付**；§1 实测 13 条 · §2 四问裁定 · §3 D12-13…D12-16）
 - 章节：九节（§1 背景 · §2 问题 · §3 目标 · §4 决策与理由 · §5 方案 · §6 机制伪代码 · §7 状态与 schema · §8 防偏离 · §9 边界）+ §10 前置订正 · §11 受影响文件与验收 · §12 变更记录 · §13 评审落档
 - 图示：**图 1（七项的落点与锁关系）** / **图 2（`criteriaDoc` 的三态与遗留链）**
-- 状态：**设计评审轮次 1 = PASS（十条已全部折入 §12）· 本批实现已交付、待父侧交付代码评审**
+- 状态：**已实施（批 13）** —— 设计评审轮次 1 `VERDICT: PASS`（🔴0 🟡5 🔵5，十条全采纳）→ 实施（九 stage）→ **独立分歧审计 🔴1 🟡4 🔵5**（含一处**修完比原来更糟**的 128 容忍面）→ **设计修订 D13-19/D13-20** → 修复轮 → **交付代码复评轮次 1 = `VERDICT: FAIL`（🔴1：同一机制在本批两份文档里有两套互斥规格）** → **父侧同步四处（+ 复评 #6 的第五处）副本** → **复评轮次 2 = `VERDICT: PASS`（🔴 已消）**。落档见 **§13**
 
 > ## ⚠️ 读前必读
 >
@@ -221,16 +221,20 @@ function loadAdvisorMd(cwd, criteriaDoc) { … }
 
 ```js
 } catch (e) {
-  if (e?.code === "ENOENT") break                   // 无 git 的机器：跳过交叉核验
-  if (e?.status === 128) {                          // ★ 有 git 但不在仓库内（实测 code=undefined）
+  if (e?.code === "ENOENT") break                        // 无 git 的机器：跳过交叉核验
+  if (e?.status === 128 && /not a git repository/.test(String(e?.stderr ?? ""))) {
     console.warn("[thincoder-suite] T-AP7 交叉核验跳过：不在 git 仓库内（" + … + "）")
     break
   }
-  throw e
+  throw e                                                // ★ 含 status 128 但 stderr 是
+                                                         //   `bad revision` / `path '…' does not exist in 'HEAD'`
+                                                         //   ⇒ 那是真回归，必须红（D13-19）
 }
 ```
 
 **三处同改**；**保住 `:888` 的「全跑或全跳」不变式**（`headChecked` 归零）。
+
+> **★ 复评 #6 订正**：本代码块初写 `if (e?.status === 128) {`（**无 stderr 条件**）——那是 **D13-19 之前的**谓词，与同档 §4 D13-19 及**已交付代码**（`death-provenance:894`/`:979` · `design-review-guard:779` 三处逐字同款）**互斥**。**这是同一机制在本档内的第五份副本，前四份已在复评轮次 1 同步、唯独漏了本块。** ⇒ 已按 D13-19 改写。
 
 ### §6.4 R-25 的谓词（`test/doc-hygiene.test.mjs`，并入既有块）
 
