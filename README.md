@@ -103,6 +103,28 @@ design-before-code 的运行时门禁：
 
 详细设计见 `docs/2026-09-02-session-state-stages-design.md` §3。
 
+### ★ 同步 vs 后台：长任务必须显式传 `background: true`
+
+**这是调用方唯一需要做的决定，而它的代价是「任务能不能活过 10 分钟」。**
+
+`eng_coder`（以及 `escalate`）的 dsh 路径**默认同步**：父代理**阻塞等待**子代理结束。平台的 **`run_code` 有 600s 硬墙钟**——子代理跑过 10 分钟，**父代理的这次工具调用先死，子代理被连带杀死**，而且**交付报告拿不到**。
+
+| 调用方式 | 谁在等 | 生效的截止 | 结果 |
+|---|---|---|---|
+| **不传 `background`**（缺省 = 同步） | **父代理阻塞** | `codexCli.budgetCapMs`（内部截止，**缺省 540s——刻意低于平台 600s**） | 插件在平台之前**温柔超时**，你能拿到诊断；**但任务本身活不过 10 分钟** |
+| **传 `background: true`** | 父代理**立即返回 job 句柄** | **`dshBackgroundTimeoutMs`**（缺省 **30min**，区间 1–60min） | **不占父代理墙钟**，预算全额生效，完成时**通知**（通知只含一行指针，全文要 `job_output` 读） |
+
+**⚠ 前置：后台依赖 `ctx.jobs` 的运行时装配。** 需要 **`dsh-jobs-local` + `dsh-tool-jobs`** 两个插件。**未装配时 `background: true` 不会报错，而是响亮告警并回落同步执行**（那时仍会撞 600s）——所以**先确认这两个插件在，再依赖后台**。
+
+**⇒ 两个截止键的分工（别配错旋钮）**：
+
+- **`codexCli.budgetCapMs`**——**同步路径**的预算上限。它管的是「同步执行时，插件允许跑多久才自己掐掉」。缺省 540s，**须低于平台 `run_code` 的 `maxWallMs`**。
+- **`dshBackgroundTimeoutMs`**——**后台路径**的挂死兜底截止。缺省 1800s。**后台路径不读 `budgetCapMs`。**
+
+**⇒ 常见误配**：为了跑长任务去调大 `budgetCapMs`，**在后台路径上不起作用**（后台读的是 `dshBackgroundTimeoutMs`）；而**同步路径上它也不能超过平台墙钟**。**要跑过 10 分钟，正解是传 `background: true`，不是调 `budgetCapMs`。**
+
+> **登记**：`lib/eng.mjs` 里同步路径的到点文案写的「超内部截止（**budgetCapMs**=…）」把这个 codex 侧的键名用在了 dsh 子代理路径上，**会把人引向错的旋钮**——见 `docs/2026-09-05-defect-registry.md`。
+
 配套 **thincoder-eng 预设**（见下文）：新会话一键从工程模式开始。
 
 ## 飞刀 escalate
