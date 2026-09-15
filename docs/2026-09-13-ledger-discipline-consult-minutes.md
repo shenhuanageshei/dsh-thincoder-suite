@@ -31,7 +31,7 @@
 | 6 | 五个登记面**均无**指针列 / 触发字段 / 老化标记。test-lifecycle §三 **已是范本**（档名列 = 行键即指针；判据列 = 触发判据）；交接页 §4 **刻意做成人眼闸**（`release-check.mjs:445-446` G7 MANUAL，评审 #3 的正式收窄） | 摸底实测 |
 | 7 | **★ D-31 的真实严重度**（kimi 挖出、父侧逐行核实）：`index.mjs:682` 全未知键时 `v.ok === true` **不拦** → `:683` `saveUserConfig(v.sanitized)` 而 `sanitized = {}` → `config-store.mjs:204` **整体替换写盘** → `:690` 返回 **200 `{ok:true}`**。⇒ **一条全未知键的 PUT 会静默清空整个 user 层配置并报「已保存」** | `index.mjs:682-690` + `config-store.mjs:204` |
 | 8 | **★ 嵌套未知键今天就走报错**：`{advisor:{nope:1}}` → `ok:false` + `advisor.nope is not supported` | `context-budget.test.mjs:534-537` · `config-api.test.mjs:242` · `path-kind.test.mjs:466` |
-| 9 | **U3c 把旧行为逐字编码成期望值**（`engineering:true` → note、`assert v.ok===true`），而该档在基线 `2e6ca8b` 内 ⇒ **受 T-AP9 保护**，改它须走 `AP_TEST_AUTHORIZED` 授权 | `config-api.test.mjs:288-292` · `death-provenance.test.mjs:928/:960-971` |
+| 9 | **U3c 把旧行为逐字编码成期望值**（`engineering:true` → note、`assert v.ok===true`），而该档在基线 `2e6ca8b` 内 ⇒ **受 T-AP9 保护**，改它须走 `AP_TEST_AUTHORIZED` 授权 | `config-api.test.mjs:288-292` · `death-provenance.test.mjs:944`（授权数组 `AP_TEST_AUTHORIZED`）/`:973-988`（锚 B 的实现）（**批 12 摸底订正**：初稿写 `:928/:960-971`——**行号漂移**） |
 | 10 | **★ D-36 的反对意见是既有裁定而非疏忽**：`eng.mjs:518-519` 注释逐字「回填收窄为「传入 token === 盘上记录 token」（**分歧审计 D1**）：错 token 不回填——**避免有效盘 token 驻留 state 间接打开主代理写门禁**」 | `eng.mjs:518-519` |
 | 11 | **D-36 的现成落点在位**：`eng.mjs:516-521` 已有「内存态空 → 读盘 → 匹配即回填」的读法；`state.designToken` 写点穷举 = 回填 `:521` · 续期 `:610`（只能接在回填之后）· **新的设计评审签发** `advisor.mjs:2098`（唯一不经 eng_coder 的填充路径，但要付一整轮评审）· 撤销 `:2151` | 摸底 + kimi `eng.mjs:508-537` |
 | 12 | **撤销是同流程双清**：`advisor.mjs:2150-2154` 同一块内 `state.designToken = null` **且** `removeTokenRecord(...)` | 父侧逐行核实 |

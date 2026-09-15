@@ -24,7 +24,7 @@
 | 2 | **基线 10 档**（`2e6ca8b` 时已存在）= advisor-config · codex-runner · config-api · consult · context-budget · design-review-guard · preset-static · session-state · stages · truncation；**基线后 4 档** = death-provenance · guard-e · path-kind · prompt-contract | `git ls-tree -r --name-only 2e6ca8b -- test`（父侧实跑）· T-E19 清单 `guard-e.test.mjs:708-713` |
 | 3 | **T-E19 = 登记制**（非禁止变更）：增删档 = 改清单行 + 注明理由与用户裁定；**其 `readdirSync` 非递归** ⇒ `test/` **子目录对它不可见** | `guard-e.test.mjs:703` · 批 7 / 批 8 两次登记先例（CHANGELOG `:19` / `:32`） |
 | 4 | **授权通道存在**：`AP_TEST_AUTHORIZED` 数组住在 `death-provenance.test.mjs`（**基线后档 ⇒ 可改**） | `:928` |
-| 5 | **T9 fixture 双重锁定**：`test/fixtures/coder-brief-with-docs.txt` 基线前已存在 ⇒ T-AP9 锚 B **且** `guard-e.test.mjs:719`（T-E19 断言 fixture 原样在位） | 同 1 + `guard-e.test.mjs:719` |
+| 5 | **T9 fixture 双重锁定**：`test/fixtures/coder-brief-with-docs.txt` 基线前已存在 ⇒ T-AP9 锚 B **且** `guard-e.test.mjs:768`（T-E19 断言 fixture 原样在位）（**批 12 摸底订正**：初稿写 `:719`——**行号漂移**，实测存在性断言在 `:768`） | 同 1 + `guard-e.test.mjs:768` |
 | 6 | **子代理有执行面**：`toolFilter` 只 deny **7** 个管理类工具 | `lib/eng.mjs:872` |
 | 7 | **D-20 的洞（父侧逐字核实）**：`deliverBookkeeping` 只在 `stopReason === "completed"` 后调用——**「completed 但阶段表自报 failed」照样簿记**（重置评审预算 + 置 `mutatedThisRun`） | `lib/eng.mjs:910-918` |
 | 8 | **声明通道已在位且是契约**：报告**必须**以阶段状态表开头，列为 `\| Stage \| Status (passed/failed/skipped) \| check summary \|`；`Self-check:` 由渲染器写入 | `lib/eng.mjs:320`（契约）· `:330-331`（渲染） |
