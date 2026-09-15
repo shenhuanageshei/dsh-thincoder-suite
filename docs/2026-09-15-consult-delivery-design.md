@@ -65,6 +65,7 @@
 | G8 | **未消化的会诊拦得住下一次发起** | AC-19 |
 | G9 | **stop 不丢已收到的回复** | AC-20 |
 | G10 | 不引入新漂移（台账零改 · 零新增测试档 · 六串净） | AC-14 … AC-18 |
+| **★ G11** | **跨批判定与收口登记有落点**（**订正：设计评审 #1/#2 指出初版 US-8 与 N-6 无 AC 映射**） | **AC-27**（US-8：偏离表含 X-1 指针）· **AC-28**（N-6：交接页登记） |
 
 ### §3.1 非目标（**本批不做什么**）
 
@@ -208,7 +209,9 @@ sequenceDiagram
 | **字符串点**（`consult_check`） | **18** | `lib/index.mjs` 4 · `lib/consult.mjs` 3 · `lib/eng.mjs` 2 · `lib/escalate.mjs` 2 · `test/death-provenance.test.mjs` 3 · `README.md` 2 · `lib/prompts/main.md` 2 |
 | **函数面**（`checkConsultSession`） | **26** | `death-provenance.test.mjs` 11 · `codex-runner.test.mjs` 6 · `consult.test.mjs` 6 · `lib/index.mjs` 2 · `lib/consult.mjs` 1 |
 
-**★ 锁面变更（须显式声明）**：**`test/consult.test.mjs` 在基线集内（`git ls-tree -r 2e6ca8b -- test` = 12 项之一）且不在 `AP_TEST_AUTHORIZED`**（现有 3 项：`design-review-guard` / `codex-runner` / `config-api`）⇒ **改它必须走授权仪式**：`AP_TEST_AUTHORIZED` 加档名（住在 `death-provenance.test.mjs`，可改）+ 台账退役日志 + 用户裁定引用。**这与批 13 的 `advisor-config.test.mjs` 完全同形。**
+**★ 锁面变更（须显式声明）**：**`test/consult.test.mjs` 在基线集内（`git ls-tree -r 2e6ca8b -- test` = 12 项之一）且不在 `AP_TEST_AUTHORIZED`**（现有 3 项：`design-review-guard` / `codex-runner` / `config-api`）⇒ **改它必须走授权仪式**：`AP_TEST_AUTHORIZED` 加档名（住在 `death-provenance.test.mjs`，可改）+ 台账退役日志 + 用户裁定引用。
+
+> **★ 订正（设计评审 #13）**：本批**零新增测试档、零退役测试档**（19 个档进 19 个档出）⇒ **T-E19 清单无需改动**（它 deepEqual 的是 fs 测试档集）。**初版此处未写明「为何省略 T-E19」而被评审标出**——**省略也必须给理由，不能静默**。**而纪要 R-9 列了 4 项却自称「三件套」（含 T-E19），属纪要的计数笔误，已在纪要订正为 3 项。****这与批 13 的 `advisor-config.test.mjs` 完全同形。**
 
 **★ 且该档的存续理由被本批改写**：`test-lifecycle.md:90` 载其理由是「锁会诊跨回合存活」——**本批改了那个机制** ⇒ **它必须跟着改，不是可改可不改**（glm）。
 
@@ -219,6 +222,8 @@ sequenceDiagram
 **做什么**：缺省停 + 三豁免档 + 豁免留痕 + **门禁不变量** + `prompts/main.md` 重写（**含「wakeup 回合先 `job_output` 读全文」**）。
 
 **门禁不变量（US-9）**：**不存在 `settled ∧ ¬digested ∧ ¬minutesExempt` 的会话**。命中 ⇒ `consult_start` **拒发**并**内联未消化 digest** + ack 指引 ⇒ **拒发即恢复通道**（它自己就是那条"下一次发起"）。
+
+**★ 台账孤儿扫描（订正：设计评审 #12）**：初版 §9 重启行承诺「门禁报『#N 因重启丢失』」，**但门禁不变量只覆盖 `settled ∧ ¬digested`，而 `started` 无 `settled` 的孤儿行根本不触发它**——**承诺与机制不符**。⇒ 在 FR-3 增加**孤儿扫描**：`consult_start` 时扫台账，对**有 `started` 无 `settled`/`stopped`/`disposed`** 的 id，**输出建议性提示**（「#N 曾于 `<t>` 发起，未见 settle——可能因重启丢失」），**不阻断**（它可能正是一个在飞会话）。**给 AC-26**。
 
 **ack 形状**：`digested: [ids]` 且每 id 带 `minutesPath`（**fs 存在性校验**）或 `minutesExempt: {reason}`。
 
@@ -291,13 +296,23 @@ async function settleAndDeliver(session, deps) {
 
 | 面 | 形状 | **谁写** | **谁读** |
 |---|---|---|---|
-| **① 会话对象**（**原地扩展，不另起**；现形状见 `consult.mjs:289-293`） | 现有字段（`id` · `controllers` · `runs` · `replies` · `pending` · `failed` · `terminated` · `stopped` · `received` · `total` · `models`）**不动**；**增** `jobId:string\|null` · `settledAt:number\|null` · `digest:string\|null` · `digested:boolean` · `minutesPath:string\|null` · `minutesExempt:{reason:string}\|null` · `exemption:{kind:"unattended",note:string}\|null`；**FR-2 后删** `waiters`（check 专属） | `consult.mjs`（start 面 / settle 面 / ack 面） | run 体（digest→output）· FR-3 门禁 · 测试 |
+| **① 会话对象**（**原地扩展，不另起**；现形状见 `consult.mjs:289-293`） | 现有字段（`id` · `controllers` · `runs` · `replies` · `pending` · `failed` · `terminated` · `stopped` · `received` · `total` · `models`）**不动**；**增** `jobId:string\|null` · `settledAt:number\|null` · `digest:string\|null` · **`requiresReport:boolean`** · `digested:boolean` · `minutesPath:string\|null` · `minutesExempt:{reason:string}\|null` · `exemption:{kind:"unattended",note:string}\|null`；**FR-2 后删** `waiters`（check 专属） | `consult.mjs` | run 体 · 门禁 · **wakeup 回合** |
 | **② digest** | **不需要独立对象**——上游的 `{id, role:"consult", report, done:true}` 是为它**自造容器** `_pendingAsyncResults` 服务的；**本仓容器 = 平台 job，job 输出就是 digest 全文**。`session.digest` 只留**字符串副本**（审计/测试/门禁内联用），**单一写点 = `settleAndDeliver` 里的 `composeConsultDigest`** | 纯函数写一次 | run 体 · 门禁 · 纪要作者 |
 | **③ job spec** | `{ kind: "consult", label: "consult #<id> (<N> models: …)", owner: agent, outputLimitBytes: 131072, run: () => ({cancel, done}) }`——**逐字段对齐 `lib/eng.mjs` 的既有先例**（含 `{cancel, done}` 返回形） | `consult.mjs` | 平台 `dsh-tool-jobs` |
-| **④ ★ 纪要档** | `docs/YYYY-MM-DD-<topic>-consult-minutes.md`（**沿用既有 9 份的命名与结构**）：**§0 汇总 + §1 原始层**（**机制写**）· **§2 逐问裁定 + §3 分歧与父侧裁定 + §4 教训 + §5 不可验清单**（**主代理写**）· §6 历史行 | **§0/§1 机制写 · §2–§5 主代理写** | 人 · V8 谓词 · 后续批次 |
+| **④ ★ 纪要档** | **命名 `docs/<YYYY-MM-DD>-consult-<id>-minutes.md`**（**★ 订正：评审 #6 指出 `<topic>` 在 settle 时刻不可知**——机制写 §0/§1 时还没有题目 ⇒ **用 `<id>` 派生，保证机制可确定地命名**；主代理补写裁定层时可**在档内补题**，但**不改名**——AC-9/V8 的形状谓词依赖该 glob）。**结构与既有 9 份一致**（盘上真值 **9**，实测于 2026-09-15）：§0 汇总 + §1 原始层（**机制写**）· §2 逐问裁定 + §3 分歧与父侧裁定 + §4 教训 + §5 不可验清单（**主代理写**）· §6 历史行 | **§0/§1 机制写 · §2–§5 主代理写** | 人 · V8 谓词 · 后续批次 |
 | **⑤ 台账**（新增） | `$DSH_HOME/.thincoder/consult-ledger.jsonl`：`{id, sessionId, at, ev:"started"\|"settled"\|"digested"\|"exempted"\|"stopped"\|"disposed", …}`——**append-only，只增不改** | `consult.mjs`（**写失败 warn，不阻断投递**） | 门禁（重启取证 + **id 计数器续接**）· 测试 |
 
 **★ 关键分工：插件永不写纪要。** 机制只写**原始层**（digest 全文 + 元数据头）；**裁定层是判断，由主代理写**。⇒ 这个二分是「纪要默认落档」能落成机制的关键——否则要么插件替主代理做判断（越权），要么机制无从保证。
+
+> **★ `requiresReport` 的定义（订正：设计评审 #5 指出它被使用却从未被定义）**
+>
+> | 面 | 内容 |
+> |---|---|
+> | **形状** | `boolean`（**非空**，settle 时必写） |
+> | **写者** | `settleAndDeliver`（**与 digest 同一次**，单一写点） |
+> | **读者** | **wakeup 回合的主代理**——据它决定**是否停在汇报断点** |
+> | **取值规则** | ① **正常 settle** ⇒ `true` · ② **全失败** ⇒ `true`（**「什么都没问到」本身就是必须汇报的事实**，§9 空集行）· ③ **`stopped` 墓碑** ⇒ `false`（stop 是代理自己发起的，且 stop 时代理必在回合内）· ④ **豁免档生效** ⇒ **字段仍为 `true`，但主代理按豁免继续**（**字段表达「事实」，不表达「动作」**——豁免是判断，不该污染机制字段） |
+> | **锚** | **AC-20**（墓碑 ⇒ false）· **AC-22**（头部行与字段一致） |
 
 **★ `kind` 取 `"consult"` 而非 `<机制>-<路由>`**（D15-5）：consult 会话**混跑** dsh 子代理与 codex-cli 行 ⇒ 带路由后缀**必有一侧说谎**。
 
@@ -317,7 +332,22 @@ async function settleAndDeliver(session, deps) {
 | 6 | **`lib/advisor.mjs` 零改动** | 只 import 其 `getJobsService` |
 | 7 | **平台包 `dsh-tool-jobs` 零改动** | 在仓外，本批只接上去 |
 
-### §8.2 机验锚（**列在 §11.3**）
+### §8.2 机验锚（**谓词三要素写全：检索目标 / 谓词 / 期望**）
+
+> **★ 订正（设计评审 #9）**：初版只写「列在 §11.3」，而 §11.3 的锚列**只有名字** ⇒ **V4/V5/V9/V10 实为空符号**，实现者只能自造。⇒ 此处逐个写全。
+
+| 锚 | 检索目标 | 谓词 | 期望 |
+|---|---|---|---|
+| **V1** | `lib/**` · `lib/prompts/**` · **`README.md`**（**订正：评审 #8 指出初版漏了 README**——§5.6 实测它有 2 处、§11.1 也要改它） | 正则 `consult_check` | **零命中**（**负向断言**） |
+| **V2** | `lib/index.mjs` 的 consult 注册段 | 统计 `register(textTool({ name: "consult_` 出现数 | **恰 2**（`consult_start` · `consult_stop`） |
+| **V3** | `lib/consult.mjs` 的 `composeConsultDigest` | 对合成会话调用，断言输出 | 头部行匹配 `^\[consult #\d+ (finished\|stopped) — \d+ of \d+ replied \(\d+ failed(, \d+ stopped)?\)` **且**含有效数段；逐条回复在场；**墓碑含 stop 死亡行** |
+| **V4** | `lib/index.mjs` 的 `consult_start` 入口 | grep 拒发文案与门禁不变量实现 | 存在「`settled ∧ ¬digested ∧ ¬minutesExempt`」判据 + **拒发文案含「未派发任何子代理」**；`jobs` 缺失路径**同样拒发**（不回落） |
+| **V5** | `lib/index.mjs` 的豁免参数 schema | 断言 `exemption.kind` 的**取值枚举**与**缺省** | 取值**仅** `"unattended"`（start 时）；**缺省 = 无豁免 = 停**；`note` 必填；`goal`/`authorized` **不在 start 参数里**（送达时判，落纪要裁定层 + ack） |
+| **V6** | `lib/consult.mjs` 的派发点 | grep `jobs.start(` 与回落分支 | **走 `jobs.start`**；**无同步回落分支**（拒发替代） |
+| **V7** | `dsh-tool-jobs` 包路径 | `git`/`fs` 断言 | **零改动**（在仓外；本批只接上去） |
+| **V8** | `docs/*-consult-minutes.md` 的形状 + `docs/README.md` | 文件名 glob + 登记谓词 + 新描述面 grep | 纪要档命中 `docs/<date>-consult-<id>-minutes.md`；**新描述面含「自动投递 / 收到须汇报」**（**正向锁**）；`prompts/main.md` 含「先 `job_output` 读全文」 |
+| **V9** | `docs/2026-09-15-consult-delivery-design.md` §10 | 断言表结构 | **六列齐** · 方向值**限四值** · **分叉前言四要素在场**（上游 sha / 本仓复制源 / 分叉事件 / 比对日期） |
+| **V10** | 台账 + 既有锁 | 跑 `doc-hygiene` / `ledger-parity` / `test-lifecycle` / `guard-e` 的既有谓词 | 全绿；**台账 §三零改**；`failStop(` 恒 18；六串零命中 |
 
 ---
 
@@ -329,7 +359,7 @@ async function settleAndDeliver(session, deps) {
 | **畸形输入** | **单条回复软顶** `CONSULT_DIGEST_REPLY_CAP = 8000` 字符 + 截断标记 + **全文在纪要**（第二层 = `outputLimitBytes` 保尾截断）。**控制字符清洗**。**★ 不做 `escapeXml`**（D15-6）。空回复**已有兜底**（`consult.mjs:257` 的 `(empty reply)`） | fail-open（截断不阻断） |
 | **并发** | **同会话两会诊合法**——各是独立 job / 独立 digest，**不注册 single-flight 槽位**（多会话并发是产品常态，与 advisor/eng 单飞先例**有意偏离**）。**唤醒预算耗尽降级为 inject 不是缺陷**——inject 本就是主通道，wakeup 只是空闲加成；真正残余风险（空闲 owner 三次 wake 耗尽）**要求代理连续两次无视「停下汇报」才会发生** ⇒ **纪律本身是预算的保护者**（本设计显式声明这一依赖）。**stop 与 settle 竞速**：`stopped` 旗标 + 已终态控制器 no-op；**已 settle 的会话 stop 无效** ⇒ 返回 `{stopped: 0, alreadySettled: true}` | — |
 | **重启** | `consultSessions` **纯内存** ⇒ **在飞会话与 job 同死**；**不新增持久化**（对齐 `state.mjs` 契约）。**保证面 = 落盘次序**（§5.4）：**settle 即落盘 ⇒ 重启只损失「真在飞」的会话**。台账留下 `started` 无 `settled` 的**孤儿行** ⇒ 下次 start 门禁报「#N 因重启丢失」（**治 P3 的取证面**）。**★ 不写「重启后自动恢复」这类假事实** | 损失如实声明 |
-| **升级** | **无持久化 ⇒ 无迁移表**（**不要写**）。仅两条真事：① 旧版 9 份纪要**维持原形状，不回填**；② 本批**不新增配置键**（豁免走工具参数，不走配置） | 无迁移面 |
+| **升级** | **无 schema 迁移表**（**不要写**）。四条真事：① 旧版 9 份纪要**维持原形状，不回填**；② 本批**不新增配置键**（豁免走工具参数，不走配置）；③ **★ 台账行有 ev-schema 演化面**（**订正：设计评审 #14 指出初版「无迁移面」未涉此事**）——`consult-ledger.jsonl` 是 **append-only 持久工件**，故**读者必须前向兼容**：**遇到未知 `ev` 值 ⇒ 忽略该行、不报错**（新版本写的新事件老读者不应崩）；④ **`consultSessions` 仍纯内存**（无迁移面） | 无 schema 迁移；**台账读者前向兼容** |
 | **失败方向** | 见 §4 D15-4：**消费链 fail-closed，辅助面 fail-open**——① **start 面拒发**（jobs 缺失 / `jobs.start` 抛错 ⇒ 响亮拒绝，**零部分工作**）· ② **记录面 fail-open**（纪要写盘失败只 warn）· ③ **投递面损失只许是「汇报」，不许是「记录」**（由落盘次序保证）· ④ **台账写失败 ⇒ warn 后照常投递**（取证面不承重） | 逐子系统见表 |
 
 ---
@@ -361,6 +391,7 @@ async function settleAndDeliver(session, deps) {
 | **不新增 `wait_for`** | `src/tools/wait_for.md:7` 有 `consult done` | **有意不跟** | 等待由 `job_output` 承担 | — | R-42 |
 | **`kind: "consult"`（无路由后缀）** | （上游无 job kind 概念） | **本仓命名** | 会话**混跑 dsh 与 codex-cli** ⇒ 后缀必有一侧说谎 | 若会话不再混跑 | — |
 | **反转 `37d7eef` 的描述句** | （本仓自加，上游无） | **本仓自纠** | 批 15 让 consult 有通知 ⇒ 那句变假 | 已改，不再适用 | V8 |
+| **★ X-1 `DESIGN-dsh-port.md` 悬空引用** | （本仓自加：7 处注释引用一个从未进 git 的档） | **本仓自纠**（**订正：设计评审 #1/#27 指出初版把这个 US 只放进非目标、未落 AC**） | **跨批延后**：归**批 14**（同物种：描述面指向不存在的落点）⇒ 本批只保证**偏离表在此有条目与指针** | 批 14 收口时 | **AC-27** |
 
 ---
 
@@ -374,19 +405,24 @@ async function settleAndDeliver(session, deps) {
 | `lib/index.mjs` | FR-2（删注册点 + 描述面清零 + **反转描述句**）· FR-3（门禁 + ack + 豁免参数） | 修改 |
 | `lib/prompts/main.md` | FR-3（流程重写：start → 收投递 → **先 `job_output` 读全文** → 处置） | 修改 |
 | `README.md` | 三工具 → 两工具；补投递链与消化纪律 | 修改 |
-| `lib/eng.mjs` · `lib/escalate.mjs` | **仅 toolFilter deny 名单同步**（把已退役工具名移除） | **最小改动（注释级）** |
+| `lib/eng.mjs` · `lib/escalate.mjs` | **toolFilter deny 名单同步**（把已退役工具名移除） | **最小改动（★ 订正：评审 #14 指出初版标「注释级」不实——它实为代码级删名）** |
 | `test/consult.test.mjs` | 改指 digest 面；**该档存续理由随之改写** | **★ 锁面变更** |
 | `test/death-provenance.test.mjs` | T-AP1d 改指 `composeConsultDigest`；**`AP_TEST_AUTHORIZED` 加 `test/consult.test.mjs`** | **★ 锁面变更** |
 | `test/codex-runner.test.mjs` | 6 处 `checkConsultSession` 调用迁移（**该档已在授权面**） | 修改 |
-| **明确排除（禁改）** | `lib/advisor.mjs` · `test/fixtures/**` · `test/stage-gate.test.mjs` · `test/stages.test.mjs` · `test/guard-e.test.mjs` · `test/advisor-config.test.mjs` · **平台包 `dsh-tool-jobs`** · **历史记录**（`CHANGELOG.md:215` 等） | 零改动 |
+| **`CHANGELOG.md`** | **仅新增本批条目**（**订正：评审 #3 指出初版把 CHANGELOG 整个排除、与本批 R-1 要求的「CHANGELOG 留痕」冲突**）——**`:215` 的既有行不动** | 修改（新增） |
+| **`docs/2026-09-15-config-surface-recon.md`** | **批 14 范围订正**（R-1 连带：删 A 项）——**已由主代理落于 `a6ebd72`**，本行仅为指针 | **归主代理** |
+| **`docs/2026-09-13-handoff.md`** | **登记本批「`lib/**` 需重启生效」**（N-6 的落点，评审 #2） | **归主代理收口** |
+| **明确排除（禁改）** | `lib/advisor.mjs` · `test/fixtures/**` · `test/stage-gate.test.mjs` · `test/stages.test.mjs` · `test/guard-e.test.mjs` · `test/advisor-config.test.mjs` · **平台包 `dsh-tool-jobs`** · **历史记录的既有内容**（★ 订正：评审 #3 指出初版措辞可被读成「整档禁改」⇒ **今明确：禁的是 `CHANGELOG.md:215` 这类既有内容，不是新增条目**） | 零改动 |
 
 ### §11.2 可验性分层登记（**N-3 要求：AC 一律打标**）
 
 | 标 | 含义 | 本批 AC |
 |---|---|---|
-| **T1** | 进程内 `node --test` 可证 | AC-1 · AC-5 · AC-7(形状) · AC-10 · **AC-19** · **AC-20** · AC-21 |
-| **T2** | 静态谓词可证（grep / 登记表 / 文件形状） | AC-2 · AC-6 · AC-8 · AC-9 · AC-11 · AC-12 · AC-13 · AC-14 · AC-15 · AC-16 · AC-17 · AC-18 |
+| **T1** | 进程内 `node --test` 可证 | AC-1 · AC-5 · AC-7(形状) · AC-10 · **AC-19** · **AC-20** · AC-21 · **AC-22** · **AC-25** |
+| **T2** | 静态谓词可证（grep / 登记表 / 文件形状） | AC-2 · AC-6 · AC-8 · AC-9 · AC-11 · AC-12 · AC-13 · AC-14 · AC-15 · AC-16 · AC-17 · AC-18 · **AC-23** · **AC-24** · **AC-26** |
 | **T3** | **仅重启后人工核验**（owner = 用户） | **AC-3 · AC-4**（「真的停下汇报了」） |
+
+> **★ 订正（设计评审 #7）**：本表初版**漏了 AC-22/23/24**——而 §11.3 逐条表里它们**各自有层标** ⇒ **同文档两处枚举不同步**，**正是本批立项要治的漂移出现在本批自己的设计档里**。已补齐。
 
 > **★ 诚实边界**：**「会诊结束时用户被通知」是不可验收的**；**可验收的是** AC-19（门禁不变量）+ AC-20（墓碑）+ AC-21（**settle ⇒ 纪要原始层先于 job complete 存在**）。
 
@@ -417,7 +453,11 @@ async function settleAndDeliver(session, deps) {
 | **AC-21** | **纪要原始层先于 job complete 存在**（落盘次序） | **T1** | V3 | US-11 | 注入写盘失败 ⇒ digest 仍投 + warn |
 | **AC-22** | digest 头部行**分开报交付数与有效数** | T1 | V3 | US-11 | 边界：4 交付 2 有效 ⇒ 两个数都在 |
 | **AC-23** | `prompts/main.md` 含「先 `job_output` 读全文」 | T2 | V8 | US-12 | grep |
-| **AC-24** | 全量 `node --test` **453/453**（并入既有块 ⇒ 零新增用例数） | T2 | — | — | 收口 |
+| **AC-24** | 全量 `node --test` **零新增用例数且全绿**（**★ 订正：评审 #11 指出初版硬编码 `453/453`**——那是**批 11 收口数**，其后批次是否零新增未经核实 ⇒ 改写为**相对基线**表述：**基线 N ⇒ 交付 N**；**stage 0 加「当次全量计数实测」**） | T2 | — | — | 收口 |
+| **★ AC-25** | **豁免留痕落点**：`unattended` 写 `session.exemption`（含 `note`）；**`goal`/`authorized` 写纪要裁定层 + ack 回报**（**评审 #4**：三处机制留痕都在 settle 前合成，送达时判定写不进它们） | **T1** | V5 | US-3 | 正常：`unattended` ⇒ session 有值 · 边界：`goal` 送达时判 ⇒ 纪要层有行 · 错误：`note` 空 ⇒ 拒 |
+| **★ AC-26** | **台账孤儿扫描**：有 `started` 无 `settled` ⇒ **给建议性提示、不阻断**（**评审 #12**：初版 §9 承诺与门禁机制不符） | T2 | V10 | US-9 | 正常：完整会话 ⇒ 无提示 · 边界：孤儿 ⇒ 提示 · 错误：在飞会话 ⇒ 不误报 |
+| **★ AC-27** | **US-8 的跨批判定**：设计档 §10 偏离表**含 X-1 条目与「归批 14」指针**，且批 14 登记面含 X-1 | T2 | V9 | **US-8** | grep 偏离表 + 批 14 摸底档 |
+| **★ AC-28** | **N-6 的落点**：交接页登记本批「`lib/**` 需重启生效」（**归主代理收口**） | T2 | — | — | grep 交接页 |
 
 ### §11.4 建议 stages
 
@@ -440,11 +480,18 @@ async function settleAndDeliver(session, deps) {
 | 2026-09-15 | 首版（设计待评审）——**经用户质问后判定不合格**：对照 `METHODOLOGY.md:80-93` 逐条量尺，**四个 ❌**（问题缺 `file:line` · 方案无 FR-x · 伪代码无前后置 · **状态与 schema 全无** · 边界十条全是「不做什么」而六类未写） |
 | 2026-09-15 | **整档重写**：① §2 每条补 `file:line` · ② §5 分 **FR-1/FR-2/FR-3** 逐个说明（含前置依赖与「为何同批」的论证）· ③ §6 伪代码补**前置/后置条件** · ④ **§7 四套 schema + 谁写谁读**（第四套 = **纪要档模板**，父侧初版完全没想到）· ⑤ **§9 改为规范六类 + 失败方向**，「不做什么」移入 **§3.1 非目标** · ⑥ **§10 偏离表六列 + 方向四值 + 分叉前言** · ⑦ **§11.2 可验性三层登记** · ⑧ **AC-1…AC-24 带层标与用例** · ⑨ 新增**图 3 时序**（落盘次序是本批的兜底机制）· ⑩ **D15-1…D15-10** 补「被否决的备选及理由」 |
 | 2026-09-15 | **纪要与用户裁定折入**：**R-1**（批 14 A 项撤销，D15-9）· **R-3 墓碑 digest**（D15-3）· **R-4 拒发**（D15-4）· **R-5 四套 schema** · **R-6 两层判定**（D15-7）· **R-8 六列偏离表** · **R-10 可验性分层**（D15-10）· **T-3 交付数/有效数**（AC-22）· **P4 `job_output` 一跳**（AC-23）· **`kind` 无后缀**（D15-5）· **父侧实测 26 调用点 / `consult.test.mjs` 在基线内** |
+| 2026-09-15 | **设计评审轮次 1 落档（`advisor-dsh-1`，`VERDICT: PASS`，🔴0 · 🟡11 · 🔵4）——15 条处置：14 Fixed + 1 Not an issue**（**用户裁定「折入」**）：**#1** US-8 补 AC-27（跨批延后 + 指针）· **#2** N-6 补交接页落点 + AC-28 · **#3** `CHANGELOG.md` 列入实施域（**仅新增条目**）+ **修正排除行措辞**（禁的是**既有内容**，不是新增）· **#4** 送达时判定的两档豁免补留痕落点（**纪要裁定层 + ack**）+ AC-25 · **#5** **定义 `requiresReport`**（形状/写者/读者/取值规则，见 §7 表后） · **#6** 纪要命名改 `<date>-consult-<id>-minutes.md`（**`<topic>` 在 settle 时刻不可知**） · **#7** §11.2 补 AC-22/23/24（**同文档两处枚举不同步 = 本批的病出现在本档里**） · **#8** AC-11/V1 范围**加 `README.md`** · **#9** V1–V10 **逐个写全谓词三要素** · **#10** 纪要份数**统一为 9**（盘上实测；纪要原写 8 是落盘前值，已加 as-of 订正） · **#11** AC-24 改**相对基线**表述 + stage 0 加计数实测 · **#12** **台账孤儿扫描**（初版 §9 承诺与门禁机制不符）+ AC-26 · **#13** 补「**T-E19 零改的理由**」（本批零新增/零退役测试档）；纪要「三件套」计数笔误订正 · **#14** §9 升级行补**台账前向兼容**；eng/escalate 改动标「**最小改动（删名）**」而非「注释级」。**#15 Not an issue**（平台/上游引文「评审无法核验」是事实陈述；父侧已逐条实测并给出可复核坐标 + stage 0 复核项）。**★ 评审总评**：「机制自洽、可实施、范围克制；设计予以批准，建议在实施派发前顺手折入第 1–9 条」。<br>**★ 过程留痕**：本轮折入时父侧**第九次**犯行锚事故——**本行原本是替换了上一行**（「纪要与用户裁定折入」整行被吃掉），**由「数 §12 数据行 = 3 而应 4」发现**并补回。 |
 
 ---
 
 ## §13 评审落档
 
-### §13.1 设计评审轮次 1 落点（预留）
+### §13.1 设计评审轮次 1 落档（`advisor-dsh-1`）
+
+- **结论**：**`VERDICT: PASS`** —— 🔴0 · 🟡11 · 🔵4
+- **design token**：`8288cbfb-24a7-40f0-805a-89d9205b92aa:1790087390422`（有效至 2026-09-22）
+- **评审员总评**：「三档遵循了规定的流程（会诊纪要 → 需求档 → 设计档），设计档含全部九节 + 三张 mermaid 图，D15-1…D15-10 记录了被否决的备选，AC-1…AC-24 带可验性层标。机制（平台 job 投递 + digest 单消费面 + 退役 + 消化门禁 + 墓碑）**自洽、可实施、范围克制**。**设计予以批准**，建议在实施派发前顺手折入第 1–9 条。」
+- **处置**：**15 条 → 14 Fixed + 1 Not an issue**（用户裁定「折入」；逐条见 §12 第二行）
+- **★ 评审自身指出的物种**：「多数是**『纪要裁定未完全落进实施域或验收面』**」——**正是本批要治的那种漂移，出现在本批自己的三档里**。其中 **#7 与 #10 是同一文档内两处枚举不同步**。**已登记为 R-46。**
 
 ### §13.2 交付核验落档（预留）

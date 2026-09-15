@@ -98,7 +98,7 @@
 | **会话对象**（**原地扩展，不另起**） | 现有字段不动，增 `jobId` · `settledAt` · `digest:string\|null` · `digested:boolean` · `minutesPath\|null` · `minutesExempt:{reason}\|null` · `exemption:{kind:"goal"\|"unattended"\|"authorized", note}\|null`；**FR-2 后删 `waiters`** | `consult.mjs` | run 体 · 门禁 · 测试 |
 | **digest entry** | **不需要这个对象**——上游那套 `{id, role, report, done}` 是为它**自造容器** `_pendingAsyncResults` 服务的；**本仓容器 = 平台 job，job 输出就是 digest 全文**。`session.digest` 只留**字符串副本**（审计/测试/门禁内联用），**单一写点 = settle 时的 `composeConsultDigest`** | 纯函数写一次 | run 体 · 门禁 · 纪要作者 |
 | **job spec** | `{ kind: "consult", label: "consult #<id> (N models: …)", owner: agent, outputLimitBytes: 131072, run: … }`——**逐字段对齐 `eng.mjs` 的既有先例**（含 `{cancel, done}` 返回形） | `consult.mjs` | 平台 `dsh-tool-jobs` |
-| **★ 纪要档（第四套）** | `docs/YYYY-MM-DD-<topic>-consult-minutes.md`（**沿用既有 8 份的命名与结构**）：**§0 汇总 + §1 原始层（机制写）** · **§2 逐问裁定 + §3 分歧与裁定 + §4 教训 + §5 不可验清单（代理写）**——**每节标注写者** | **§1 机制写 · §2-5 主代理写** | 人 · V8 谓词 · 后续批次 |
+| **★ 纪要档（第四套）** | `docs/YYYY-MM-DD-<topic>-consult-minutes.md`（**沿用既有 9 份的命名与结构**〔**★ 订正：设计评审 #10**。盘上真值于 2026-09-15 实测 = **9 份**（含本批自己那份）；**本节初版写 8**——那是**新档落盘前**的值。**今主句已改为 9**〕）：**§0 汇总 + §1 原始层（机制写）** · **§2 逐问裁定 + §3 分歧与裁定 + §4 教训 + §5 不可验清单（代理写）**——**每节标注写者** | **§1 机制写 · §2-5 主代理写** | 人 · V8 谓词 · 后续批次 |
 
 **★ `kind` 取 `"consult"` 而非 `<机制>-<路由>`**（glm 的独立发现）：既有族是 `advisor-codex` / `eng-codex` / `eng-dsh` / `escalate-*`，**但 consult 会话混跑 dsh 子代理与 codex-cli 行** ⇒ **带路由后缀必有一侧说谎**。⇒ **登记为命名偏离。**
 
@@ -149,7 +149,7 @@
 
 **cancel 面**（`dispose` 即清 map、digest 无从合成）**维持既有登记例外**——**不强行造墓碑投递**。
 
-**⇒ 父侧实测确证**：`test/consult.test.mjs` **在基线集内且不在授权面** ⇒ **改它必须走授权仪式**（同批三件套：`AP_TEST_AUTHORIZED` 加档名 + T-E19 清单行 + 台账退役日志 + 用户裁定引用）。**这与批 13 的 `advisor-config.test.mjs` 完全同形。**
+**⇒ 父侧实测确证**：`test/consult.test.mjs` **在基线集内且不在授权面** ⇒ **改它必须走授权仪式**（**三件套**：`AP_TEST_AUTHORIZED` 加档名 + 台账退役日志 + 用户裁定引用）。**★ 订正（设计评审 #13）**：本节初版把四项列成「三件套」——**第四项 `T-E19 清单行` 本批不需要**（**本批零新增/零退役测试档 ⇒ fs 测试档集不变 ⇒ T-E19 的 deepEqual 无需改**）。**⇒ 列四项却称三件套是计数笔误，已订正为三件套**。**这与批 13 的 `advisor-config.test.mjs` 完全同形。**
 
 **★ 且 glm 补一条**：该档的**存续理由**「锁会诊跨回合存活」（`test-lifecycle.md:90`）**本身被本批改写** ⇒ **它必须跟着改，不是可改可不改。**
 
