@@ -6,7 +6,7 @@
 // 纪律：零网络、零真实 LLM；仅读源码 + 调纯函数（隔离同既有档：DSH_HOME 置空）。
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync, mkdtempSync, writeFileSync, rmSync, readdirSync } from "node:fs"
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { dirname, join, resolve, relative } from "node:path"
@@ -266,6 +266,43 @@ test("T-PK11 (AC-P3c, J8): 文档地图三态——仅 design round1 注入；�
     // code round1 **不注入**地图段（对 code 评审无意义）
     const code = advisorMsg({ cwd: dir, documentMapDoc: "map.md", reviewType: "code" })
     assert.ok(!code.includes("## Document Map"), "code round1 不注入地图段（含降级句也不出现）")
+    // —— 批 13（R-5 / AC-3 · AC-4 · 锚 V2/V3）：「文档归属」第 7 维的 **design-only 边界** ——
+    // 正向锚：design round-1 的判据清单**含**第 7 维（与 `lib/prompts/advisor-design.md` 的系统提示
+    // 7 维对齐——本批前用户消息只有 6 维，两条清单不一致）。
+    assert.ok(advisorMsg({ cwd: dir }).includes("document ownership"),
+      "AC-3/V2: design round-1 用户消息必须含第 7 维 document ownership")
+    // 负向锚：code round-1 用户消息**不含**该子句。锁的是「design-only」这个**边界本身**——
+    // 防未来重构把该句挪出 `reviewType === "design"` 分支（code 判据来自 loadAdvisorMd 的 5 条内置）。
+    assert.ok(!advisorMsg({ cwd: dir, reviewType: "code" }).includes("document ownership"),
+      "AC-4/V3: code round-1 用户消息不得含 document ownership（负向锚）")
+    // —— 批 13（R-6 / AC-9 · AC-10 · AC-11 · 锚 V6）：判据档 `advisor.criteriaDoc` 的**三态** ——
+    // 消费点 = `loadAdvisorMd`（只被 code round-1 的 `## Review Criteria` 段调用）⇒ 本组一律走 code 面。
+    const CRIT_TEXT = "# Criteria\n\nCustom rule: no silent degradation.\n"
+    writeFileSync(join(dir, "criteria.md"), CRIT_TEXT)
+    // 态 ① 已声明且可读 ⇒ 注入其内容，且内置判据**不再**出现（= 替换判据段内容）
+    const cOk = advisorMsg({ cwd: dir, criteriaDoc: "criteria.md", reviewType: "code" })
+    assert.ok(cOk.includes("Custom rule: no silent degradation."), "AC-9 态①：声明且可读 ⇒ 注入文件内容")
+    assert.ok(!cOk.includes("1. Correctness: logic errors"), "AC-9 态①：判据段内容被替换（内置五条不再出现）")
+    // 态 ② 已声明但不可读 ⇒ **响亮句点名 advisor.criteriaDoc** + 回落内置判据（与态③ 可区分）
+    const cBad = advisorMsg({ cwd: dir, criteriaDoc: "missing-criteria.md", reviewType: "code" })
+    assert.ok(cBad.includes("(Declared review criteria document 'missing-criteria.md' could not be read — check the advisor.criteriaDoc setting."),
+      "AC-10 态②：响亮句点名 advisor.criteriaDoc")
+    assert.ok(cBad.includes("1. Correctness: logic errors"), "AC-10 态②：回落内置判据")
+    // 态 ③ 未声明 ⇒ ★ legacy 回退链（**逐字节保持今日行为** = US-7 / AC-11）
+    //   (a) 无 `<cwd>/.thincoder/advisor.md` ⇒ 内置判据
+    const cLegacyMiss = advisorMsg({ cwd: dir, reviewType: "code" })
+    assert.ok(cLegacyMiss.includes("1. Correctness: logic errors"), "AC-11 态③：未声明 ⇒ 内置判据（今日行为）")
+    assert.ok(!cLegacyMiss.includes("Declared review criteria document"), "AC-11 态③：与态② 可区分（无响亮句）")
+    //   (b) 有 `<cwd>/.thincoder/advisor.md` ⇒ 注入该文件（**上游产品名路径的 legacy 链仍在**）
+    mkdirSync(join(dir, ".thincoder"), { recursive: true })
+    writeFileSync(join(dir, ".thincoder", "advisor.md"), "# Legacy\n\nLegacy chain still works.\n")
+    const cLegacyHit = advisorMsg({ cwd: dir, reviewType: "code" })
+    assert.ok(cLegacyHit.includes("Legacy chain still works."),
+      "AC-11 态③：未声明 ⇒ legacy 链照旧探 .thincoder/advisor.md（US-7 零行为变更）")
+    // 设计档 §9 边界 4：判据档**只**做 code 面——design round-1 从不读它
+    const cDesign = advisorMsg({ cwd: dir, criteriaDoc: "criteria.md" })
+    assert.ok(!cDesign.includes("Custom rule: no silent degradation."),
+      "边界 4：criteriaDoc 不接进 design round-1（注入点只在 code 分支）")
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
@@ -310,33 +347,43 @@ test("T-PK12 (锚 B6, AC-P7): 注入门与模式标志解耦——切片内零�
   assert.ok(!src.includes("injectMethology"), "旧注入器（含拼写错误名）整函数已删除")
 })
 
-// ═══════════ 面 ⑥ 设置页：一张卡片两个文本框（AC-P13 / §6.7） ═══════════
+// ═══════════ 面 ⑥ 设置页：一张卡片三个文本框（AC-P13 / §6.7 · 批 13 R-6 加第三键） ═══════════
 
-test("T-PK13 (AC-P13, §6.7 面⑥): 设置页 projectdocs 卡片两个文本框各自到位；draftToPayload 对空串照发", () => {
+test("T-PK13 (AC-P13, §6.7 面⑥ · 批 13/AC-22): 设置页 projectdocs 卡片三个文本框各自到位；draftToPayload 对空串照发", () => {
   const src = readFileSync(join(LIB_DIR, "client.js"), "utf8").replace(/\r\n/g, "\n")
-  // 卡片本体：**一张**卡片（key "projectdocs"）内**两个** text 输入框
+  // 卡片本体：**一张**卡片（key "projectdocs"）内**三个** text 输入框
+  // （批 13 / R-6 加 advisor.criteriaDoc ⇒ 口径 2→3，见设计档 §9 边界 10 ③ 与 AC-22）
   const card = srcSlice(src, 'h("div", { className: "tc-card", key: "projectdocs" }', "\n\t\t\t\tconsultPoolCard(),")
   assert.ok(card.includes('h("div", { className: "tc-card", key: "projectdocs" }'), "卡片 key = projectdocs")
   const inputs = card.match(/type: "text",/g) ?? []
-  assert.equal(inputs.length, 2, "一张卡片内恰好两个文本输入框")
+  assert.equal(inputs.length, 3, "一张卡片内恰好三个文本输入框")
   // 六子点里的**卡片面**（字段 / payload / 卡片）在本用例；**校验 / 种子 / 合并**三子点由
   // T-PK13b 用**真调用**覆盖（本档此前只有源码切片断言——审计 #1 判定那是假保证）。
   assert.match(card, /value: draft\.advisor\.standardsDoc/, "卡片绑定 standardsDoc 草稿字段")
   assert.match(card, /value: draft\.advisor\.documentMapDoc/, "卡片绑定 documentMapDoc 草稿字段")
   assert.match(card, /setField\(\["advisor", "standardsDoc"\]/, "standardsDoc onChange 落 setField")
   assert.match(card, /setField\(\["advisor", "documentMapDoc"\]/, "documentMapDoc onChange 落 setField")
+  // 批 13（R-6 / §9 边界 10 ④）：第三键**同款绑定断言**（只加数组不加卡片绑定 ⇒ 本两条红）
+  assert.match(card, /value: draft\.advisor\.criteriaDoc/, "卡片绑定 criteriaDoc 草稿字段")
+  assert.match(card, /setField\(\["advisor", "criteriaDoc"\]/, "criteriaDoc onChange 落 setField")
   assert.ok(card.includes("清空=撤销声明"), "placeholder 明说清空 = 撤销声明（AC-P12c）")
-  // 生效值/来源回显两键各一行（§6.7「两个 tc-hint 生效值/来源行」）。
+  // 生效值/来源回显**三键各一行**（§6.7 的「两个 tc-hint 生效值/来源行」是**批 7 时点**的说法；
+  // 批 13 / R-6 加第三键后为三个，见设计档 §9 边界 10）。
   // ★加硬（批 7 分歧审计 #1）：原断言 `card.includes('"standardsDoc"') && card.includes('"documentMapDoc"')`
   // 是 **tautological** —— 这两个 token 在卡片切片内**唯一一次**出现就是上面两行 setField 调用，
-  // 故**整段删掉两行 tc-hint 仍为真**：它自称验「fieldSource 两键各一行」，实际一个字节都没验。
-  // 现改为**逐行定位两条 tc-hint**，各自断言「生效值三目 + 来源符号」——删任意一行 ⇒ 定位失败 ⇒ 红。
+  // 故**整段删掉 tc-hint 行仍为真**：它自称验「fieldSource 各键一行」，实际一个字节都没验。
+  // 现改为**逐行定位三条 tc-hint**，各自断言「生效值三目 + 来源符号」——删任意一行 ⇒ 定位失败 ⇒ 红。
   const HINT_STD_START = 'h("div", { className: "tc-hint" }, "standardsDoc = '
   const HINT_MAP_START = 'h("div", { className: "tc-hint" }, "documentMapDoc = '
+  // 批 13（R-6）：第三键的 tc-hint 行——按**同一逐行定位**手法加一条（不是「切片里含某 token」式假保证）
+  const HINT_CRIT_START = 'h("div", { className: "tc-hint" }, "criteriaDoc = '
   const iMapHint = card.indexOf(HINT_MAP_START)
   assert.ok(iMapHint >= 0, "地图 hint 行可定位（删掉该行 ⇒ 本断言红）")
+  const iCritHint = card.indexOf(HINT_CRIT_START)
+  assert.ok(iCritHint > iMapHint, "判据 hint 行可定位且在 地图 hint 之后（删掉该行 ⇒ 本断言红）")
   const hintStd = srcSlice(card, HINT_STD_START, HINT_MAP_START)
-  const hintMap = card.slice(iMapHint)
+  const hintMap = srcSlice(card, HINT_MAP_START, HINT_CRIT_START)
+  const hintCrit = card.slice(iCritHint)
   assert.ok(hintStd.includes('(effStdDoc === undefined ? "未声明" : effStdDoc)'),
     "标准 hint 行回显 effStdDoc（删该行 ⇒ 红）")
   assert.ok(hintStd.includes('+ "（来源 " + stdDocSource + "）。"'),
@@ -345,12 +392,19 @@ test("T-PK13 (AC-P13, §6.7 面⑥): 设置页 projectdocs 卡片两个文本框
     "地图 hint 行回显 effMapDoc（删该行 ⇒ 红）")
   assert.ok(hintMap.includes('+ "（来源 " + mapDocSource + "）。"'),
     "地图 hint 行回显 mapDocSource 来源（删该行 ⇒ 红）")
+  assert.ok(hintCrit.includes('(effCritDoc === undefined ? "未声明" : effCritDoc)'),
+    "判据 hint 行回显 effCritDoc（批 13 第三键；删该行 ⇒ 红）")
+  assert.ok(hintCrit.includes('+ "（来源 " + critDocSource + "）。"'),
+    "判据 hint 行回显 critDocSource 来源（批 13 第三键；删该行 ⇒ 红）")
   // 四个符号必须是**真的**（不是悬空引用）：生效值定义区各自走 fieldSource(["advisor", <key>])
-  const effDefs = srcSlice(src, "// 批 7（D-P4）：两个声明键的当前生效回显", "\n\t\t\t// UI-5")
+  // （批 13：随 client.js 的注释同步为「三个声明键」——该注释是 srcSlice 的起点标记）
+  const effDefs = srcSlice(src, "// 批 7（D-P4）· 批 13（R-6）：三个声明键的当前生效回显", "\n\t\t\t// UI-5")
   assert.match(effDefs, /var effStdDoc = .*\.standardsDoc.*: undefined;/, "effStdDoc 取自生效配置的 standardsDoc")
   assert.match(effDefs, /var stdDocSource = fieldSource\(base, user, \["advisor", "standardsDoc"\]\)/, "stdDocSource 走 fieldSource(标准键)")
   assert.match(effDefs, /var effMapDoc = .*\.documentMapDoc.*: undefined;/, "effMapDoc 取自生效配置的 documentMapDoc")
   assert.match(effDefs, /var mapDocSource = fieldSource\(base, user, \["advisor", "documentMapDoc"\]\)/, "mapDocSource 走 fieldSource(地图键)")
+  assert.match(effDefs, /var effCritDoc = .*\.criteriaDoc.*: undefined;/, "effCritDoc 取自生效配置的 criteriaDoc（批 13 第三键）")
+  assert.match(effDefs, /var critDocSource = fieldSource\(base, user, \["advisor", "criteriaDoc"\]\)/, "critDocSource 走 fieldSource(判据键)")
   // ★撤销语义可达（锚 B11 的客户端面）：空串必须**照发**，不是「空字段不发送」
   const payload = srcSlice(src, "function draftToPayload(", "\n\t\t\tvar config = {};")
   assert.match(payload, /if \(v === ""\) advisor\[k\] = ""/,
@@ -358,7 +412,7 @@ test("T-PK13 (AC-P13, §6.7 面⑥): 设置页 projectdocs 卡片两个文本框
   assert.match(payload, /else if \(v\.trim\(\) !== ""\) advisor\[k\] = v/,
     "纯空白跳过（§6.7：纯空白不是撤销；服务端也会以非文档路径 400 拒它）")
   // 常量区：不加 min/max（D-P15 / 锚 B8 的客户端面）
-  assert.ok(!/STANDARDS_(MIN|MAX)|DOC_MAP_(MIN|MAX)/.test(src), "锚 B8: 两键无 min/max 常量")
+  assert.ok(!/STANDARDS_(MIN|MAX)|DOC_MAP_(MIN|MAX)/.test(src), "锚 B8: 三键无 min/max 常量")
 })
 
 // ═══════ 面 ⑥ 客户端三函数的**行为**面锁（AC-P13 的 ②③④ 子点；批 7 分歧审计 #1） ═══════
@@ -395,10 +449,13 @@ function loadClientInternals() {
   return exports.__pk
 }
 
-test("T-PK13b (AC-P13 ②③④, §6.7 面⑥): 三个客户端函数对两键的**真实行为**——validateDraft 类型分支 / effectiveToDraft 种子 / merge 保留", () => {
+test("T-PK13b (AC-P13 ②③④, §6.7 面⑥): 三个客户端函数对三键的**真实行为**——validateDraft 类型分支 / effectiveToDraft 种子 / merge 保留", () => {
   const { validateDraft, effectiveToDraft, mergeDraftPreservingTouched } = loadClientInternals()
+  // ★ 批 13 修复轮（D13-20 / 审计 F2）：本用例此前把这组循环写成**硬编码两键数组** ⇒ 第三键
+  //   `criteriaDoc` **不过这条真调用路径**，第三键只剩「源码在场」这一种证据（present-but-inert）。
+  //   ⇒ 一律改走 `PK_KEYS`（声明键的**单一事实源**：加键即自动扩面，不再需要人肉追四处）。
   // ② validateDraft：非字符串 ⇒ 报错含键名；空值（undefined/null）⇒ 不报错（= 撤销/未设都合法）
-  for (const k of ["standardsDoc", "documentMapDoc"]) {
+  for (const k of PK_KEYS) {
     const bad = validateDraft({ advisor: { [k]: 123 } })
     assert.ok(bad.some(e => e.includes("advisor." + k) && e.includes("文档路径字符串")),
       "validateDraft 对非字符串 " + k + " 报错（删掉 PROJECT_DOC_KEYS 校验块 ⇒ 红）: " + JSON.stringify(bad))
@@ -411,32 +468,34 @@ test("T-PK13b (AC-P13 ②③④, §6.7 面⑥): 三个客户端函数对两键�
     const good = validateDraft({ advisor: { [k]: "path/to/x.md" } })
     assert.equal(good.filter(e => e.includes(k)).length, 0, "validateDraft 对合法字符串 " + k + " 放行")
   }
-  // ③ effectiveToDraft：两键各有一行（字符串保留 / 缺省与非法类型 → 空串 = 未声明）
-  const seeded = effectiveToDraft({ advisor: { standardsDoc: "docs/std.md", documentMapDoc: "docs/map.md" } })
-  assert.equal(seeded.advisor.standardsDoc, "docs/std.md", "effectiveToDraft 种子 standardsDoc（删该行 ⇒ 红）")
-  assert.equal(seeded.advisor.documentMapDoc, "docs/map.md", "effectiveToDraft 种子 documentMapDoc（删该行 ⇒ 红）")
+  // ③ effectiveToDraft：三键各有一行（字符串保留 / 缺省与非法类型 → 空串 = 未声明）
+  const SEED_VAL = { standardsDoc: "docs/std.md", documentMapDoc: "docs/map.md", criteriaDoc: "docs/crit.md" }
+  const seeded = effectiveToDraft({ advisor: { ...SEED_VAL } })
+  for (const k of PK_KEYS) {
+    assert.equal(seeded.advisor[k], SEED_VAL[k], "effectiveToDraft 种子 " + k + "（删该行 ⇒ 红）")
+  }
   const seededEmpty = effectiveToDraft({ advisor: {} })
-  assert.equal(seededEmpty.advisor.standardsDoc, "", "缺省 ⇒ 空串（未声明，不是 undefined）")
-  assert.equal(seededEmpty.advisor.documentMapDoc, "", "缺省 ⇒ 空串（未声明）")
-  const seededNonStr = effectiveToDraft({ advisor: { standardsDoc: 42, documentMapDoc: null } })
-  assert.equal(seededNonStr.advisor.standardsDoc, "", "非字符串 ⇒ 空串（不把非法值灌进表单）")
-  assert.equal(seededNonStr.advisor.documentMapDoc, "", "非字符串/null ⇒ 空串")
-  // ④ mergeDraftPreservingTouched：touched 命中 ⇒ 用当前草稿值覆盖种子（两键各一条），未命中 ⇒ 保持种子
-  const cur = { advisor: { standardsDoc: "typed.md", documentMapDoc: "typed-map.md" } }
-  const mergedBoth = mergeDraftPreservingTouched(seededEmpty, cur,
-    { "advisor.standardsDoc": true, "advisor.documentMapDoc": true })
-  assert.equal(mergedBoth.advisor.standardsDoc, "typed.md", "merge 保留用户改过的 standardsDoc（删该分支 ⇒ 红）")
-  assert.equal(mergedBoth.advisor.documentMapDoc, "typed-map.md", "merge 保留用户改过的 documentMapDoc（删该分支 ⇒ 红）")
+  for (const k of PK_KEYS) assert.equal(seededEmpty.advisor[k], "", "缺省 ⇒ 空串（未声明，不是 undefined）：" + k)
+  const seededNonStr = effectiveToDraft({ advisor: { standardsDoc: 42, documentMapDoc: null, criteriaDoc: 7 } })
+  for (const k of PK_KEYS) assert.equal(seededNonStr.advisor[k], "", "非字符串 ⇒ 空串（不把非法值灌进表单）：" + k)
+  // ④ mergeDraftPreservingTouched：touched 命中 ⇒ 用当前草稿值覆盖种子（三键各一条），未命中 ⇒ 保持种子
+  const TYPED_VAL = { standardsDoc: "typed.md", documentMapDoc: "typed-map.md", criteriaDoc: "typed-crit.md" }
+  const cur = { advisor: { ...TYPED_VAL } }
+  const allTouched = Object.fromEntries(PK_KEYS.map((k) => ["advisor." + k, true]))
+  const mergedAll = mergeDraftPreservingTouched(seededEmpty, cur, allTouched)
+  for (const k of PK_KEYS) assert.equal(mergedAll.advisor[k], TYPED_VAL[k], "merge 保留用户改过的 " + k + "（删该分支 ⇒ 红）")
   const mergedNone = mergeDraftPreservingTouched(seeded, cur, {})
-  assert.equal(mergedNone.advisor.standardsDoc, "docs/std.md", "未触碰 ⇒ 保持种子（不被 cur 无端覆盖）")
-  assert.equal(mergedNone.advisor.documentMapDoc, "docs/map.md", "未触碰 ⇒ 保持种子")
-  // 只触碰一键 ⇒ 另一键不得跟着变（逐键独立，防「一改两键都跳」）
-  const mergedOne = mergeDraftPreservingTouched(seeded, cur, { "advisor.standardsDoc": true })
-  assert.equal(mergedOne.advisor.standardsDoc, "typed.md", "单键触碰生效")
-  assert.equal(mergedOne.advisor.documentMapDoc, "docs/map.md", "同一次 merge 中另一键保持种子（逐键独立）")
-  const mergedOneMap = mergeDraftPreservingTouched(seeded, cur, { "advisor.documentMapDoc": true })
-  assert.equal(mergedOneMap.advisor.documentMapDoc, "typed-map.md", "单键触碰生效（地图键）")
-  assert.equal(mergedOneMap.advisor.standardsDoc, "docs/std.md", "同一次 merge 中另一键保持种子（地图键侧）")
+  for (const k of PK_KEYS) assert.equal(mergedNone.advisor[k], SEED_VAL[k], "未触碰 ⇒ 保持种子（不被 cur 无端覆盖）：" + k)
+  // 只触碰一键 ⇒ 其余键不得跟着变（逐键独立，防「一改全跳」）——三键两两轮遍
+  for (const k of PK_KEYS) {
+    const mergedOne = mergeDraftPreservingTouched(seeded, cur, { ["advisor." + k]: true })
+    assert.equal(mergedOne.advisor[k], TYPED_VAL[k], "单键触碰生效：" + k)
+    for (const other of PK_KEYS) {
+      if (other === k) continue
+      assert.equal(mergedOne.advisor[other], SEED_VAL[other],
+        "同一次 merge 中其余键保持种子（逐键独立）：" + k + " 被触碰 ⇒ " + other + " 不动")
+    }
+  }
 })
 
 // ═══════ 面 ① 服务端 PUT 校验器 + 面 ③ merge（AC-P12/P12b/P12c；批 7 分歧审计 #2） ═══════
@@ -444,10 +503,11 @@ test("T-PK13b (AC-P13 ②③④, §6.7 面⑥): 三个客户端函数对两键�
 // client.js 的源码切片断言里。这里**直接调用导出的校验器与合并函数**（零写盘、零起服务），
 // 把审计员的探针固化成套内断言：`""`/`null` → ok:true 且 sanitized 无该键；`src/a.mjs` /
 // `scripts/x.java` → ok:false 且文案含 must point to a DOCUMENT file；`docs/x.md` /
-// `METHODOLOGY.md` → ok:true 且 sanitized 含该键；merge 两键生效、空串不合并。
+// `METHODOLOGY.md` → ok:true 且 sanitized 含该键；merge **三键**生效、空串不合并。
+// （**批 13 修复轮订正**：本行原写「merge 两键生效」，与 T-PK14d 改走 `PK_KEYS` 后的三键现实不符。）
 
-/** 声明键（两键同构——设计 §6.7 面①「两个键同构」）。 */
-const PK_KEYS = ["standardsDoc", "documentMapDoc"]
+/** 声明键（三键同构——设计 §6.7 面①「两个键同构」；批 13 / R-6 加第三键 `criteriaDoc`）。 */
+const PK_KEYS = ["standardsDoc", "documentMapDoc", "criteriaDoc"]
 /** 直接调用 PUT 校验器（knownProviders = [] ：本组不设 provider/model，不触发注册表面）。 */
 function putAdvisor(adv) { return validateGlobalUserConfig({ advisor: adv }, []) }
 
@@ -466,14 +526,14 @@ test("T-PK14 (AC-P12, §6.7 面①): PUT 类型面——非字符串 ⇒ ok:fals
     assert.equal(okv.ok, true, "advisor." + k + " 合法文档路径 ⇒ ok:true: " + JSON.stringify(okv.errors))
     assert.equal(okv.sanitized.advisor[k], "docs/x.md", "sanitized 落 " + k)
   }
-  // 未被识别的 advisor 子键仍被白名单拒（两键已进白名单，不得被误报为不支持）
+  // 未被识别的 advisor 子键仍被白名单拒（**三键**都已进白名单——批 13 / R-6 加 `criteriaDoc` 后——不得被误报为不支持）
   const unknown = putAdvisor({ standardsDoc: "docs/x.md", notAKey: "x" })
   assert.equal(unknown.ok, false, "未知子键仍拒")
   assert.ok(unknown.errors.some(e => e.includes("advisor.notAKey is not supported")), "未知子键报错指名")
   assert.ok(unknown.errors.every(e => !e.startsWith("advisor.standardsDoc")), "合法键本身不被误伤")
-  // 白名单**散文**面同样枚举了两键（面①的散文面同步——只加白名单不改散文是一种漂移）
-  assert.ok(unknown.errors.some(e => e.includes("standardsDoc|documentMapDoc")),
-    "白名单散文枚举两键: " + JSON.stringify(unknown.errors))
+  // 白名单**散文**面同样枚举了三键（面①的散文面同步——只加白名单不改散文是一种漂移）
+  assert.ok(unknown.errors.some(e => e.includes("standardsDoc|documentMapDoc|criteriaDoc")),
+    "白名单散文枚举三键: " + JSON.stringify(unknown.errors))
 })
 
 test("T-PK14b (AC-P12b, J11): PUT 文档路径前置校验——非文档 ⇒ ok:false + must point to a DOCUMENT file", () => {
@@ -527,28 +587,38 @@ test("T-PK14c (AC-P12c, 锚 B11): 撤销语义——\"\"/null ⇒ ok:true 且 sa
   assert.ok(!both.sanitized.advisor, "两键都撤销 ⇒ sanitized 不引入空 advisor 组")
 })
 
-test("T-PK14d (AC-P13 面③): mergeGlobalConfig——两键生效；空串不合并（撤销后 base 重新显现）", () => {
+test("T-PK14d (AC-P13 面③): mergeGlobalConfig——三键生效；空串不合并（撤销后 base 重新显现）", () => {
+  // ★ 批 13 修复轮（D13-20 / 审计 F3）：本用例是 **AC-13（核心）的唯一覆盖点**，此前却硬编码**两键**
+  //   ⇒ 第三键 `criteriaDoc` 的 merge 行为**零测试**（present-but-inert）。⇒ 改走 `PK_KEYS`。
+  const BASE_VAL = { standardsDoc: "base-std.md", documentMapDoc: "base-map.md", criteriaDoc: "base-crit.md" }
+  const USER_VAL = { standardsDoc: "user-std.md", documentMapDoc: "user-map.md", criteriaDoc: "user-crit.md" }
   // 生效：user 层非空字符串覆盖 base
-  const m = mergeGlobalConfig({ advisor: { standardsDoc: "base-std.md", documentMapDoc: "base-map.md" } },
-    { advisor: { standardsDoc: "user-std.md", documentMapDoc: "user-map.md" } })
-  assert.equal(m.advisor.standardsDoc, "user-std.md", "user 覆盖 base（standardsDoc）")
-  assert.equal(m.advisor.documentMapDoc, "user-map.md", "user 覆盖 base（documentMapDoc）")
+  const m = mergeGlobalConfig({ advisor: { ...BASE_VAL } }, { advisor: { ...USER_VAL } })
+  for (const k of PK_KEYS) assert.equal(m.advisor[k], USER_VAL[k], "user 覆盖 base（" + k + "）")
   // 空串 = 撤销声明 ⇒ **不合并**（base 值重新显现；服务端删键后即回到未声明）
-  const revoked = mergeGlobalConfig({ advisor: { standardsDoc: "base-std.md", documentMapDoc: "base-map.md" } },
-    { advisor: { standardsDoc: "", documentMapDoc: "" } })
-  assert.equal(revoked.advisor.standardsDoc, "base-std.md", "空串不合并 ⇒ base 显现（standardsDoc）")
-  assert.equal(revoked.advisor.documentMapDoc, "base-map.md", "空串不合并 ⇒ base 显现（documentMapDoc）")
-  // 纯空白同样不合并；非字符串不合并（merge 层只做 loose-scalar 白名单透传）
-  const junk = mergeGlobalConfig({}, { advisor: { standardsDoc: "   ", documentMapDoc: 42 } })
-  assert.equal("standardsDoc" in junk.advisor, false, "纯空白不合并")
-  assert.equal("documentMapDoc" in junk.advisor, false, "非字符串不合并")
+  const revoked = mergeGlobalConfig({ advisor: { ...BASE_VAL } },
+    { advisor: { standardsDoc: "", documentMapDoc: "", criteriaDoc: "" } })
+  for (const k of PK_KEYS) assert.equal(revoked.advisor[k], BASE_VAL[k], "空串不合并 ⇒ base 显现（" + k + "）")
+  // 纯空白同样不合并；非字符串不合并（merge 层只做 loose-scalar 白名单透传）——逐键各测两种非法值
+  for (const k of PK_KEYS) {
+    const ws = mergeGlobalConfig({}, { advisor: { [k]: "   " } })
+    assert.equal(k in ws.advisor, false, "纯空白不合并（" + k + "）")
+    const nonStr = mergeGlobalConfig({}, { advisor: { [k]: 42 } })
+    assert.equal(k in nonStr.advisor, false, "非字符串不合并（" + k + "）")
+  }
   // 无 user 层 / user 层空对象 ⇒ 不引入 advisor 组键（no-op 语义；无该键即「未声明」）
   assert.ok(!mergeGlobalConfig({}, {}).advisor, "无 user 层 ⇒ 不引入 advisor 组")
-  assert.equal("standardsDoc" in mergeGlobalConfig({}, { advisor: {} }).advisor, false, "user 层无该键不引入")
-  // 逐键独立：只合并被声明的那一键
-  const one = mergeGlobalConfig({}, { advisor: { standardsDoc: "only-std.md" } })
-  assert.equal(one.advisor.standardsDoc, "only-std.md", "单键合并生效")
-  assert.equal("documentMapDoc" in one.advisor, false, "另一键不被一并引入")
+  const emptyAdvisor = mergeGlobalConfig({}, { advisor: {} }).advisor
+  for (const k of PK_KEYS) assert.equal(k in emptyAdvisor, false, "user 层无该键不引入（" + k + "）")
+  // 逐键独立：只合并被声明的那一键，其余键不被一并引入
+  for (const k of PK_KEYS) {
+    const one = mergeGlobalConfig({}, { advisor: { [k]: "only-" + k + ".md" } })
+    assert.equal(one.advisor[k], "only-" + k + ".md", "单键合并生效（" + k + "）")
+    for (const other of PK_KEYS) {
+      if (other === k) continue
+      assert.equal(other in one.advisor, false, "其余键不被一并引入（" + k + " 已声明 ⇒ " + other + " 不引入）")
+    }
+  }
 })
 
 // ═══════ 卫生锁 + 退役完备（AC-P16/锚 B9 · AC-P1/锚 B1 · AC-P2/锚 B2） ═══════

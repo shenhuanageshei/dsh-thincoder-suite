@@ -292,6 +292,8 @@ injectProjectStandards(cwd, parts, opts.standardsDoc)
 "2. Review against: completeness (all requirements covered?), feasibility (can this be built?), standards compliance (does it follow the project standards provided in this review context?), clarity (specific enough?), acceptance criteria (verifiable?), scope (appropriate?)."
 ```
 
+> **as-of 括注（批 13 / R-5）**：上面那句是**批 7 当时的原文**，此处逐字保留以存交付事实。批 13 在**同一句尾部原地追加**了第 7 维（**仅 design round-1 用户消息**，落点 = `lib/advisor-msgs.mjs` 的 `"2. Review against:"` 那条 `parts.push`）：`document ownership (does it amend the document that already owns its topic — per the document map when present, otherwise judged from the documents list — rather than fragment into a new file?)`。系统提示侧（`lib/prompts/advisor-design.md`）本就是 7 维，故批 13 消的是「两条清单维度不一致」，**维数与次序未动**。
+
 **改写与保留**（评审轮次 1 的 🔴#1 修正 —— 地图**不是**删掉了事）：
 
 - **`injectMethology` 整函数删除**（含拼写错误的名字），由 `injectProjectStandards` 取代。
@@ -365,7 +367,7 @@ for (const key of ["standardsDoc", "documentMapDoc"]) {
 | `draftToPayload` | **两键一律照发**（含空串）：`advisor.standardsDoc = draft.advisor.standardsDoc`（`" "` 或缺失才跳过；**空串 `""` 必须送出**，服务端据此删键） |
 | `effectiveToDraft` | 两个键各一行：`standardsDoc: typeof a.standardsDoc === "string" ? a.standardsDoc : ""`（`documentMapDoc` 同款） |
 | `mergeDraftPreservingTouched` | 两个键各一行：`if (touched["advisor.standardsDoc"]) setOf([...], curOf([...], ""))`（`documentMapDoc` 同款） |
-| 卡片渲染 | **一张卡片两个文本框**（`key: "projectdocs"`）：① `label("项目标准文档（advisor.standardsDoc）", h("input", { className:"tc-field", type:"text", placeholder:"path/to/standards.md（相对会话 cwd；清空=撤销声明）", … onChange: e => setField(["advisor","standardsDoc"], e.target.value) }))` ② `label("文档地图（advisor.documentMapDoc）", h("input", { … placeholder:"path/to/doc-map.md（相对会话 cwd；清空=撤销声明）" … }))` + 两个 `tc-hint` 生效值/来源行 |
+| 卡片渲染 | **一张卡片两个文本框**（`key: "projectdocs"`）：① `label("项目标准文档（advisor.standardsDoc）", h("input", { className:"tc-field", type:"text", placeholder:"path/to/standards.md（相对会话 cwd；清空=撤销声明）", … onChange: e => setField(["advisor","standardsDoc"], e.target.value) }))` ② `label("文档地图（advisor.documentMapDoc）", h("input", { … placeholder:"path/to/doc-map.md（相对会话 cwd；清空=撤销声明）" … }))` + 两个 `tc-hint` 生效值/来源行 〔**as-of 括注（批 13 / R-6）**：以上「两个文本框 / 两个 tc-hint」是**批 7 时点**的原文，本行**历史内容不改写**；批 13 起同一张卡片内为**三个**文本框与**三个** `tc-hint`——第三个 = `advisor.criteriaDoc`，见 `2026-09-15-registry-criteria-design.md` §9 边界 10〕 |
 | 常量区 | **不加** min/max（D-P15） |
 
 ---
@@ -451,7 +453,7 @@ for (const key of ["standardsDoc", "documentMapDoc"]) {
 | `lib/advisor-msgs.mjs` | ① 新增 `STANDARDS_BUDGET` 与 `DOC_MAP_BUDGET`；② **删** `injectMethology`；③ **重写** `injectDocumentMap`（**保留函数名**——它今天读死路径，改为声明键驱动三态，见 §6.4）；④ 新增 `injectProjectStandards`（三态）；⑤ 两处调用点改写（**去掉 `engineering` 参与**；design 处调**两个**注入器、code 处**只调标准段**）；⑥ `:274` / `:278` 措辞改写 | 修改 |
 | `lib/index.mjs` | 面 ①：嵌套白名单 + 错误散文 + **两键**的类型/`isDocPath` 校验 + **撤销语义**（`""`/`null` 删键） | 修改 |
 | `lib/config-store.mjs` | 面 ③：merge 白名单**两键**（loose scalar 先例） | 修改 |
-| `lib/client.js` | 面 ⑥：`validateDraft` / `draftToPayload` / `effectiveToDraft` / `mergeDraftPreservingTouched` **两个键各一份** / **一张卡片两个文本框**（`key:"projectdocs"`，见 §6.7） | 修改 |
+| `lib/client.js` | 面 ⑥：`validateDraft` / `draftToPayload` / `effectiveToDraft` / `mergeDraftPreservingTouched` **两个键各一份** / **一张卡片两个文本框**（`key:"projectdocs"`，见 §6.7）〔**as-of 括注（批 13 / R-6）**：以上「**两个键**/**两个文本框**」是**批 7 时点**的原文，本行**历史内容不改写**；批 13 起为**三个**（第三 = `advisor.criteriaDoc`）——见 `2026-09-15-registry-criteria-design.md` §9 边界 10〕 | 修改 |
 | `lib/prompts/advisor-design.md` | 4 处改写（`:11` `:15` `:39` `:65`） | 修改 |
 | `lib/prompts/engineering.md` | 9 处改写（两型） | 修改 |
 | `test/path-kind.test.mjs` | **新增**：真值表 + 三态注入 + 配置三面 | **新增** |
