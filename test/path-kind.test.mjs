@@ -102,7 +102,7 @@ test("T-PK2 (N-3): DOC_EXT_RE 唯一字面量；归一与规则边界逐条锁�
 })
 
 // ═══════════ §10.3 真值表「写门禁」列 + 锚 B4（AC-P8 / AC-P11 / D-P11 陷阱守卫） ═══════════
-// 写门禁端到端：真实 makeWriteGate（eng.mjs 导出、函数体逐字节冻结）+ 真 state（eng ON、无令牌）。
+// 写门禁端到端：真实 makeWriteGate（eng.mjs 导出、函数体**可执行行逐字节**冻结）+ 真 state（eng ON、无令牌）。
 // 判决口径：`await next()` ⇒ 放行；返回 { kind:"deny" } ⇒ 拦。
 
 const GATE_SID = "pk7-gate-" + randomUUID()
@@ -143,8 +143,11 @@ test("T-PK7 (AC-P8 写门禁列, AC-P11, 边界 7): 真值表逐路径过真实�
 })
 
 test("T-PK8 (锚 B4, AC-P10): eng.mjs 仍持有 isProductCode 绑定；子问题无第二套规则体", () => {
-  // D-P14：guard-e.test.mjs 的 WRITE_GATE_FIXTURE 逐字节锁着 makeWriteGate 函数体，
+  // D-P14：guard-e.test.mjs 的 WRITE_GATE_FIXTURE（批 12 起 = **可执行行逐字节**，注释层不入锁）
+  // 锁着 makeWriteGate 函数体的可执行行，
   // 其中 `isProductCode(target)` 行要求 eng.mjs **文件内**仍有可解析的 isProductCode 绑定。
+  // ★ 共用终点标记（glm 的 N1 / 设计档 §9 边界-5）：本档下方 srcSlice 的右界标记与 guard-e 的 A2
+  //   **是同一个字面** `"\n\n/**\n * 守卫 E 预闸"` ⇒ **标记一动，两处同红**（本档锚 B4 + guard-e 的 A2 边界断言）。
   const engSrc = readFileSync(join(LIB_DIR, "eng.mjs"), "utf8")
   // ★ 批 10（D-36）：切片起点由 `makeWriteGate(getConfigDefault) {` 改为**不带签名**的
   //   `makeWriteGate(`——该函数新增了**可选**第二参 `storPathOverride`（测试缝，向后兼容）。

@@ -199,10 +199,27 @@ const sliceBetween = (src, startMarker, endMarker) => {
 }
 
 /** 剥离块注释与行注释（锚计数用：注释里引述的字面不算实现）。
- *  只服务本档的静态锚，对字符串里含 "//" 的场合足够（本仓 lib 无该形态）。 */
+ *  ★ 批 12 收窄自述：原本写「本仓 lib 无该形态」——升格为 A2 的**等值参与者**后，该声明
+ *    **承重等值正确性** ⇒ 收窄为「**本切片无该形态**」，并由 A2 的域自检机械守住
+ *    （`!rawSlice.includes("/*")`）。实现**逐字节未动**（它同时承 T-E18 的
+ *    `"denied: / frozen: ` 计数与 A8 的负向断言）。 */
 const stripComments = (src) => src
   .replace(/\/\*[\s\S]*?\*\//g, "")
   .replace(/(^|[^:])\/\/[^\n]*/g, "$1")
+
+/** 归一化到「可执行行」：复用剥离器（其实现零改）→ 逐行 `rtrim` → 丢空行 → join("\n")。
+ *  ★ **语义边界**（批 12）：锁的是**可执行行的字节与顺序**；注释层（文字 / 位置 / 行数 /
+ *    缩进）完全自由——注释既不参与字节，也不参与行数。
+ *  ★ **顺序承重**：调用方**必须先在原始源码上切片**，再把切片交给本函数。右界标记
+ *    （`WG_END`）**本身就是一条注释** ⇒ 先剥离再切片会让 `indexOf(标记)` 恒为 -1，
+ *    整个锚当场死掉（防这条退化路径的断言 = A2 的「顺序锁」）。
+ *  ★ **域前提**：切片内不得含 `/*`（本函数按**行局部**剥离；块注释跨行吞并会让
+ *    「逐行」这个前提失效）。该前提由 A2 的域自检机械守住。
+ *  ★ **不归一什么**：token 间空白**不归一**、EOL **不归一**。理由：空白在 JS 里**承重**
+ *    （`a+ +b` ≠ `a++b`；`return\nx` 有 ASI 语义）⇒ 朴素空白归一 = **制造假绿逃逸面**；
+ *    EOL 归一则是第二条规则 + 域外扩权。 */
+const normalizeExec = (src) => stripComments(src)
+  .split("\n").map((l) => l.replace(/\s+$/, "")).filter((l) => l !== "").join("\n")
 
 // ═══════════════════════════ 预闸行为面（AC-E1…AC-E8 / AC-E10 / AC-E14） ═══════════════════════════
 
@@ -770,23 +787,26 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
 
 // ═══════════════════════════ 机验锚（AC-E17 / AC-E18 / AC-E21） ═══════════════════════════
 
-/** `makeWriteGate` 函数体（**批 10 起的新基线**：字节夹具）——持久形态：内容子串比对，
- *  不用 `git diff --name-only HEAD`（那是「只在提交前成立」的形态）。
- *  ★ 批 10（D-36）**重新基线说明**（D-37 的教训：锚必须写清「何时点 + 何谓改」）：
- *    批 6b 立此夹具时的语义是「**本批**未改 makeWriteGate」；而批 10 的 D-36 **依法**改动它
- *    （内存态为空时读盘回退腿 + `storPathOverride` 可选第二参测试缝，设计档 §7/§6.3）⇒
- *    夹具随该合法改动**重新基线**。此后任何对 `makeWriteGate` 函数体的改动**仍然会红**
- *    （这正是本锚的价值：它是**永久契约**，不是一次性的时点事实——F4 的裁定维持）。
- *  ★ 批 10 **第二次重新基线**（**审计 #3 的病灶 = 第一次未自白 ⇒ 本次显式自白**）：
- *    本轮改的是回退腿上方那 4 行**注释**（承重层订正，见设计档 §13.4-⑦ / §12），**代码零改**。
- *  ★ 批 10 **第三次重新基线**（收尾轮 · **交付代码评审 🔵#4 的修复**，**显式自白**——同上一轮的
- *    口径：自白是纪律，不是可选项）：
- *    本轮改的是 `diskState` 的第三态——**代码改动**（`validateDesignToken(…) ? "valid" : "expired"`
- *    → 形不可解析一律路由 `missing`，失败原因取 `designTokenFailureReason`）**+ 其上方 9 行注释**
- *    （见设计档 §13.4-⑦ / §12）。**触发接口**：`makeWriteGate` 函数体是**逐字节**锁 ⇒ 函数体任何
- *    改动（含注释）都必须随之重新基线——这是**第三次**，代价见设计档 §9 边界-12。
- *  ★ **本锁的已知维护代价**（设计档 §9 边界-12）：锁定面 = 函数体**全文含注释** ⇒
- *    **任何注释改动都必须重新基线**。将来的可选方向 = **缩小锁面（只锁可执行行）**，**本批不做**。 */
+/** `makeWriteGate` 函数体的**归一态**（**批 12 收窄后的锁面**：可执行行的字节与顺序）。
+ *  ★ **契约（批 12 起）**：本夹具存的是**已归一态**——`normalizeExec`（= 剥离器 → 逐行 `rtrim` →
+ *    丢空行）作用在「**先在原始源码上切片**得到的 `makeWriteGate` 函数体」上的结果。比对只有
+ *    **一侧**做剥离（对称剥离会引入假绿逃逸面；R-29）。**注释层（文字 / 位置 / 行数 / 缩进）
+ *    完全自由**：改 / 挪 / 增 / 删 / 改缩进都**不会**让 T-E17 变红。
+ *  ★ **时点快照声明**（本夹具是**一次性写入 + 逐字节比对**的**时点快照**，不是生成物）：
+ *    行数 / 字符数由 **stage 0 机械推导**得出并逐字对齐；推导 one-liner 见
+ *    `docs/2026-09-15-lock-narrowing-design.md` §6.3。重新基线仍靠人眼复制，故配
+ *    `normalizeExec(WRITE_GATE_FIXTURE) === WRITE_GATE_FIXTURE` **幂等自检**兜底（抓「重基线时
+ *    误把注释 / 空行 / 尾空格抄进夹具」）。**禁止手抄设计档里的数字**。
+ *  ★ **锁面收窄的自白**（批 12；设计档 §9 边界-12 由此**关闭**）：批 10 的三次重新基线里两次的税
+ *    就是「注释也在锁内」⇒ 本批把锁面从「函数体**全文含注释**」收窄为「**只锁可执行行**」。
+ *  ★ **接受的代价**（设计档 §9 边界-1 / 边界-2，明写而非靠猜）：**注释层自由** ⇒ 注释与代码脱节
+ *    不再有锚捕获，**权威 = 设计档 + 评审**（本档**不**补支点注释句锁——那正是本批要消灭的锁）。
+ *  ★ **历史基线自白（批 10；原文保留）**：批 6b 立此夹具时的语义是「**本批**未改 `makeWriteGate`」；
+ *    批 10 的 D-36 **依法**改动它（内存态为空时读盘回退腿 + `storPathOverride` 可选第二参测试缝）
+ *    ⇒ 夹具随该合法改动**重新基线**（**第一次：代码**）。批 10 第二次：改回退腿上方那 4 行**注释**
+ *    （承重层订正）；第三次：`diskState` 第三态（**代码 + 其上方 9 行注释**）。**三次的代价见设计档
+ *    §9 边界-12** —— 那句「函数体任何改动（含注释）都必须重新基线」**是批 10 当批的约束句**，
+ *    批 12 起被本节的新契约**取代**（supersede），此句保留仅作历史记录。 */
 const WRITE_GATE_FIXTURE = [
   "export function makeWriteGate(getConfigDefault, storPathOverride) {",
   "  return async (exec, next) => {",
@@ -795,48 +815,24 @@ const WRITE_GATE_FIXTURE = [
   "      if (!WRITE_TOOLS.has(name)) return await next()",
   "      const agent = exec?.agent",
   "      if (!agent?.session) return await next()",
-  "      // 只拦主代理（depth 0）；子代理是受启动校验保护的实现者（eng_coder 链）",
   "      const depth = agent.session.header?.delegationDepth ?? 0",
   "      if (depth > 0) return await next()",
   "      const state = sessionState(agent.session.id)",
   "      if (!engEffective(state, getConfigDefault())) return await next()",
-  "      // 有效 token：state 一致 + 形状/过期校验（D-30：两段式，无签名腿）",
   "      if (state.designToken && validateDesignToken(state.designToken)) return await next()",
   "      const target = targetPathOf(name, exec?.arguments)",
   "      if (!target || !isProductCode(target)) return await next()",
-  "      // ————— 批 10（D-36）回退腿：**仅内存态为空时**读盘（六条件 a–f，设计档 §6.3）—————",
-  "      // ★ 层级区分（D10-15 / 边界 7）：**读盘失败 ≠ 门禁故障** ⇒ 一律按「无记录」**拒**，",
-  "      //   **绝不**落入下方「门禁自身故障 → 放行」的 catch（fail-open）——两者方向相反、**不同层**。",
-  "      // ★ **承重层 = 内层**（批 10 分歧审计 #8 **订正**：此前口径「外层 catch 承载 fail-closed」**已推翻**）：",
-  "      //   真保证 fail-closed 的是 `loadTokenRecord` **自身**的 fail-safe（缺失/损坏/不可读 → null ⇒",
-  "      //   三态 \"missing\" ⇒ 拒）——实测**删掉内层 fail-safe ⇒ 11 条用例转红**（宿主 = 无第二层的调用点，",
-  "      //   如 `eng_coder` 的读盘路径）；**本门禁内实测差异 = 0**（下一行的 catch 同样归零到 null，",
-  "      //   故 T-TF2/T-TF4 保持绿）。⇒ 下一行括的这层是**第二层纯防御**：本实现下**走不到**",
-  "      //   （`loadTokenRecord` 不抛），但**非装饰**——它归零的方向与下方 fail-open 的 catch **相反**。",
   "      let diskRec = null",
   "      if (!state.designToken) {",
   "        try { diskRec = loadTokenRecord(agent.session.id, storPathOverride, agent.session?.header?.cwd) } catch { diskRec = null }",
   "      }",
   "      const diskToken = diskRec && typeof diskRec.token === \"string\" && diskRec.token !== \"\" ? diskRec.token : null",
-  "      // ★ **显式三态路由**（设计评审 #3：不得用单 `if` 落穿——那会让过期盘记录拿到「没有令牌」文案）：",
-  "      //   valid ⇒ 放行并回填；expired ⇒ 走既有 expired 文案；missing ⇒ 走既有 no-token 文案。",
-  "      // ★ **交付评审 #4 订正**：盘记录 `token` **非空但形状不可解析**（畸形串 / 旧版式 /",
-  "      //   `expiresAt` 段不可解析）时路由为 **missing**——**只有「真过期」才归 expired**，与",
-  "      //   `loadTokenRecord` 对畸形记录的 fail-safe **同向**（判据 = 「这枚凭证**不可用**」，",
-  "      //   不是「这枚凭证**过期了**」）。旧写法把**一切**校验失败都归 \"expired\"",
-  "      //   （`validateDesignToken(…) ? \"valid\" : \"expired\"`），而 `tokenExpiryMs(畸形串)` 为 null",
-  "      //   ⇒ `gateExpired` 为假 ⇒ 渲染 **no-token 文案**：**态与文案不符**（拒绝方向不变，但诊断",
-  "      //   在骗人）；第二段恰可解析为**过去时间戳**的畸形串更会渲染出**假的**「expired at …」。",
-  "      //   ★ 失败原因取**单一权威** `designTokenFailureReason`（token 形状知识不在此复制第二份；",
-  "      //   `validateDesignToken` 即其「原因 === null」）。",
   "      const diskState = !state.designToken",
   "        ? (diskToken === null ? \"missing\"",
   "          : (validateDesignToken(diskToken) ? \"valid\"",
   "            : (designTokenFailureReason(diskToken) === \"expired\" ? \"expired\" : \"missing\")))",
   "        : null",
   "      if (diskState === \"valid\") {",
-  "        // (e) 回填 state（避免每次写操作重复读盘）+ (d) 落**一行可见日志**——把 D1 反对的「静默」",
-  "        //     改成「可审计」（决策 D10-13：推翻的是路径，不是终态）。",
   "        state.designToken = diskToken",
   "        console.warn(\"[thincoder-suite] gate: design token restored from token-store (session \"",
   "          + agent.session.id + \", expires \"",
@@ -844,14 +840,6 @@ const WRITE_GATE_FIXTURE = [
   "            ? diskRec.expiresAt : (tokenExpiryMs(diskToken) ?? Date.now())).toISOString() + \")\")",
   "        return await next()",
   "      }",
-  "      // D-30 / FR-T6：令牌**已过期**时不得再说「先写设计文档」（误导——文档早就写完了）。",
-  "      // 指向真实出路：再调一次 eng_coder 走续期（文档未变则自动顺延，无需重评）。",
-  "      // 本门禁**绝不执行续期**（AC-21 [负]）：续期落点是 eng_coder 的过期子分支（决策 D1）",
-  "      // ——门禁契约是 fail-open 的纪律护栏，续期判定必须 fail-closed，两者语义互斥。",
-  "      // ★ (b) 判据与内存路径**完全同构**：盘记录过期 ⇒ 置起同一个 `gateExp` 输入，使既有 expired",
-  "      //   文案**原样复用**（不新造第二条文案）。",
-  "      // ★ **docHash 不进门禁判据**（D10-14）：内存路径今天也不查 ⇒ 盘路径查会造成两路径判据不一",
-  "      //   （那才是真的不一致）；「文档被改后令牌是否失效」是另一个命题，若做须两路径同做、另立批次。",
   "      const gateExp = state.designToken ? tokenExpiryMs(state.designToken)",
   "        : (diskState === \"expired\" ? tokenExpiryMs(diskToken) : null)",
   "      const gateExpired = gateExp !== null && Date.now() > gateExp",
@@ -863,7 +851,7 @@ const WRITE_GATE_FIXTURE = [
   "          : \"denied: engineering mode is ON and no design token — write the design document first, have the user initiate advisor(type='design'), then implement via eng_coder (the designToken parameter). Docs (*.md under docs/ or at the root) stay writable.\",",
   "      }",
   "    } catch {",
-  "      return await next() // 门禁自身故障 → 放行（fail-open 只在此处：门禁 bug 不能瘫痪整个会话）",
+  "      return await next()",
   "    }",
   "  }",
   "}",
@@ -895,16 +883,48 @@ test("T-E17 (AC-E17, 锚 A1/A2/A7/A8): 漂移分支不读活 state · 写门禁�
   assert.ok(driftCode.includes("state.advisorRound = 0") && driftCode.includes("state.lastAdvisorOutput = null")
     && driftCode.includes("persistSessionState(agent, state, opts)"), "D-E9: 复位轮次 + 清 prior + 落盘")
 
-  // —— A2：makeWriteGate 函数体逐字节等于**本批更新后的夹具**（内容比对；非「工作树 vs HEAD」形态） ——
+  // —— A2：makeWriteGate 函数体的**可执行行**等于本批更新后的夹具（内容比对；非「工作树 vs HEAD」形态） ——
   //    ★ 批 10 起切片起点改为 `export function makeWriteGate(`（不带签名）：D-36 给它加了
   //      **可选**第二参 `storPathOverride`（测试缝，向后兼容）——起点写成带签名会在合法扩参时
   //      定位失败（本批实测踩中）；签名不参与锚，函数体参与。
+  //    ★ 批 12（锁面收窄）：锁的语义 = **可执行行的字节与顺序**；注释层（文字 / 位置 / 行数 /
+  //      缩进）完全自由 ⇒ 比对的是归一态（`normalizeExec`），**不再**按原样比对函数体全文。
+  const WG_END = "\n\n/**\n * 守卫 E 预闸"
   const wgStart = engSrc.indexOf("export function makeWriteGate(")
-  const wgEnd = engSrc.indexOf("\n\n/**\n * 守卫 E 预闸")
+  const wgEnd = engSrc.indexOf(WG_END)
   assert.ok(wgStart >= 0 && wgEnd > wgStart, "A2: 函数体切片边界可定位")
-  assert.equal(engSrc.slice(wgStart, wgEnd), WRITE_GATE_FIXTURE,
-    "A2: makeWriteGate 函数体逐字节等于批 10 更新后的夹具（此后任何改动 ⇒ 红）")
-  assert.ok(!engSrc.slice(wgStart, wgEnd).includes("frozen"), "A2: 守卫 E 未被并进写门禁（D-E1）")
+
+  // ★ 顺序锁（D12-5）：右界标记**本身是注释居民** ⇒ 必须【先切片、后剥离】。
+  //   它堵的退化路径真实且近：T-E18 已在算 `stripComments(engSrc)`，一次「先剥再切」是最自然的
+  //   坏改法——没有本条时只会看到一句费解的「边界不可定位」，然后**改标记绕过，锚就这么死了**。
+  //   **不过锁**：它钉的是**测试自身的切片机制**，而标记文本早已被上面的边界断言 + 夹具事实钉死。
+  assert.ok(stripComments(engSrc).indexOf(WG_END) === -1,
+    "A2 顺序锁：右界标记本身是注释 ⇒ 必须【先切片、后剥离】；全档剥离后该标记必失")
+
+  const rawSlice = engSrc.slice(wgStart, wgEnd)
+
+  // ★ 域自检（D12-8）：剥离器在切片上必须**逐行局部**（块注释跨行吞并 = 前提失效）。
+  //   它是「丢空行」全部推理的支点，并顺手灭绝 `fro/*x*/zen` 这类拼接绕过。
+  assert.ok(!rawSlice.includes("/*"),
+    "A2 域自检：剥离器在切片上必须逐行局部（块注释跨行吞并 = 前提失效）")
+
+  const norm = normalizeExec(rawSlice)
+
+  // ★ 等值比对：收窄后（只锁可执行行）
+  assert.equal(norm, WRITE_GATE_FIXTURE,
+    "A2: makeWriteGate 的**可执行行**（字节与顺序）等于夹具；注释层不入锁")
+
+  // ★ 夹具幂等自检（D12-4）：夹具必须是**已归一态**（混入注释 / 空行 / 尾空格即红）
+  assert.equal(normalizeExec(WRITE_GATE_FIXTURE), WRITE_GATE_FIXTURE,
+    "A2 夹具自检：夹具必须是归一态（混入注释/空行/尾空格即红）")
+
+  // ★ 合并签名正则（D12-6 / D12-7）：负向断言只看**代码**（与 A8 / A6 同惯例；本档唯一的
+  //   「跑在原始文本上的负向断言」在此补齐）。修的是**今天就存在的拼写缺口**：
+  //   `"frozen"` 匹配不到 `designFreezeSet`（freeze 无 n）⇒ 旧断言只拦 `frozen: ` 文案，
+  //   **从没拦过「把预闸函数拖进写门禁」这类合并**——而那正是 D-E1 要防的最重一类。
+  assert.ok(!/(designFreezeSet|makeDocFreezeGate|"frozen: )/.test(norm),
+    "A2: 守卫 E 未被并进写门禁（D-E1；注释不参与；合并签名三选一出现即红）")
+
   const mkCount = (engSrc.match(/export function makeWriteGate\s*\(/g) ?? []).length
   assert.equal(mkCount, 1, "A2: 唯一实现点")
 })
