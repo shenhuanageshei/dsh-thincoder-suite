@@ -11,7 +11,7 @@ process.env.DSH_HOME = ""
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { readdirSync, readFileSync } from "node:fs"
+import { readdirSync, readFileSync, mkdtempSync } from "node:fs"
 import { EventEmitter } from "node:events"
 import { tmpdir } from "node:os"
 import { execFileSync } from "node:child_process"
@@ -23,7 +23,7 @@ import {
 import { runAdvisorToolLoop, shouldBudgetNudge } from "../lib/advisor.mjs"
 import { runEngCoder } from "../lib/eng.mjs"
 import { runEscalate } from "../lib/escalate.mjs"
-import { startConsultSession, checkConsultSession, stopConsultSession, cleanupConsultSessions } from "../lib/consult.mjs"
+import { startConsultSession, stopConsultSession, cleanupConsultSessions } from "../lib/consult.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -187,11 +187,34 @@ test("T-AP1c (AC-AP1): escalate 家族四触发 → 正确的 trigger@layer（�
 // 规定「子代理信号不得继承调用方 exec.signal」，调用方的 user 意图只经 consult_stop 表达，
 // 而按 §6 伪代码 stop 路径的 trigger 是 `stop`（不是 `user`）。故 consult 的四构造取
 // {timeout, stop, cancel, unknown}，user 面以 stop 表达。
+//
+// ★ 批 15（FR-2 / R-9）：`checkConsultSession` 整体退役（含 `waiters`）⇒ **消费面改指 digest**
+// （`composeConsultDigest` 的产物）。断言仍是「死亡行**经生产消费面**可见」——digest 就是新的
+// 生产消费面，故批 6 的纪律（不得手搓 `deathLine(...)` 绕过生产站点）零削弱。
+// ★ 且该批要求派发走平台 job（D15-1/D15-4）⇒ 这里的 deps 必须带假 jobs 服务；纪要档与台账
+// 落点为**临时目录**（不得污染仓库 docs/ 与真实 DSH_HOME）。
+
+/** 假平台 jobs 服务（平台契约：`start(spec)` 调 `spec.run()` 取 `{cancel, done}`）。 */
+function consultJobs() {
+  const specs = []
+  return {
+    specs,
+    jobs: { start(spec) { const hooks = spec.run(); specs.push({ spec, hooks }); return "consult-" + specs.length } },
+  }
+}
+
+/** digest 消费面：等 run 体合成（`settleAndDeliver` 在 job complete 之前写）。 */
+async function consultDigestOf(state, id, timeoutMs = 3000) {
+  const s = state.consultSessions.get(String(id))
+  await waitFor(() => !!s?.digest, timeoutMs)
+  return s.digest
+}
 
 function makeConsultDeps({ config = {}, mode = "abort-resolve" } = {}) {
   const sid = "ap-consult-" + randomUUID()
   const state = sessionState(sid)
   const seen = { req: null }
+  const j = consultJobs()
   const subagents = {
     async start(kind, req) {
       seen.req = req
@@ -200,7 +223,7 @@ function makeConsultDeps({ config = {}, mode = "abort-resolve" } = {}) {
         return { result: Promise.resolve({ output: [], stopReason: "error", diagnostic: "boom" }), dispose: async () => {} }
       }
       // abort-reject：子代理以 **reject** 结束（AbortError）——批 6 修复轮审计 🔴 #1：只有这条路径
-      // 才落到 consult.mjs 的 `catch (e)` → `session.stopped` 分支（生产站点 :250-251 的死亡行）。
+      // 才落到 consult.mjs 的 `catch (e)` → `session.stopped` 分支（生产站点的死亡行）。
       if (mode === "abort-reject") {
         const result = new Promise((_, rej) => {
           const onAbort = () => rej(abortErr())
@@ -222,12 +245,14 @@ function makeConsultDeps({ config = {}, mode = "abort-resolve" } = {}) {
     },
   }
   return {
-    sid, state, seen,
+    sid, state, seen, jobs: j,
     deps: {
-      ctx: { subagents },
-      agent: { session: { id: sid, header: { cwd: PLUGIN_DIR }, deriveMessages: () => [] }, options: {} },
+      ctx: { subagents, get: (svc) => (svc === "jobs" ? j.jobs : null) },
+      // 批 15：纪要档与台账写盘 ⇒ 落点必须在临时目录（不得污染仓库 docs/ 与真实 DSH_HOME）
+      agent: { session: { id: sid, header: { cwd: mkdtempSync(join(tmpdir(), "ap-consult-cwd-")) }, deriveMessages: () => [] }, options: {} },
       config: { consultModels: [{ provider: "p", model: "m" }], ...config },
       state, signal: undefined, persona: undefined,
+      dshHome: mkdtempSync(join(tmpdir(), "ap-consult-home-")),
     },
   }
 }
@@ -244,13 +269,13 @@ test("T-AP1d (AC-AP1): consult 家族 {timeout, stop, cancel, unknown} 四构造
   // timeout：看门狗（我方自持定时器 → layer agent）
   const hT = makeConsultDeps({ config: { consultTimeoutMs: 30 } })
   const { id: idT, ctrl: ctrlT } = await consultStart(hT)
-  const rT = await checkConsultSession(hT.state, idT, undefined)
-  assert.match(String(rT.reply), /timed out after 1s/, "超时信封可见")
+  const dT = await consultDigestOf(hT.state, idT)
+  assert.match(dT, /timed out after 1s/, "超时信封可见")
   assert.equal(abortTag(ctrlT.signal.reason), "abort(timeout@agent)", "看门狗写点载荷 = timeout@agent")
   cleanupConsult(hT)
 
   // stop：consult_stop 早停 —— **经由消费面断言**（批 6 修复轮审计 🔴 #1：用例不得再手搓
-  // `deathLine(...)` 绕过生产站点；本条经 consult_check 读的是生产站点真正合成的载荷）。
+  // `deathLine(...)` 绕过生产站点；批 15 起消费面 = digest，读的仍是生产站点真正合成的载荷）。
   // 子代理以 **reject** 结束（abort-reject）→ 落 consult.mjs `catch (e)` 的 `session.stopped` 分支。
   const hS = makeConsultDeps({ mode: "abort-reject" })
   const { id: idS, ctrl: ctrlS } = await consultStart(hS)
@@ -258,11 +283,13 @@ test("T-AP1d (AC-AP1): consult 家族 {timeout, stop, cancel, unknown} 四构造
   assert.equal(stopConsultSession(hS.state, idS, 1).abandoned, 1)
   await waitFor(() => ctrlS.signal.aborted)
   assert.equal(abortTag(ctrlS.signal.reason), "abort(stop@agent)", "stop 写点载荷")
-  const rS = await checkConsultSession(hS.state, idS, undefined)
-  assert.equal(String(rS.reply), "aborted · abort(stop@agent: stop requested)",
-    "stop 死亡行经**消费面**（consult_check）可见：" + String(rS.reply))
-  assert.equal(rS.failedReply, true, "早停行按失败面读出（不冒充成功回复）")
-  assert.equal(rS.terminated, 1, "terminated 计数照旧（T-AP1d 旧断言保留）")
+  const dS = await consultDigestOf(hS.state, idS)
+  assert.match(dS, /^aborted · abort\(stop@agent: stop requested\)$/m,
+    "stop 死亡行经**消费面**（digest）可见（early-stop 面逐字不包壳）：" + dS.split("\n").slice(-3).join(" / "))
+  assert.match(dS.split("\n")[0], /^\[consult #\d+ stopped — 0 of 1 replied \(0 failed, 1 stopped\) before stop\]$/,
+    "批 15（D15-3）：stop 产墓碑 digest")
+  assert.equal(sessS.terminated, 1, "terminated 计数照旧（T-AP1d 旧断言保留）")
+  assert.equal(sessS.requiresReport, false, "墓碑 ⇒ requiresReport=false")
   cleanupConsult(hS)
 
   // stop（resolve 形态）：子代理以 resolve（stopReason=aborted）结束 → 同样进消费面
@@ -270,9 +297,9 @@ test("T-AP1d (AC-AP1): consult 家族 {timeout, stop, cancel, unknown} 四构造
   const { id: idR2, ctrl: ctrlR2 } = await consultStart(hR2)
   stopConsultSession(hR2.state, idR2, 1)
   await waitFor(() => ctrlR2.signal.aborted)
-  const rR2 = await checkConsultSession(hR2.state, idR2, undefined)
-  assert.equal(String(rR2.reply), "child ended: aborted · abort(stop@agent: stop requested)",
-    "resolve 形态的早停同样经消费面自证来源：" + String(rR2.reply))
+  const dR2 = await consultDigestOf(hR2.state, idR2)
+  assert.match(dR2, /^child ended: aborted · abort\(stop@agent: stop requested\)$/m,
+    "resolve 形态的早停同样经消费面自证来源：" + dR2.split("\n").slice(-3).join(" / "))
   cleanupConsult(hR2)
 
   // cancel：session 销毁（宿主结算面 → layer **settle**，批 6 修复轮审计 #3）
@@ -284,20 +311,20 @@ test("T-AP1d (AC-AP1): consult 家族 {timeout, stop, cancel, unknown} 四构造
     "销毁写点载荷（宿主结算面 → settle，不是 agent）")
   await waitFor(() => (sessC.terminated ?? 0) === 1, 3000)
   // ⚠ **如实登记：本面不可经消费面观测**——`cleanupConsultSessions` 尾部
-  // `state.consultSessions.clear()` 由宿主销毁路径摘除会话，`consult_check` 之后只回
-  // `unknown consult id`。故这里只断言「结算载荷确实按 cancel@settle 合成」（读会话自身的
-  // 队列，非手搓等价物）。该面仍值得保留：abort 照常发生、载荷照常合成，任何未来的终态回显
-  // 消费者（墓碑最小形态 A-1）直接可读；写点载荷本身也仍可观测（上一行 abortTag）。
+  // `state.consultSessions.clear()` 由宿主销毁路径摘除会话，且批 15（R-9）显式裁定
+  // **dispose 不强行造墓碑投递** ⇒ digest 无从合成（run 体返回 killed）。故这里只断言
+  // 「结算载荷确实按 cancel@settle 合成」（读会话自身的队列，非手搓等价物）。
   assert.equal(String(sessC.replies[0]?.reply ?? ""), "aborted · abort(cancel@settle: session disposed)",
     "结算载荷 = cancel@settle：" + String(sessC.replies[0]?.reply))
+  assert.equal(sessC.digest, null, "dispose 面不合成 digest（R-9 登记例外）")
   dropSession(hC.sid)
 
   // unknown：控制器以**无声样** reason 中止（显式 unknown，不静默回落）
   const hU = makeConsultDeps({})
   const { id: idU, ctrl: ctrlU } = await consultStart(hU)
   ctrlU.abort(new Error("mystery abort"))
-  const rU = await checkConsultSession(hU.state, idU, undefined)
-  assert.match(String(rU.reply), /abort\(unknown@agent: mystery abort\)/, String(rU.reply))
+  const dU = await consultDigestOf(hU.state, idU)
+  assert.match(dU, /abort\(unknown@agent: mystery abort\)/, dU)
   cleanupConsult(hU)
 })
 
@@ -508,18 +535,20 @@ test("T-AP1f (AC-AP1, 审计 #5): 未覆盖站点矩阵——codex settle 面 / 
 })
 
 test("T-AP1g (AC-AP1, 审计 #5): consult codex 面（ABORTED 信封带溯源 / 真 crash 逐字透传）", async () => {
-  // (a) codex 行 + ABORTED 信封（consult.mjs:179-180）：stop 路径 → 死亡行进**消费面**
+  // (a) codex 行 + ABORTED 信封：stop 路径 → 死亡行进**消费面**（批 15 起 = digest）
   const sidA = "ap-consult-codex-aborted-" + randomUUID()
   const stateA = sessionState(sidA)
+  const jA = consultJobs()
   const depsA = {
-    ctx: { subagents: { start: () => { throw new Error("dsh spawn must not run for a codex row") } } },
-    agent: { session: { id: sidA, header: { cwd: PLUGIN_DIR }, deriveMessages: () => [] }, options: {} },
+    ctx: { subagents: { start: () => { throw new Error("dsh spawn must not run for a codex row") } }, get: (svc) => (svc === "jobs" ? jA.jobs : null) },
+    agent: { session: { id: sidA, header: { cwd: mkdtempSync(join(tmpdir(), "ap-consult-cwd-")) }, deriveMessages: () => [] }, options: {} },
     config: {
       consultModels: [{ runner: { kind: "codex-cli", model: "m", executable: codexExe("consult-codex-abort") } }],
       codexCli: { executable: codexExe("consult-codex-abort-g") },
     },
     state: stateA, signal: undefined, persona: undefined,
     spawn: codexHangSpawn(), platform: "linux", env: CODEX_ENV,
+    dshHome: mkdtempSync(join(tmpdir(), "ap-consult-home-")),
   }
   try {
     const s = await startConsultSession(depsA, "problem", undefined)
@@ -527,31 +556,33 @@ test("T-AP1g (AC-AP1, 审计 #5): consult codex 面（ABORTED 信封带溯源 / 
     const ctrlA = stateA.consultSessions.get(s.id).controllers[0]
     assert.equal(ctrlA.signal.aborted, false, "子代理已启动且尚未中止")
     stopConsultSession(stateA, s.id, 1)
-    const rA = await checkConsultSession(stateA, s.id, undefined)
-    assert.equal(String(rA.reply), "aborted · abort(stop@agent: stop requested)",
-      "codex 面的中止行经消费面自证来源：" + String(rA.reply))
+    const dA = await consultDigestOf(stateA, s.id)
+    assert.match(dA, /^aborted · abort\(stop@agent: stop requested\)$/m,
+      "codex 面的中止行经消费面自证来源：" + dA.split("\n").slice(-3).join(" / "))
   } finally { cleanupConsultSessions(stateA); dropSession(sidA) }
 
-  // (b) codex 面**真 crash**（consult.mjs:185）：逐字透传、无 abort 后缀（AC-AP5 口径）
+  // (b) codex 面**真 crash**：逐字透传、无 abort 后缀（AC-AP5 口径）
   const sidB = "ap-consult-codex-crash-" + randomUUID()
   const stateB = sessionState(sidB)
   const ctrlB = new AbortController()
+  const jB = consultJobs()
   const depsB = {
-    ctx: { subagents: { start: () => { throw new Error("dsh spawn must not run for a codex row") } } },
-    agent: { session: { id: sidB, header: { cwd: PLUGIN_DIR }, deriveMessages: () => [] }, options: {} },
+    ctx: { subagents: { start: () => { throw new Error("dsh spawn must not run for a codex row") } }, get: (svc) => (svc === "jobs" ? jB.jobs : null) },
+    agent: { session: { id: sidB, header: { cwd: mkdtempSync(join(tmpdir(), "ap-consult-cwd-")) }, deriveMessages: () => [] }, options: {} },
     config: {
       consultModels: [{ runner: { kind: "codex-cli", model: "m", executable: codexExe("consult-codex-crash") } }],
       codexCli: { executable: codexExe("consult-codex-crash-g") },
     },
     state: stateB, signal: undefined, persona: undefined,
     spawn: codexThrowSpawn(ctrlB), platform: "linux", env: CODEX_ENV,
+    dshHome: mkdtempSync(join(tmpdir(), "ap-consult-home-")),
   }
   try {
     const sB = await startConsultSession(depsB, "problem", undefined)
-    const rB = await checkConsultSession(stateB, sB.id, undefined)
-    assert.match(String(rB.reply), /consultation failed: codex-cli error: codex plumbing exploded\)$/,
-      "codex 面真 crash 逐字透传：" + String(rB.reply))
-    assert.ok(!String(rB.reply).includes("abort("), "非中止错误不得带 abort 后缀：" + String(rB.reply))
+    const dB = await consultDigestOf(stateB, sB.id)
+    assert.match(dB, /consultation failed: codex-cli error: codex plumbing exploded\)$/,
+      "codex 面真 crash 逐字透传：" + dB.split("\n").slice(-3).join(" / "))
+    assert.ok(!dB.includes("abort("), "非中止错误不得带 abort 后缀：" + dB.split("\n").slice(-3).join(" / "))
   } finally { cleanupConsultSessions(stateB); dropSession(sidB) }
 })
 
@@ -577,10 +608,11 @@ test("T-AP2 (AC-AP2): 四家族既有死亡文案前缀逐字保留——溯源�
   const h = makeConsultDeps({})
   const { id, ctrl } = await consultStart(h)
   ctrl.abort(new Error("mystery abort"))
-  const r = await checkConsultSession(h.state, id, undefined)
-  assert.ok(String(r.reply).startsWith("(consultation failed: child ended: aborted"), String(r.reply))
-  assert.equal(String(r.reply).split(" · abort(")[0], "(consultation failed: child ended: aborted")
-  assert.ok(String(r.reply).endsWith(")"), "结算包壳仍在尾部（只追加、未替换）")
+  const d = await consultDigestOf(h.state, id)
+  const replyLine = d.split("\n").find((l) => l.startsWith("(consultation failed:")) ?? ""
+  assert.ok(replyLine.startsWith("(consultation failed: child ended: aborted"), replyLine)
+  assert.equal(replyLine.split(" · abort(")[0], "(consultation failed: child ended: aborted")
+  assert.ok(replyLine.endsWith(")"), "结算包壳仍在尾部（只追加、未替换）")
   cleanupConsult(h)
 })
 
@@ -694,9 +726,9 @@ test("T-AP5a (AC-AP5): 子代理以 **resolve**（stopReason=aborted）结束 �
   const h = makeConsultDeps({ mode: "abort-resolve" })
   const { id, ctrl } = await consultStart(h)
   ctrl.abort(abortError(null, "agent", "job killed", "cancel"))
-  const r = await checkConsultSession(h.state, id, undefined)
-  assert.match(String(r.reply), /child ended: aborted/, "原 message 前缀保留")
-  assert.match(String(r.reply), /abort\(cancel@agent: job killed\)/, "resolve 形态同样自证来源：" + String(r.reply))
+  const d = await consultDigestOf(h.state, id)
+  assert.match(d, /child ended: aborted/, "原 message 前缀保留")
+  assert.match(d, /abort\(cancel@agent: job killed\)/, "resolve 形态同样自证来源：" + d.split("\n").slice(-3).join(" / "))
   cleanupConsult(h)
 })
 
@@ -731,17 +763,17 @@ test("T-AP5b (AC-AP5): crash 第五构造 → **无** abort 后缀 ∧ 原 messa
   // consult：crash 与「非中止的终止原因」都逐字
   const hR = makeConsultDeps({ mode: "crash" })
   const { id: idR, ctrl: ctrlR } = await consultStart(hR)
-  const rR = await checkConsultSession(hR.state, idR, undefined)
-  assert.match(String(rR.reply), /consultation failed: boom\)$/, String(rR.reply))
-  assert.ok(!String(rR.reply).includes("abort("), String(rR.reply))
+  const dR = await consultDigestOf(hR.state, idR)
+  assert.match(dR, /consultation failed: boom\)$/, dR.split("\n").slice(-3).join(" / "))
+  assert.ok(!dR.includes("abort("), dR.split("\n").slice(-3).join(" / "))
   ctrlR.abort()
   cleanupConsult(hR)
 
   const hE = makeConsultDeps({ mode: "resolve-error" })
   const { id: idE, ctrl: ctrlE } = await consultStart(hE)
-  const rE = await checkConsultSession(hE.state, idE, undefined)
-  assert.match(String(rE.reply), /child ended: error — boom/, String(rE.reply))
-  assert.ok(!String(rE.reply).includes("abort("), String(rE.reply))
+  const dE = await consultDigestOf(hE.state, idE)
+  assert.match(dE, /child ended: error — boom/, dE.split("\n").slice(-3).join(" / "))
+  assert.ok(!dE.includes("abort("), dE.split("\n").slice(-3).join(" / "))
   ctrlE.abort()
   cleanupConsult(hE)
 })
@@ -949,7 +981,10 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *      基线 `2e6ca8b` 时点**已存在**（`git ls-tree 2e6ca8b -- test` 含之）且自基线起零 diff ⇒
  *      **必须**逐档登记，否则锚 B 必红。**本清单自身住基线之后的档**（`death-provenance.test.mjs`
  *      由批 6 `a5f9551` 引入）⇒ 扩清单不触发锚 B
- *      （对照 `docs/test-lifecycle.md` §一 / `docs/2026-09-13-test-lifecycle-consult-minutes.md:26`）。
+ *      （**授权通道**的实际落点 = `docs/test-lifecycle.md` **§二「退役的合法路径」**——★ 批 15 修复轮同物种订正：
+ *      此处原写「§一」，而 §一 是通用三层判据表、**不含授权通道内容**；旁证 =
+ *      `docs/2026-09-13-test-lifecycle-consult-minutes.md:26`「授权通道存在：`AP_TEST_AUTHORIZED` 数组住在
+ *      `death-provenance.test.mjs`（**基线后档 ⇒ 可改**）」）。
  *   ③ `test/config-api.test.mjs` —— **批 10（D-31）**：该档是**基线档**（`2e6ca8b` 时点在册），
  *      U3c 把「未知顶层键 → note + `ok:true` + 静默丢弃」的**旧行为逐字编码成期望值**；D-31 取
  *      **报错**（`unknownTop` → `errors` ⇒ PUT 400 ⇒ 写盘前拦下），故期望值必须**翻转**——这是
@@ -957,8 +992,25 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *      决策 **D10-11**（U3c 走 `AP_TEST_AUTHORIZED` 授权通道，先例 = 批 9 的 ②）与 **J10-6**
  *      （取报错、否决回显）；同档**另加** D10-10 白名单一致性锁（`draftToPayload` 键集 ⊆
  *      `topAllowed`，与该档既有面同族）⇒ **本授权同时覆盖这两处改动**（设计档 §11.1 评审 #2）。
+ *   ④ `test/consult.test.mjs` —— **批 15（FR-1/FR-2：会诊结果的投递与消化）**：该档在基线
+ *      `2e6ca8b` 时点**已存在**（`git ls-tree -r 2e6ca8b -- test` 含之）且不在本清单内 ⇒ 任何
+ *      改动必红。本批把会诊从「三工具轮询协议」改成「**平台 job 投递 + digest 单一消费面**」：
+ *      `consult_check` 注册点与其 `waiters` 机制整体退役 ⇒ **该档的消费面从 `checkConsultSession`
+ *      改指 `composeConsultDigest` 合成的 digest**（设计档
+ *      `docs/2026-09-15-consult-delivery-design.md` §5.6 / §11.1；纪要 §2 **R-9**）。
+ *      **裁定引用**：用户 2026-09-15 的四项裁定「通知并停在必须汇报的断点 / 明确目标·无人值守·
+ *      明确授权时可不停 / 会诊结果默认落档可豁免 / 采纳 T-2（stop 产 digest + jobs 缺失拒发）」
+ *      （需求档首部「用户裁定（已定）」+ 纪要 §3 T-1…T-3）。
+ *      ★ **这不是「退役该档」**：档仍现役、锁仍活——其**存续理由**在本批被改写为「锁**平台 job 投递 +
+ *      digest 单一消费面**下的跨回合存活与有界终止」（**理由内联在此，不留悬空指针**）：会话不再「发起后靠
+ *      调用方回来轮询」，而是**包一个平台 job**（`dsh-tool-jobs`）并由平台 `onJobDone` 投递（忙时注入下一步 /
+ *      空闲开回合）；**唯一消费面 = digest**（`composeConsultDigest` 合成的字符串；`checkConsultSession` 与
+ *      `waiters` 已随本批退役）。而**理由正文的实际落点 = `docs/test-lifecycle.md` §三「逐档处置行」的
+ *      `consult.test.mjs` 行**。★ 修复轮审计 **F14**：此处原写「见 `docs/test-lifecycle.md` §一」——而 §一 是
+ *      **通用三层判据表、没有 consult 行** ⇒ 悬空指针（正是本批要治的 X-1 物种）；现改为**自含理由 + 指向真实落点**）；
+ *      §四 退役日志保持为空（T-LC3）——**本清单是「允许改」的通道，不是退役登记**。
  */
-const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs"]
+const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */
 const AP_BASELINE_SHA = "2e6ca8b"
 

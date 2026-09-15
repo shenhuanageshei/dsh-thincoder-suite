@@ -10,7 +10,7 @@
 | **advisor** 评审收敛 | `advisor` | 会终止、可对账、引用验真的多轮评审 |
 | **eng** 工程模式 | `eng` / `eng_coder` | design-before-code 双门禁工作流 |
 | **escalate** 飞刀 | `escalate` | 把任务交给更强的模型亲自写 |
-| **consult** 会诊 | `consult_start` / `consult_check` / `consult_stop` | 多模型并行只读会诊 |
+| **consult** 会诊 | `consult_start` / `consult_stop` | 多模型并行只读会诊 |
 
 > 本项目基于开源项目 [thincoder](https://gitee.com/shanghai-xinbo/thincoder) 移植改造（上游 MIT 协议），向 ThinCoder 贡献者致谢。
 
@@ -137,9 +137,13 @@ design-before-code 的运行时门禁：
 
 卡在同一个问题上反复失败、没有头绪时：
 
-1. `consult_start(problem)` —— 非阻塞发起：多个配置模型**并行独立**分析同一问题（只读），立即返回 consult id。brief 质量决定回复质量：症状 + 已试过的路 + 入口文件
-2. `consult_check(id, n)` —— 按到达顺序逐条读回复（n 从 1 递增）；回复是原始未采纳的，你自己验证取舍
-3. `consult_stop(id, n)` —— 某条回复够用了就提前终止剩余会诊，省 token
+1. `consult_start(problem)` —— 非阻塞发起：多个配置模型**并行独立**分析同一问题（只读），立即返回会诊 id + 后台 job 句柄
+2. **等自动投递** —— 会诊走平台 `jobs`（与 advisor / eng_coder / escalate 同形）：settle 时**你会在会话内被通知**（忙 ⇒ 注入下一个 step；空闲 ⇒ 自动开一个回合）。**不需要轮询，也不需要自己回来**
+3. `job_output` —— 完成通知只含一行指针，**先读全 digest**再判断：digest 逐条列出每个模型的原始回复、交付数与**有效数**、会话 id 与纪要落点
+4. 逐条处置（采纳 / 不采纳**附理由** / 待定）+ 写纪要裁定层 → **缺省停下向用户汇报**（三档显式豁免见 `lib/prompts/main.md`）
+5. `consult_stop(id, n)` —— 某条回复够用了就提前终止剩余会诊，省 token。**早停不再丢东西**：会话照产「墓碑 digest」（已收到的回复 + stop 死亡行）并照常投递
+
+> **纪要默认落档**：机制在 settle 时先写 `docs/consult-minutes/<date>-consult-<id>-minutes.md` 的 §0 汇总 + §1 原始层（**写盘先于 job complete** —— 投递成不成功，纪要都在盘上），§2–§5 的裁定层由主代理写。未消化的会诊会**拦住下一次 `consult_start`**（拒发并内联未消化的 digest）。
 
 会诊子代理可通过 `main_history` 工具回看主会话历史（60KB 预算，图片折叠为占位符）。
 

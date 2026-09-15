@@ -23,7 +23,7 @@ import { resolveAdvisorRoute, advisorGenerationOf, bumpAdvisorGeneration, sessio
   expiryLabel, renewDesignToken, TOKEN_TTL_DEFAULT_MS, tokenExpiryMs } from "../lib/advisor.mjs"
 import { normalizeDocPath, computeDocHash, sha256Hex } from "../lib/doc-hash.mjs"
 import { resolveSupportedEffort, resolveCodexRowEffort } from "../lib/effort-resolve.mjs"
-import { startConsultSession, checkConsultSession } from "../lib/consult.mjs"
+import { startConsultSession } from "../lib/consult.mjs"
 import { mergeGlobalConfig, saveUserConfig, loadUserConfig } from "../lib/config-store.mjs"
 import { validateGlobalUserConfig, warnDeprecatedTokenSecretEnvOnce, resetDeprecatedSecretEnvWarnForTests } from "../lib/index.mjs"
 import { runEscalate } from "../lib/escalate.mjs"
@@ -33,6 +33,31 @@ import { saveTokenRecord, resolveTokenStorePath } from "../lib/token-store.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// ————————————— 批 15（FR-1/FR-2）：consult 的派发与消费面 —————————————
+/**
+ * 假平台 jobs 服务。批 15 起 consult **必须**走 `jobs.start`（D15-4：jobs 缺失 ⇒ 拒发，
+ * 不回落同步）⇒ 原先 `ctx: {}` 的会诊用例必须注入它。平台契约（`dsh-jobs` 的 `JobStart`）：
+ * `start(spec)` 调 `spec.run()` 取 `{cancel, done}`，返回 branded string `<kind>-N`。
+ */
+function consultJobs() {
+  const specs = []
+  return {
+    specs,
+    jobs: { start(spec) { const hooks = spec.run(); specs.push({ spec, hooks }); return "consult-" + specs.length } },
+  }
+}
+/**
+ * 批 15（FR-2）：`checkConsultSession` + `waiters` 已退役 ⇒ **生产消费面 = digest**
+ * （`composeConsultDigest` 的产物；run 体在 job complete **之前**合成，见 §6.1 @post）。
+ */
+async function consultDigestOf(state, id, timeoutMs = 3000) {
+  const s = state.consultSessions.get(String(id))
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline && !s?.digest) await sleep(5)
+  assert.ok(s?.digest, "consult digest 必须在 " + timeoutMs + "ms 内 settle（实得 " + String(s?.digest) + "）")
+  return s.digest
+}
 
 // ————————————— 假子进程 —————————————
 // script(args) → { events: [{stream, data, delay}], exitCode, exitDelay, outText }
@@ -954,8 +979,10 @@ test("R1 effort(codex): catalog 未命中模型 / 目录不可得 / 未配 model
 
 test("R1 接线 consult dsh 行：effort 按行 provider/model 解析（agentOptions 收最近档）+ note 入回复尾部", async () => {
   const started = []
+  const j = consultJobs()
   const ctx = {
     llm: ladderLlm(["off", "high", "max"]),
+    get: (svc) => (svc === "jobs" ? j.jobs : null),
     subagents: {
       async start(_kind, req) {
         started.push(req)
@@ -967,14 +994,14 @@ test("R1 接线 consult dsh 行：effort 按行 provider/model 解析（agentOpt
   const state = sessionState(sid)
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
   const r = await startConsultSession(
-    { ctx, agent, config: { consultModels: [{ provider: "qax", model: "glm-5.3-flash", effort: "low" }] }, state },
+    { ctx, agent, config: { consultModels: [{ provider: "qax", model: "glm-5.3-flash", effort: "low" }] }, state, dshHome: mkdtempSync(join(tmpdir(), "b15-home-")) },
     "problem brief", undefined,
   )
-  const reply = await checkConsultSession(state, r.id)
+  const digest = await consultDigestOf(state, r.id)
   assert.equal(started.length, 1)
   assert.equal(started[0].agentOptions.reasoningEffort, "off", "low 对 [off,high,max] 序距离最近 = off")
-  assert.ok(reply.reply.includes("second opinion"))
-  assert.ok(reply.reply.includes("falling back to nearest supported effort"), "note 入回复尾部（主代理可见）")
+  assert.ok(digest.includes("second opinion"))
+  assert.ok(digest.includes("falling back to nearest supported effort"), "note 入回复尾部（主agent 可见）")
   dropSession(sid)
 })
 
@@ -983,17 +1010,19 @@ test("R1 接线 consult codex 行：effort 经 codex catalog 校验（argv 最�
   const sid = "r1-consult-codex"
   const state = sessionState(sid)
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
+  const j = consultJobs()
   const deps = {
-    ctx: {},
+    ctx: { get: (svc) => (svc === "jobs" ? j.jobs : null) },
     agent,
     config: { consultModels: [{ runner: { kind: "codex-cli", model: "m-cc", effort: "medium", executable: "t-cc-1" } }] },
     state, signal: undefined, spawn: cat.spawn, platform: "linux", env: {},
+    dshHome: mkdtempSync(join(tmpdir(), "b15-home-")),
   }
   const r = await startConsultSession(deps, "problem brief", undefined)
-  const reply = await checkConsultSession(state, r.id)
+  const digest = await consultDigestOf(state, r.id)
   assert.ok(cat.seenArgs().includes('model_reasoning_effort="high"'), "medium 对 [low,high] 等距向上 → high")
-  assert.ok(reply.reply.includes("codex opinion"))
-  assert.ok(reply.reply.includes("falling back to nearest supported effort"))
+  assert.ok(digest.includes("codex opinion"))
+  assert.ok(digest.includes("falling back to nearest supported effort"))
   dropSession(sid)
 })
 
@@ -1945,8 +1974,10 @@ test("R2 D-22: cleanCwdRoot 死旋钮删除——clean-cwd 一律一次性临时
 
 test("R2 D-22: consult 子代理 run 补 dispose（回复 settle 后释放，不泄漏到进程生命周期）", async () => {
   const disposed = []
+  const j = consultJobs()
   const ctx = {
     llm: ladderLlm(["low"]),
+    get: (svc) => (svc === "jobs" ? j.jobs : null),
     subagents: {
       async start() {
         return {
@@ -1960,11 +1991,11 @@ test("R2 D-22: consult 子代理 run 补 dispose（回复 settle 后释放，不
   const state = sessionState(sid)
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
   const r = await startConsultSession(
-    { ctx, agent, config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "low" }] }, state },
+    { ctx, agent, config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "low" }] }, state, dshHome: mkdtempSync(join(tmpdir(), "b15-home-")) },
     "problem brief", undefined,
   )
-  const reply = await checkConsultSession(state, r.id)
-  assert.ok(reply.reply.includes("second opinion"))
+  const digest = await consultDigestOf(state, r.id)
+  assert.ok(digest.includes("second opinion"))
   await sleep(30) // finally 内 dispose 异步执行（settle 唤醒后的收尾）
   assert.equal(disposed.length, 1, "子代理 run 被 dispose（D-22）")
   dropSession(sid)
@@ -2152,17 +2183,19 @@ test("R2 D-02 遗留: consult codex 行 row.effort 接通（row.effort → resol
   const sid = "r2-consult-roweff"
   const state = sessionState(sid)
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
+  const j = consultJobs()
   const deps = {
-    ctx: {},
+    ctx: { get: (svc) => (svc === "jobs" ? j.jobs : null) },
     agent,
     config: { consultModels: [{ runner: { kind: "codex-cli", model: "m-cc2", executable: "t-cc2-1" }, effort: "medium" }] },
     state, signal: undefined, spawn: cat.spawn, platform: "linux", env: {},
+    dshHome: mkdtempSync(join(tmpdir(), "b15-home-")),
   }
   const r = await startConsultSession(deps, "problem brief", undefined)
-  const reply = await checkConsultSession(state, r.id)
+  const digest = await consultDigestOf(state, r.id)
   assert.ok(cat.seenArgs().includes('model_reasoning_effort="high"'), "row.effort=medium 经目录校验回落 high（此前 row.effort 是死配置）")
-  assert.ok(reply.reply.includes("codex opinion via row effort"))
-  assert.ok(reply.reply.includes("falling back to nearest supported effort"), "回落 note 入回复")
+  assert.ok(digest.includes("codex opinion via row effort"))
+  assert.ok(digest.includes("falling back to nearest supported effort"), "回落 note 入回复")
   dropSession(sid)
 })
 
@@ -2171,14 +2204,16 @@ test("R2 D-02 遗留: consult codex 行 runner.effort 优先于 row.effort（优
   const sid = "r2-consult-roweff2"
   const state = sessionState(sid)
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
+  const j = consultJobs()
   const deps = {
-    ctx: {},
+    ctx: { get: (svc) => (svc === "jobs" ? j.jobs : null) },
     agent,
     config: { consultModels: [{ runner: { kind: "codex-cli", model: "m-cc3", effort: "low", executable: "t-cc3-1" }, effort: "medium" }] },
     state, signal: undefined, spawn: cat.spawn, platform: "linux", env: {},
+    dshHome: mkdtempSync(join(tmpdir(), "b15-home-")),
   }
   const r = await startConsultSession(deps, "problem brief", undefined)
-  await checkConsultSession(state, r.id)
+  await consultDigestOf(state, r.id)
   assert.ok(cat.seenArgs().includes('model_reasoning_effort="low"'), "runner.effort=low 优先（row.effort=medium 不覆盖）")
   dropSession(sid)
 })
