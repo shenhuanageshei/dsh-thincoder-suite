@@ -771,7 +771,16 @@ test("T-G9 (AC-G9): zero-change static anchors — cap text verbatim, constant u
       { cwd: PLUGIN_DIR, encoding: "utf8" }).trim()
   } catch (e) {
     if (e?.code === "ENOENT") gitOut = null // 无 git 的机器：跳过该锚（其余锚仍生效）
-    else throw e
+    // 批 13（R-4a）：git **已安装但不在仓库内** ⇒ `code = undefined`、`status = 128`（实测），
+    // 上行 ENOENT 判据挡不住 ⇒ 无 `.git` 的副本里本用例转红。镜像锚 B：warn + skip。
+    // ★ 批 13 修复轮（D13-19）：**必须同时匹配 stderr**——同 status 下还有
+    // `fatal: bad object <sha>`（浅克隆里真实存在）与 `fatal: path '…' does not exist in 'HEAD'`
+    // 两种真故障；只看 status 会把它们降级成「静默 warn」⇒ 落到下面的 `throw e`。
+    else if (e?.status === 128 && /not a git repository/.test(String(e?.stderr ?? ""))) {
+      console.warn("[thincoder-suite] T-G9 历史事实锚跳过：不在 git 仓库内（"
+        + (e?.stderr ?? e?.message ?? e) + "）")
+      gitOut = null
+    } else throw e
   }
   if (gitOut !== null) assert.equal(gitOut, "", "批 4 交付提交不得触及 eng.mjs / prompts 面（历史事实锚）")
 })

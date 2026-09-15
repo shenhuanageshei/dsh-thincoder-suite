@@ -167,9 +167,9 @@ pnpm add link:<克隆路径>/dsh-thincoder-suite
 | **user 层** | `$DSH_HOME/.thincoder/config.json`（`.config` 字段） | **DSH 设置面板 →「Thincoder」页**（也可手编 JSON） | **保存即生效**（评审/工具每次调用时读取合并） |
 
 生效全局 = user 层（字段级覆盖 base）⊕ base；user 层缺失/损坏 → 回落 base。user 层可配字段白名单：
-`advisor.round1/convergence` 组（provider/model/effort/timeoutMs）、`advisor.includeProjectGuide`、
-`advisor.maxOutputTokens`、`consultModels`（整体替换）、`engCoderMaxTokens`、`engCoderEffort`、
-`codexCli`、`dshBackgroundTimeoutMs`、`consultTimeoutMs`、`engTokenTtlMs`——其余字段（`engineering` 等）
+`advisor.round1/convergence` 组（provider/model/effort/timeoutMs/runner）、`advisor.includeProjectGuide`、`advisor.maxOutputTokens`、
+`advisor.contextTokens`、`advisor.standardsDoc`、`advisor.documentMapDoc`、`advisor.criteriaDoc`、`consultModels`（整体替换）、
+`engCoderMaxTokens`、`engCoderEffort`、`codexCli`、`dshBackgroundTimeoutMs`、`consultTimeoutMs`、`engTokenTtlMs`——其余字段（`engineering` 等）
 只在 base 配。文件示例：
 
 ```json

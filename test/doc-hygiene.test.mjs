@@ -6,6 +6,7 @@
 // 本档四项用例（顶层 `test(` 数 = 4，台账 docs/test-lifecycle.md §三 同数）：
 //   ① U+FFFD 全仓扫描（锚 V13）
 //   ② 常设档 canary（锚 V14）+ 规范层形状与纪律（锚 V1/V2/V3/V4——按 §6.4 的「并入既有 test() 块」）
+//      + **登记完备（批 13 / R-25 / AC-14·AC-15 / 锚 V8——同走「并入既有块」，故顶层 test() 数仍为 4）**
 //   ③ 批 11 新文本六串负向（锚 V5）+ 正向锚与划界（锚 V10 / V11② / V12②/③）
 //   ④ 失败后缀块与出口边界（锚 V6 / V7 / V8）
 //
@@ -111,7 +112,26 @@ function canaryViolations(docs, loader = read) {
   return bad
 }
 
-test("DOC-HYGIENE T2（锚 V14 + V1/V2/V3/V4）: 常设档 canary（防截断为 1 行）+ 规范层零状态句", () => {
+/** 登记完备性（批 13 / R-25 / AC-14 · AC-15 · 锚 V8）：`docs/` 顶层 `*.md`（**非递归**；例外
+ *  **恰一条** = 登记簿自身 `README.md`）必须全部以 `](name.md)` 的链接形态出现在 `docs/README.md`
+ *  的**全文**里。
+ *  ★ 口径一：must 扫**全文**——`handoff.md` 走「## 交接」bullet，**不在**两张表内 ⇒ 只解析两张表
+ *    会**误报**。
+ *  ★ 口径二：只认**纯文件名链接形态** `](name.md)`——带锚点/后缀的形态（如 `](x.md#sec)`）
+ *    **不计**为已登记（今日域内无此形态 ⇒ 落地即绿；写明口径防将来假阴性）。
+ *  ★ 域 = `docs/` **顶层**：子目录（今日无；`viz/` 及未来子目录）**天然在域外**，无需例外条目。 */
+const unregisteredDocs = (readme, onDisk) =>
+  onDisk.filter((f) => f !== "README.md" && !readme.includes("](" + f + ")"))
+
+/** `docs/` 顶层 `*.md` 的 basename 清单（**非递归**）。 */
+function docsTopLevel() {
+  return readdirSync(join(PLUGIN_DIR, "docs"), { withFileTypes: true })
+    .filter((e) => e.isFile() && extname(e.name) === ".md")
+    .map((e) => e.name)
+    .sort()
+}
+
+test("DOC-HYGIENE T2（锚 V14 + V1/V2/V3/V4 + 批 13 R-25 登记完备）: 常设档 canary（防截断为 1 行）+ 规范层零状态句 + 登记完备", () => {
   // —— V14 谓词自证：截断为 1 行的档**必须**被判违规（否则 canary 是恒真锁） ——
   const truncated = STANDARDS_DOC + "\n"
   assert.ok(canaryViolations([[STANDARDS_DOC, CANARY[0][1]]], () => truncated).length > 0,
@@ -166,6 +186,25 @@ test("DOC-HYGIENE T2（锚 V14 + V1/V2/V3/V4）: 常设档 canary（防截断为
   for (const phrase of ["每个机制只在**一处**详述", "新建文档必须登记到"]) {
     assert.equal(whole.split(phrase).length - 1, 0, "V4③：原 :32/:33 的短语必须已归并（不再含：" + phrase + "）")
   }
+
+  // —— 批 13（R-25 / AC-14 · AC-15 · 锚 V8）：登记完备谓词（**并入本既有块**，不新开顶层 test()） ——
+  const docsOnDisk = docsTopLevel()
+  assert.ok(docsOnDisk.length >= 40, "域非空（docs/ 顶层 *.md 实测 " + docsOnDisk.length + " 档）")
+  assert.ok(docsOnDisk.includes("README.md"), "登记簿自身在域内（例外恰一条 = 它自己）")
+  // 谓词自证（律 3——防「恒真锁」）：① 注入合成未登记名 ⇒ 必红；② 空登记簿 ⇒ 必红
+  assert.deepEqual(unregisteredDocs("whatever", ["README.md", "synth-unregistered.md"]), ["synth-unregistered.md"],
+    "谓词自证①：域内注入合成未登记名 ⇒ 必判违规")
+  assert.deepEqual(unregisteredDocs("", ["README.md", "x.md"]), ["x.md"],
+    "谓词自证②：空登记簿 ⇒ 域内每一档都判违规")
+  // 阴性对照（防「恒红」）：README 全文里出现该档的纯文件名链接 ⇒ 判已登记
+  assert.deepEqual(unregisteredDocs("see ](x.md) here", ["README.md", "x.md"]), [],
+    "阴性对照：含 `](x.md)` ⇒ 判已登记（谓词不是恒红）")
+  // 口径二自证：带锚点/后缀的链接形态**不计**为已登记
+  assert.deepEqual(unregisteredDocs("see ](x.md#sec) here", ["README.md", "x.md"]), ["x.md"],
+    "口径：`](x.md#sec)` 这种带锚点形态不计为已登记")
+  // 事实底座（AC-14「落地即绿」）：域 \ {README} 全部已登记 ⇒ 零追加豁免
+  assert.deepEqual(unregisteredDocs(readme, docsOnDisk), [],
+    "AC-14：docs/ 顶层每个 basename 必须已登记在 docs/README.md 全文里（新建文档漏登记 ⇒ 本断言红）")
 })
 
 // ═══════════════ ③ 六串负向（V5）+ 正向锚与划界（V10/V11②/V12②③） ═══════════════

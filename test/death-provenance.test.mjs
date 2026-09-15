@@ -879,6 +879,23 @@ test("T-AP7 (AC-AP7): `grep '\\\\.abort()' lib/` 零命中 + 写点数不增 + �
       head = execFileSync("git", ["show", "HEAD:lib/" + f], { cwd: PLUGIN_DIR, encoding: "utf8" })
     } catch (e) {
       if (e?.code === "ENOENT") break // 无 git 的机器：跳过交叉核验（字面锚仍生效）
+      // 批 13（R-4a）：git **已安装但不在仓库内** ⇒ `code = undefined`、`status = 128`（实测），
+      // 上一行的 ENOENT 判据挡不住 ⇒ 无 `.git` 的副本里本用例转红。镜像锚 B 的容忍形态：
+      // warn + skip。首轮即断 ⇒ headChecked 仍为 0 ⇒ 保住下方「全跑或全跳」不变式。
+      //
+      // ★ 批 13 修复轮（D13-19）：**`status === 128` 不足以判定「不在仓库内」**——实测同一 status
+      // 下有三种 stderr，必须**同时匹配 stderr** 才容忍：
+      //   ① `fatal: not a git repository …`   = 真的不在仓库内（环境问题）⇒ 容忍（本分支）
+      //   ② `fatal: path '…' does not exist in 'HEAD'` = **在仓库内但该 path 在该 revision 不存在**
+      //      ⇒ 真回归（例如新增的 lib 档尚未提交时，本锚失去交叉核验对象）
+      //   ③ `fatal: bad object <sha>`          = **浅克隆里真实存在** ⇒ 真故障
+      // ② 原本是**红的**：只看 status 会把它降级成「静默 warn」，比本条原问题更糟 ⇒ ②③ 一并
+      // 落到下面的 `throw e`（「其余错误仍 throw」对它们为真）。
+      if (e?.status === 128 && /not a git repository/.test(String(e?.stderr ?? ""))) {
+        console.warn("[thincoder-suite] T-AP7 交叉核验跳过：不在 git 仓库内（"
+          + (e?.stderr ?? e?.message ?? e) + "）")
+        break
+      }
       throw e
     }
     assert.deepEqual(timerArgExprs(head), TIMER_ARGS_PRE_BATCH6[f],
@@ -952,7 +969,19 @@ test("T-AP9 (AC-AP9): 既有测试零修改（持久锚：交付提交的历史�
     addingSha = execFileSync("git", ["log", "--diff-filter=A", "--format=%H", "-1", "--", AP_TEST_ADDED],
       { cwd: PLUGIN_DIR, encoding: "utf8" }).trim()
   } catch (e) {
-    if (e?.code !== "ENOENT") throw e
+    // 批 13（R-4a + D13-19）：ENOENT = 无 git；`status 128 + stderr「not a git repository」`
+    // = git 在但不在仓库内（实测 `code = undefined`）。**其余 128 一律 throw**——同 status 下还有
+    // `fatal: bad object <sha>`（浅克隆里真实存在）与 `fatal: path '…' does not exist in 'HEAD'`
+    // 两种真故障。本处语法是 `git log … -- <path>`（实测 path 缺失时 exit 0，不产 128），但容忍
+    // 谓词与 T-AP7 逐字同款，免得同族两处各自漂移。
+    if (e?.code === "ENOENT") {
+      // 无 git 的机器：addingSha 留空 ⇒ 走下方「锚 A 未激活」分支（该分支自带 console.warn）
+    } else if (e?.status === 128 && /not a git repository/.test(String(e?.stderr ?? ""))) {
+      console.warn("[thincoder-suite] T-AP9 锚 A 跳过：不在 git 仓库内（"
+        + (e?.stderr ?? e?.message ?? e) + "）")
+    } else {
+      throw e
+    }
   }
   if (addingSha !== "") {
     const changed = execFileSync("git", ["show", "--name-only", "--format=", addingSha, "--", "test"],
