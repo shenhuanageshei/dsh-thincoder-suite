@@ -11,7 +11,7 @@ process.env.DSH_HOME = ""
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { readdirSync, readFileSync, mkdtempSync } from "node:fs"
+import { readdirSync, readFileSync, mkdtempSync, rmSync } from "node:fs"
 import { EventEmitter } from "node:events"
 import { tmpdir } from "node:os"
 import { execFileSync } from "node:child_process"
@@ -1009,41 +1009,99 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *      `consult.test.mjs` 行**。★ 修复轮审计 **F14**：此处原写「见 `docs/test-lifecycle.md` §一」——而 §一 是
  *      **通用三层判据表、没有 consult 行** ⇒ 悬空指针（正是本批要治的 X-1 物种）；现改为**自含理由 + 指向真实落点**）；
  *      §四 退役日志保持为空（T-LC3）——**本清单是「允许改」的通道，不是退役登记**。
+ *   ⑤ `test/advisor-config.test.mjs` —— **批 14：默认值锁翻转**：该档是**基线档**（`2e6ca8b`
+ *      时点在册）且不在本清单内 ⇒ 任何改动必红。批 14 把 `engCoderEffort` 的默认值与回落目标
+ *      改为**同源常量 `ENG_CODER_EFFORT_DEFAULT`（值 `medium`）**——T18 里两处**逐字编码旧值
+ *      `"low"`** 的断言（默认值腿 + 非法值回落腿）必须随之翻转成 `"medium"`，否则新默认值
+ *      一落地该档即红。**裁定引用**：批 14 设计档
+ *      `docs/2026-09-15-config-surface-design.md` §5.1 / §11.1 / §11.4（FR-0 授权仪式 =
+ *      本批最先做的 stage 0）+ 需求档 N-3「锁面变更必须显式声明」+ 会诊纪要 §2 **R-1**
+ *      （改默认值 `medium`，枚举依据：`low` 是唯一在非退化支持集上会静默落到 `off` 的档）
+ *      与 **R-8**（本行是**纯追加**，不重写整行）。
+ *      ★ **这不是「退役该档」**：档仍现役、锁仍活——它锁的是**默认值与回落目标的值**，
+ *      本批只把该值从 `low` 翻到 `medium`，**两条断言的形态一字未改**。
  */
-const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs"]
+const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */
 const AP_BASELINE_SHA = "2e6ca8b"
 
-test("T-AP9 (AC-AP9): 既有测试零修改（持久锚：交付提交的历史事实 + 固定基线的 diff）+ deathLine 幂等与 ≤300 边界", () => {
-  // —— 锚 A：**历史事实**（提交后自动激活；未提交时如实报「未激活」，不静默假装通过）——
+// ————————————— 锚 A 的 git 取数（批 14 / FR-3 · D14-9：两个分支各打**各的**准确话） —————————————
+/** 「无 git ⇒ 锚 A 不可判定」——**ENOENT 分支**的准确话（该分支的 `addingSha` 为空是**环境**所致，
+ *  不是「本批新增档尚未提交」；在无 git 的机器上后者是无意义的）。 */
+const ANCHOR_A_NO_GIT_MSG = "[thincoder-suite] T-AP9 锚 A 不可判定：本机无 git（ENOENT）"
+  + "——不产历史提交可比对；本锚断言的是**历史**，不是工作树"
+/** 「锚 A 未激活」——只在 **git 可用但 `addingSha` 取不到**时才是**真的**（D14-9）。 */
+const ANCHOR_A_NOT_ACTIVE_MSG = "[thincoder-suite] T-AP9 锚 A 未激活：本批新增档尚未提交（无历史提交可锚）"
+  + "——提交后自动生效；本锚断言的是**历史**，不是工作树"
+
+/**
+ * 取「引入 `AP_TEST_ADDED` 的那个提交」的 sha（锚 A 的取数腿）。
+ *
+ * @returns `{ addingSha, notRepo }`
+ *   - `addingSha` = 提交 sha（取不到 ⇒ `""`）；
+ *   - `notRepo`   = **旗标**：`true` ⇔ **本次失败属于「git 不可用/不是仓库」**——此时
+ *     「尚未提交」这句话是**假的**，调用方**不得**再打它（批 14 / FR-3 / **D14-9**）。
+ *     **两个分支都置位**：ENOENT（无 git）**与** 128+「not a git repository」（git 在但不在仓库内）。
+ * @post 其余错误**仍原样 `throw`**（同 status 下还有 `fatal: bad object <sha>`（浅克隆里真实存在）
+ *       与 `fatal: your current branch … does not have any commits yet` 这类**真故障/未提交态**
+ *       ⇒ **不得**被当成「跳过」）。
+ * @param {Function} [runGit] — **测试注入缝**（缺省 = 真 `execFileSync`）。存在的理由只有一个：
+ *       「**git 可用但取不到 sha**」这条路径在仓内**没有环境触发器**（本仓永远是可用且有提交的
+ *       git 仓库），而 D14-9 要求为它配一条**正控**（证明那句 `else` 没被误关）。注入缝让正控腿
+ *       能把**真子进程**的真实形态喂进来（含 `{ encoding: "utf8", env: {...} }` 选项的透传），
+ *       而不是假造一个错误对象——后者只能验「我猜的错误形状」，前者验的是真 git 的真形状。
+ *       ★ **生产路径不传第二个参数**（见 `reportAnchorA()`）⇒ 缺省即真 `execFileSync`。
+ */
+export function anchorAProvenance(runGit = execFileSync) {
   let addingSha = ""
+  let notRepo = false
   try {
-    addingSha = execFileSync("git", ["log", "--diff-filter=A", "--format=%H", "-1", "--", AP_TEST_ADDED],
+    addingSha = runGit("git", ["log", "--diff-filter=A", "--format=%H", "-1", "--", AP_TEST_ADDED],
       { cwd: PLUGIN_DIR, encoding: "utf8" }).trim()
   } catch (e) {
     // 批 13（R-4a + D13-19）：ENOENT = 无 git；`status 128 + stderr「not a git repository」`
-    // = git 在但不在仓库内（实测 `code = undefined`）。**其余 128 一律 throw**——同 status 下还有
-    // `fatal: bad object <sha>`（浅克隆里真实存在）与 `fatal: path '…' does not exist in 'HEAD'`
-    // 两种真故障。本处语法是 `git log … -- <path>`（实测 path 缺失时 exit 0，不产 128），但容忍
-    // 谓词与 T-AP7 逐字同款，免得同族两处各自漂移。
+    // = git 在但不在仓库内（实测 `code = undefined`）。其余一律 throw（见上 @post）。
     if (e?.code === "ENOENT") {
-      // 无 git 的机器：addingSha 留空 ⇒ 走下方「锚 A 未激活」分支（该分支自带 console.warn）
+      // ★ 批 14（D14-9）：无 git 的机器 ⇒ 打**本分支自己的**准确话，并**置旗标**
+      //   （此前它留空 addingSha 后落到「锚 A 未激活」分支，打出一句**无意义**的假警告）。
+      notRepo = true
+      console.warn(ANCHOR_A_NO_GIT_MSG)
     } else if (e?.status === 128 && /not a git repository/.test(String(e?.stderr ?? ""))) {
+      notRepo = true   // ★ 批 14（D14-9）：这一支**已有**自己的准确话（下方那句），旗标只用来**抑制第二句**
       console.warn("[thincoder-suite] T-AP9 锚 A 跳过：不在 git 仓库内（"
         + (e?.stderr ?? e?.message ?? e) + "）")
     } else {
       throw e
     }
   }
+  return { addingSha, notRepo }
+}
+
+/**
+ * 取数 + **报告**（T-AP9 锚 A 的完整两步；`@post` 把「打哪句话」的决定集中在这一处）。
+ * ★ 批 14（D14-9）：`else` 分支的抑制条件是 **`!notRepo`** ——「本批新增档尚未提交」那句
+ *   **只在 git 可用但取不到 sha 时**才成立；ENOENT 与 not-a-repo 两支各自打过自己的准确话。
+ * @pre  `addingSha` 取不到时，它为空串与「真取不到」无法区分 ⇒ 由 `notRepo` 旗标补足语义。
+ * @post 三种形态各打**恰好一句**且各不相同；**任何**情况下都不打第二句。
+ */
+export function reportAnchorA(runGit = execFileSync) {
+  const { addingSha, notRepo } = anchorAProvenance(runGit)
+  if (addingSha !== "") return { addingSha, notRepo }
+  if (!notRepo) console.warn(ANCHOR_A_NOT_ACTIVE_MSG)
+  return { addingSha, notRepo }
+}
+
+test("T-AP9 (AC-AP9): 既有测试零修改（持久锚：交付提交的历史事实 + 固定基线的 diff）+ deathLine 幂等与 ≤300 边界", () => {
+  // —— 锚 A：**历史事实**（提交后自动激活；未提交时如实报「未激活」，不静默假装通过）——
+  //    批 14（D14-9）：取数与「打哪句话」两步都在 reportAnchorA 里（两个分支各打各的准确话）
+  //    ⇒ 本用例不再自己复制那份决定逻辑（单一实现，免同族两处各自漂移）。
+  const { addingSha } = reportAnchorA()
   if (addingSha !== "") {
     const changed = execFileSync("git", ["show", "--name-only", "--format=", addingSha, "--", "test"],
       { cwd: PLUGIN_DIR, encoding: "utf8" }).trim().split("\n").map((s) => s.trim()).filter(Boolean)
     const extra = changed.filter((f) => f !== AP_TEST_ADDED && !AP_TEST_AUTHORIZED.includes(f))
     assert.deepEqual(extra, [],
       "引入提交 " + addingSha.slice(0, 7) + " 不得修改既有 test 文件（实测多出：" + extra.join(", ") + "）")
-  } else {
-    console.warn("[thincoder-suite] T-AP9 锚 A 未激活：本批新增档尚未提交（无历史提交可锚）"
-      + "——提交后自动生效；本锚断言的是**历史**，不是工作树")
   }
 
   // —— 锚 B：**基线时已存在的测试档，零修改**（授权例外之外）——
@@ -1087,4 +1145,92 @@ test("T-AP9 (AC-AP9): 既有测试零修改（持久锚：交付提交的历史�
   // 幂等（带标注）：同一错误反复合成得到同一行
   const tagged = annotateAbort(new Error("escalate (p:m) aborted."), construct.cancel(), "settle")
   assert.equal(deathLine(tagged), deathLine(tagged))
+})
+
+// ————————————— T-AP9b（批 14 / FR-3 · D14-9 / 锚 A6）：F8 两分支各打**各的**准确话 —————————————
+//
+// 病（批 13 审计 F8）：ENOENT（无 git）与 128+not-a-repo **都**留空 `addingSha` ⇒ 都落到
+// 「锚 A 未激活：本批新增档尚未提交」那句 —— 而在**无 git 的机器**上那句话是无意义的（它根本
+// 不是提交问题）。D14-9 的处置：**两个分支各打各的准确话**，那句留给「git 可用但取不到 sha」。
+//
+// ★ 三条腿**都走真子进程**（不假造错误对象）：`anchorAProvenance(runGit)` 的注入缝**只**用来
+//   把真 git 的**真形态**喂进来——腿 1 用真 `execFileSync` + 清空 PATH（真 ENOENT）；
+//   腿 2/正控用真 `execFileSync` + 真 `cwd`/真 `env`（真 128 / 真「退 0 且无输出」）。
+//   代码路径只认这些真实形状（`e.code==="ENOENT"` / `e.status===128` + stderr 谓词 / 正常返回）。
+//   腿 1 = 真无 git ⇒ 必须打新写的「无 git ⇒ 锚 A 不可判定」；
+//   腿 2 = 真 git 在但不在仓库内 ⇒ **维持既有的准确话**，且**不叠**第二句；
+//   正控 = 真 git 退 0 且**无输出**（`git show` 一个不存在于 HEAD 的路径）⇒ 合法的「取不到 sha」
+//          ⇒ 那句**必须**出现（本仓永远有提交，故这条路径**无现成触发器**，只能这样构造）。
+test("T-AP9b (批 14 / FR-3 / 锚 A6): ENOENT 与 not-a-repo 两分支各打各的准确话（都不得打「尚未提交」假话）；git 可用但取不到 sha 时那句必须仍在", () => {
+  const M = join(PLUGIN_DIR, "test", "death-provenance.test.mjs")
+  const saved = process.env.PATH
+  const temps = []
+  const run = (runGit) => {
+    const warns = [], errs = []
+    const ow = console.warn, oe = console.error
+    console.warn = (...a) => warns.push(a.map(String).join(" "))
+    console.error = (...a) => errs.push(a.map(String).join(" "))
+    try { return { r: reportAnchorA(runGit), warns, errs } }
+    finally { console.warn = ow; console.error = oe }
+  }
+  try {
+    // —— 腿 1：无 git（真 ENOENT：清空 PATH 后真 execFileSync 起不了子进程）——
+    process.env.PATH = ""
+    const noGit = run()
+    assert.equal(noGit.r.addingSha, "", "无 git ⇒ addingSha 取不到")
+    assert.equal(noGit.r.notRepo, true, "★ ENOENT 分支必须置旗标（D14-9：两分支都置位）")
+    assert.ok(noGit.warns.some((w) => w.includes("锚 A 不可判定")),
+      "ENOENT 必须打**新写的准确那句**（无 git ⇒ 锚 A 不可判定）: " + JSON.stringify(noGit.warns))
+    assert.ok(!noGit.warns.some((w) => w.includes("本批新增档尚未提交")),
+      "★ 腿 1 不得打「本批新增档尚未提交」（在无 git 的机器上它是假话）: " + JSON.stringify(noGit.warns))
+
+    // —— 腿 2：git 在但不在仓库内（真 128 + 真 stderr「not a git repository」）——
+    process.env.PATH = saved
+    const outside = mkdtempSync(join(tmpdir(), "thincoder-outside-"))
+    temps.push(outside)
+    const gitAt = (cwd) => (cmd, args, opts) => execFileSync(cmd, args, { ...opts, cwd })
+    const notRepo = run(gitAt(outside))
+    assert.equal(notRepo.r.addingSha, "", "不在仓库内 ⇒ addingSha 取不到")
+    assert.equal(notRepo.r.notRepo, true, "★ 128+not-a-repo 分支也必须置旗标")
+    assert.ok(notRepo.warns.some((w) => w.includes("锚 A 跳过：不在 git 仓库内")),
+      "128 分支维持既有的准确那句（`:980`）: " + JSON.stringify(notRepo.warns))
+    assert.ok(!notRepo.warns.some((w) => w.includes("本批新增档尚未提交")),
+      "★ 腿 2 也不得叠「本批新增档尚未提交」（它已先打过准确的那句）: " + JSON.stringify(notRepo.warns))
+    assert.ok(!notRepo.warns.some((w) => w.includes("锚 A 不可判定")), "腿 2 不得打 ENOENT 的那句（两分支各打各的）")
+
+    // —— 正控：**git 可用但取不到 sha**（真 git 退 0 且无输出）⇒ 那句**必须**出现 ——
+    //    `git show --name-only --format= <path外的路径>` 在真仓里退出 0 且无输出——用它造
+    //    「真 git、真退 0、真空结果」的合法形态（证明 `:992` 的 else 没被误关）。
+    const emptyOut = (cmd, args, opts) => execFileSync(cmd, ["show", "--name-only", "--format=", "HEAD", "--", "docs/__no_such_path__"], { ...opts, cwd: PLUGIN_DIR })
+    const ctl = run(emptyOut)
+    assert.equal(ctl.r.addingSha, "", "正控前提：取不到 sha")
+    assert.equal(ctl.r.notRepo, false, "★ 正控：git 可用 ⇒ 旗标必须为 false（D14-9 的分叉点）")
+    assert.ok(ctl.warns.some((w) => w.includes("本批新增档尚未提交")),
+      "★ 正控：git 可用但 `addingSha` 取不到 ⇒ 「锚 A 未激活」那句**必须**出现（证明 `:992` 没被误关）: " + JSON.stringify(ctl.warns))
+    assert.ok(!ctl.warns.some((w) => w.includes("锚 A 不可判定")), "正控不得打 ENOENT 的那句")
+
+    // —— 其余错误仍 `throw`（真故障不得被静默吞掉）——
+    // ① 空仓库形态（真 git：`git init` 后无提交）⇒ 128 + 「does not have any commits yet」
+    //    **不是** not-a-repo ⇒ 必须原样 throw（那是真故障/未提交态，不是「跳过」）
+    const emptyRepo = mkdtempSync(join(tmpdir(), "thincoder-emptyrepo-"))
+    temps.push(emptyRepo)
+    execFileSync("git", ["init"], { cwd: emptyRepo, encoding: "utf8" })
+    assert.throws(() => run(gitAt(emptyRepo)), /does not have any commits yet/,
+      "★ 「git 可用但尚无提交」必须 throw（真故障不得被静默吞掉）")
+    // ② `fatal: bad object` 同样必须 throw（浅克隆里真实存在）
+    const badObject = (cmd, args, opts) => execFileSync(cmd, ["show", "--name-only", "--format=", "0".repeat(40), "--", "test"], { ...opts, cwd: PLUGIN_DIR })
+    assert.throws(() => run(badObject), /bad object|unknown revision|ambiguous argument/,
+      "`fatal: bad object` 类真故障必须 throw（不得命中「跳过」谓词）")
+
+    // —— 源码形态锁：else 分支的**抑制条件**必须是 `!notRepo`（改回无条件 ⇒ 红灯）——
+    const src = readFileSync(M, "utf8")
+    assert.ok(src.includes("} else if (!notRepo) {"),
+      "★ `:992` 的 else 必须据旗标跳过（只在 git 可用但取不到 sha 时触发）")
+    const elseIdx = src.indexOf("} else if (!notRepo) {")
+    assert.ok(src.slice(elseIdx, elseIdx + 400).includes("ANCHOR_A_NOT_ACTIVE_MSG"),
+      "该 else 分支的内容必须仍是「锚 A 未激活」那句（D14-9：那句留给 git 可用但取不到 sha 的情形）")
+  } finally {
+    process.env.PATH = saved
+    for (const d of temps) { try { rmSync(d, { recursive: true, force: true }) } catch { /* best effort */ } }
+  }
 })

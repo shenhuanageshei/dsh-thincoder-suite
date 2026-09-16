@@ -244,9 +244,14 @@ flowchart LR
  * @post  返回**去重后的集合**；**绝不返回空集后继续比对**（调用方须先 assert 非空）
  *        三级过滤：段级（先切「user 层可配」段）→ EOL 归一 → 行级（按标记剥离）
  */
-function extractDocKeys(block) {
-  const seg = sliceUserLayerSegment(block)                  // ★ 段级：先切段（尾部反引号项规避）
-  const lines = seg.split(/\r?\n/)                          // ★ EOL 归一（README 是 CRLF）
+function sliceUserLayerSegment(src, format) {   // ★ 段级切分是独立函数（订正见上）
+  return /* 命中「用户层可配」段 ⇒ 返回该段文本；未命中 ⇒ null */ null
+}
+function extractDocKeys(block) {                // ★ 入参 = **已切出的段**（非整档）
+  if (typeof block !== "string" || block.length === 0) {
+    assert.ok(false, "白名单段必须可定位（空段 ⇒ 提取器必然空转 ⇒ 恒真）")   // ★ 入口非空断言
+  }
+  const lines = block.split(/\r?\n/)                          // ★ EOL 归一（README 是 CRLF）
   const out = []
   for (const raw of lines) {
     const mark = splitAtMarker(raw)                         // ★ 先切排除子句（「其余字段」「base 专属」「以及 …」）
@@ -342,7 +347,7 @@ if (budgetCap >= PLATFORM_WALL_CLOCK_MS) {
 
 > **★ 两条「锚自身的自证腿」**（防恒真——**批 15 的教训**）：
 > - **A3 的负控**：把一个键名从 `patch.yml` 的块里**删掉** ⇒ 该文件的断言**必红**（证明它不是恒真）
-> - **A4 的负控**：把提取器**故意改坏**（如吞掉标记剥离）⇒ **空集 ⇒ 必红**（证明基数钉在起作用）
+> - **A4 的负控**：**两条腿**——**腿 A**：把提取器**故意改坏**（如吞掉标记剥离）⇒ **多抓**（由 `assert.ok(sabotagedWhole.keys.size > …)` 接住）；**腿 C**：**构造真正的空集**（把段起标记改坏 ⇒ `sliceUserLayerSegment` 返 `null` ⇒ 入口非空断言必红；或把段内拉丁 token 抹平 ⇒ `extractDocKeys` **真的返回空集** ⇒ **`assertDocKeysNonEmpty` 必红**）——**★ 分歧审计指出初版这里只写了单个假例子「吞掉标记剥离 ⇒ 空集 ⇒ 必红」，而实测吞标记剥离是「多抓」不是空集** ⇒ **今按真实分工写全两条腿**。**「空集 ⇒ 必红」是腿 C 兑现的性质，不是声明。**
 
 ---
 

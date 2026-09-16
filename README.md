@@ -250,7 +250,7 @@ engCoderEffort 输入。**保存全局默认** → 写 user 层（`config.json`�
           includeProjectGuide: false   # 评审是否注入 AGENTS.md（默认 false；评审只认显式 documents）
         # F9：eng_coder 子代理资源（缺省即安全值，一般无需配置）
         engCoderMaxTokens: 65536       # eng_coder 子代理输出预算（可选；缺省 65536）
-        engCoderEffort: low            # eng_coder 子代理推理档（可选 off|low|medium|high|max；缺省 low；非法值忽略并警告）
+        engCoderEffort: medium         # eng_coder 子代理推理档（可选 off|low|medium|high|max；缺省 medium；非法值忽略并警告）
         # dsh 后台任务挂死兜底（R5；可选；缺省 1800000=30min，合法 60000..3600000）
         dshBackgroundTimeoutMs: 1800000
         # codex-cli runner 全局节（可选；配了任何 codex 行/后端才需要）
@@ -278,7 +278,7 @@ engCoderEffort 输入。**保存全局默认** → 写 user 层（`config.json`�
 - **effort**：`off|low|medium|high|max`，映射 `reasoningEffort` 透传；非法值忽略并警告（N4），缺省不传（用适配器默认）。
 - **timeoutMs**：单轮评审硬预算（绝对截止，见下）；合法区间 1000~3600000；非法值忽略并警告。
 - **includeProjectGuide**：评审是否注入 `AGENTS.md` 项目记忆（默认 false——评审独立于项目记忆，需求/验收标准请显式传 `documents=[...]`；true 时按 16K 截断注入）。
-- **engCoderMaxTokens / engCoderEffort**：eng_coder 子代理的输出预算与推理档（F9）——实现任务机械执行，低推理档把输出预算留给正文。
+- **engCoderMaxTokens / engCoderEffort**：eng_coder 子代理的输出预算与推理档（F9）。**engCoderEffort 缺省 `medium`**——`low` 是**唯一**在一切非退化支持集上都可能被 `nearestEffort` 静默落到 `off` 的程度档（推理全关且无提示），而 `medium` 只在退化集 `{off}` 落 `off`；实现任务仍由 brief 机械执行，普通档足以完成「按文档改文件」，推理档再高只是白白吞噬输出预算。
 
 ### 会话级覆盖（advisor_config 工具）
 

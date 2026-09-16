@@ -3,7 +3,7 @@
 // $DSH_HOME/.thincoder/config.json。
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, statSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, statSync } from "node:fs"
 import { join, dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { tmpdir } from "node:os"
@@ -350,6 +350,241 @@ test("U3c2 (D10-10 / AC-D5 / 锚 M6): 设置页可产出的顶层键 ⊆ 服务�
   const extra = payloadKeys.filter((k) => !allowed.includes(k))
   assert.deepEqual(extra, [],
     "设置页可产出的顶层键必须 ⊆ 服务端 topAllowed（否则 D-31 的 400 会让设置页死锁）：多出 " + JSON.stringify(extra))
+})
+
+// ————————————— U3c2b 白名单散文面三轴锁（批 14 / FR-2 · 锚 A3 + A4 · AC-4…AC-7） —————————————
+//
+// 主题：**「插件自己的契约」与「它对外声称的契约」的一致性**。权威面 = 三轴 8/8/5 = 21 名，
+// 分别从 `lib/index.mjs`（topAllowed / GROUP_KEYS+advisor 子键）与 `lib/config-store.mjs`
+// （GROUP_FIELDS）的**源码字面**解析；散文面 = 各档的**用户层白名单段**。要求**双向**：
+// 散文 ⊄ 权威（多写）与权威 ⊄ 散文（漂了没人知）都必红。
+//
+// ★ 两级过滤的每一级都由一个**实测陷阱**逼出来（会诊 R-3 的陷阱清单，父侧复核）：
+//   ① `user` 层可配字段白名单：」**段级**：yml / README 的块**尾部**紧跟一句以
+//      「只在 base 配」起头的排除句（内含 `engineering`），不切段就多抓 ⇒ 先切段；
+//   ② **行级**：块内还有「（组内字段级 …）」这样的**排除子句**（`；`/`——` 起头的说明尾巴）；
+//   ③ `README.md` 是 **CRLF**、`cordis.patch.yml` 是 **LF** ⇒ EOL 归一；
+//   ④ 三种**格式不同**：yml 是纯文本（无反引号）、README 用反引号、config-store 是分行列表；
+//   ⑤ 假阳性：块内有 `D-29` / `R1 §3.6` / `FR-CB5` / `mergeGlobalConfig` ⇒ 首字符小写 + 长度 ≥3 + stoplist。
+//
+// ★ 本块自带**负控腿**（防恒真；批 15 的 W3 教训 = 谓词匹配 0 处 ⇒ 永不可能通过）：
+//   腿 A：把键名从散文**删掉** ⇒ 该档断言必红（本条 ⓸ 直接构造该场景）；
+//   腿 B：把**段级切分**改坏（喂整档）⇒ 多抓块外 token ⇒ 「多余」断言必红（⓸）；
+//   腿 C：把提取集弄成**空集** ⇒ **防恒真护栏必红**（⓸；★ 批 14 修复轮补）。
+//   ★ 订正留痕：本节原写「腿 B：把提取器的**标记剥离**改坏 ⇒ **空集 ⇒ 必红**」——**实测为假**
+//     （腿 B 走的是「多抓」那一支，空集从未被构造过；分歧审计逐字点名）⇒ 今如实改述，
+//     空集那一支由**腿 C** 承担。
+const DOCKEY_RE = /(?<![A-Za-z0-9_.])(?:[a-z][A-Za-z0-9]*|[A-Z][A-Za-z0-9]*)(?:\.[A-Za-z][A-Za-z0-9]*)?(?![A-Za-z0-9_])/g
+/** 散文面的**噪声 token**（全部来自实测：块内的批号/档名/组键/容器名/说明词）。 */
+const DOCKEY_STOP = new Set(["user", "base", "provider", "model", "engineering",
+  "reg", "legacy", "round1", "convergence", "mergeGlobalConfig", "CB5", "consult"])
+
+/** 从源码全文切出**用户层白名单段**（段级过滤；边界缺失 ⇒ null ⇒ 调用方必红）。 */
+function sliceUserLayerSegment(src, format) {
+  const span = (a, b) => { const i = src.indexOf(a); if (i < 0) return null; const j = src.indexOf(b, i); if (j < 0) return null; return src.slice(i, j) }
+  if (format === "yml") return span("用户层可配字段白名单：", "下列示例值若在 user 层被覆盖")
+  if (format === "readme") return span("user 层可配字段白名单：", "只在 base 配")
+  if (format === "config-store") return span("// - mergeGlobalConfig(base, user)：字段级白名单浅合并", "//   原样保留——合并只叠加")
+  return null
+}
+
+/** 段内提取键名（行级过滤 → 标记剥离 → EOL 归一 → token → 三道筛）。 */
+function extractDocKeys(block) {
+  assert.ok(typeof block === "string" && block.length > 0, "白名单段必须可定位（空段 ⇒ 提取器必然空转 ⇒ 恒真）")
+  const keys = new Set()      // 归一后的键集（`advisor.round1` → 容器名 `advisor`）
+  const advSub = new Set()    // advisor **子键**（原样 token；组键 round1/convergence 另走组字段轴）
+  for (const raw of block.split(/\r?\n/)) {                                    // ② EOL 归一（README 是 CRLF）
+    let s = raw.replace(/^\s*(\/\/|\*|#|-)\s*/, "")                            // ① 标记剥离
+    s = s.replace(/`/g, "")
+    for (const mark of ["；", "——", "以及"]) { const k = s.indexOf(mark); if (k >= 0) s = s.slice(0, k) }  // ③ 行级：先切排除子句
+    for (const t of (s.match(DOCKEY_RE) ?? [])) {
+      if (t.length < 3) continue                                               // 长度 ≥3（滤 D-29 / R1）
+      if (DOCKEY_STOP.has(t)) continue                                         // stoplist（滤 user / base / engineering / 组键）
+      keys.add(t.startsWith("advisor.") ? "advisor" : t)                       // `advisor.round1` → 容器名 `advisor`
+      if (t.startsWith("advisor.") && !["round1", "convergence"].includes(t.slice(8))) advSub.add(t.slice(8))
+    }
+  }
+  return { keys, advSub }
+}
+
+/** ★ 防恒真护栏（**单点实现**）：提取集为空 ⇒ 立即红（§6.2 图 2 的「空集 = 恒真的唯一入口」）。
+ *
+ *  ★ 为什么抽成一个函数（批 14 修复轮）：原实现把这条断言**逐处内联**三次
+ *  （yml / README / config-store），而**分歧审计逐字点名**：设计档 §8.2 的 A4 负控承诺
+ *  「把提取器**故意改坏** ⇒ **空集 ⇒ 必红**」，**而交付里没有任何一条腿把提取集弄成空集**
+ *  ——当时的两条腿断言的是「喂整档 ⇒ **多抓**」与「删键 ⇒ 缺项」⇒ **唯一防恒真的
+ *  `keys.size >= 1` 自身从未被证明会红**，「空集 = 恒真的唯一入口」当时只是**声明**。
+ *  ⇒ 抽成单点后，**腿 C 的负控证的就是 ⓵/⓶/⓷ 三处实际调用的这一个函数**，
+ *  而不是一句会与 ⓵ 漂离的复制品。 */
+function assertDocKeysNonEmpty(keys, what) {
+  assert.ok(keys.size >= 1, what + " 提取集非空（空集 ⇒ 恒真的唯一入口）")
+}
+
+/** 组字段轴：`advisor.round1/convergence` 的**同句括号名单**（段内搜索；三档的写法略有出入，
+ *  故用正则在**同一行内**找括号——`yml`/`README` 是「… 组（provider/model/…）」，
+ *  `config-store` 是「…（组内字段级 provider/model/…）」。**只看括号那一小段**，
+ *  故不会把段内其他反引号项误收进来。 */
+function groupFieldNames(segment) {
+  const out = new Set()
+  for (const line of segment.split(/\r?\n/)) {
+    const at = line.indexOf("advisor.round1/convergence")
+    if (at < 0) continue
+    const op = line.indexOf("（", at)
+    if (op < 0) continue
+    const cl = line.indexOf("）", op)
+    const inner = line.slice(op + 1, cl < 0 ? line.length : cl)
+    for (const t of (inner.match(/[A-Za-z][A-Za-z0-9]*/g) ?? [])) out.add(t)
+  }
+  return out
+}
+
+test("U3c2b (批 14 / FR-2 / 锚 A3+A4): 白名单散文面与权威面三轴一致（8/8/5 = 21 名，逐文件各一条 + 先钉基数 + 双向）", () => {
+  // —— ⓪ 权威面（源码字面；缺任一 ⇒ 断言落地即红）——
+  const indexSrc = readFileSync(join(PLUGIN_DIR, "lib", "index.mjs"), "utf8")
+  const storeSrc = readFileSync(join(PLUGIN_DIR, "lib", "config-store.mjs"), "utf8")
+  const lit = (src, re, what) => { const m = re.exec(src); assert.ok(m, what + " 的字面不可定位（形态变了 ⇒ 本锁必须随之复核）"); return [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) }
+  const TOP = lit(indexSrc, /const topAllowed = \[([^\]]*)\]/, "index.mjs 的 topAllowed")
+  const GROUPS = lit(indexSrc, /const GROUP_KEYS = \[([^\]]*)\]/, "index.mjs 的 GROUP_KEYS")
+  const ADV_SUB = lit(indexSrc, /\[\.\.\.GROUP_KEYS, ([^\]]*)\]/, "index.mjs 的 advisor 子键清单")
+  const GROUP_FORM = lit(storeSrc, /const GROUP_FIELDS = \[([^\]]*)\]/, "config-store.mjs 的 GROUP_FIELDS")
+  // ★ 先钉基数（A4）：不钉基数 ⇒ 解析器空转即恒真
+  assert.equal(TOP.length, 8, "权威面轴①（顶层）必须是 8 名，实测 " + TOP.length + " " + JSON.stringify(TOP))
+  assert.equal(ADV_SUB.length, 6, "权威面轴②（advisor 子键，组键 round1/convergence 另归组轴）必须是 6 名，实测 " + ADV_SUB.length + " " + JSON.stringify(ADV_SUB))
+  assert.equal(GROUP_FORM.length, 5, "权威面轴③（组**表单字段**）必须是 5 名，实测 " + GROUP_FORM.length + " " + JSON.stringify(GROUP_FORM))
+  assert.equal(GROUPS.length, 2, "权威面组键（round1/convergence）必须是 2 名，实测 " + JSON.stringify(GROUPS))
+  assert.equal(TOP.length + ADV_SUB.length + GROUPS.length + GROUP_FORM.length, 21,
+    "三轴合计 = 8 + (2+6) + 5 = 21（`topAllowed` ×8 · advisor 子键 ×8 · 组字段 ×5）")
+  const allNames = new Set([...TOP, ...ADV_SUB, ...GROUPS, ...GROUP_FORM])
+
+  const ymlSrc = readFileSync(join(PLUGIN_DIR, "cordis.patch.yml"), "utf8")
+  const readmeSrc = readFileSync(join(PLUGIN_DIR, "README.md"), "utf8")
+
+  // —— ① `cordis.patch.yml`（逐文件各一条；A3 轴①/② + ⓪ 的 A4 基数钉）——
+  const ymlBlock = sliceUserLayerSegment(ymlSrc, "yml")
+  const { keys: ymlKeys, advSub: ymlAdv } = extractDocKeys(ymlBlock)
+  assertDocKeysNonEmpty(ymlKeys, "cordis.patch.yml 白名单段")
+  const ymlTop = [...ymlKeys].filter((k) => !ADV_SUB.includes(k) && !GROUP_FORM.includes(k))
+  assert.deepEqual(TOP.filter((k) => !ymlTop.includes(k)), [], "cordis.patch.yml 白名单段**缺**顶层键（散文漂了 ⇒ 必红）")
+  assert.deepEqual(ymlTop.filter((k) => !TOP.includes(k)), [], "cordis.patch.yml 白名单段**多**顶层键（散文多写 ⇒ 必红）")
+  assert.deepEqual(ADV_SUB.filter((k) => ![...ymlAdv].includes(k)), [], "cordis.patch.yml 白名单段**缺** advisor 子键")
+  assert.deepEqual([...ymlAdv].filter((k) => !ADV_SUB.includes(k)), [], "cordis.patch.yml 白名单段**多** advisor 子键")
+  assert.deepEqual([...groupFieldNames(ymlBlock)].filter((k) => ![...GROUP_FORM, ...GROUPS].includes(k)), [], "cordis.patch.yml 的组字段名单多出权威面外的名")
+  assert.deepEqual(GROUP_FORM.filter((k) => ![...groupFieldNames(ymlBlock)].includes(k)), [], "cordis.patch.yml 的组字段名单缺表单字段")
+
+  // —— ② `README.md`（同三轴；**CRLF** 档，EOL 归一由 extractDocKeys 承担）——
+  const readmeBlock = sliceUserLayerSegment(readmeSrc, "readme")
+  const { keys: readmeKeys, advSub: readmeAdv } = extractDocKeys(readmeBlock)
+  assertDocKeysNonEmpty(readmeKeys, "README.md 白名单段")
+  const readmeTop = [...readmeKeys].filter((k) => !ADV_SUB.includes(k) && !GROUP_FORM.includes(k))
+  assert.deepEqual(TOP.filter((k) => !readmeTop.includes(k)), [], "README.md 白名单段**缺**顶层键")
+  assert.deepEqual(readmeTop.filter((k) => !TOP.includes(k)), [], "README.md 白名单段**多**顶层键")
+  assert.deepEqual(ADV_SUB.filter((k) => ![...readmeAdv].includes(k)), [], "README.md 白名单段**缺** advisor 子键")
+  assert.deepEqual([...readmeAdv].filter((k) => !ADV_SUB.includes(k)), [], "README.md 白名单段**多** advisor 子键")
+  assert.deepEqual([...groupFieldNames(readmeBlock)].filter((k) => ![...GROUP_FORM, ...GROUPS].includes(k)), [], "README.md 的组字段名单多出权威面外的名")
+  assert.deepEqual(GROUP_FORM.filter((k) => ![...groupFieldNames(readmeBlock)].includes(k)), [], "README.md 的组字段名单缺表单字段")
+
+  // —— ③ `lib/config-store.mjs` 的头注释（A5 / AC-7：**P4 修复后**组字段零缺项）——
+  const storeBlock = sliceUserLayerSegment(storeSrc, "config-store")
+  const { keys: storeKeys } = extractDocKeys(storeBlock)
+  assertDocKeysNonEmpty(storeKeys, "config-store 头注释段")
+  assert.deepEqual([...storeKeys].filter((k) => !allNames.has(k)), [],
+    "头注释里出现权威面**没有**的名（命名漂移 ⇒ 必红）")
+  assert.deepEqual(GROUP_FORM.filter((k) => ![...groupFieldNames(storeBlock)].includes(k)), [],
+    "★ P4/AC-7：mergeGlobalConfig 头注释的组字段名单必须含全部 5 名（`runner` 曾缺位）")
+
+  // —— ④ 负控（防恒真；**三条腿都必须红**。腿 A/B 出自设计档 §8.2 / AC-20，腿 C = 批 14 修复轮补的
+  //    「空集 ⇒ 必红」那一支——见下方 ★★）——
+  // 腿 B：**故意改坏提取器**（不作**段级切分**，见 §6.2 图 2 的 ①——直接喂整档）⇒ 实测多抓 43 个
+  //       块外 token（`dsh` / `suite` / `insert` / `medium` …）⇒ **「多余」断言必红**。
+  //       段级边界**是**过滤器：这一腿证明它不是恒真（若边界坏成「切到空」则落到**腿 C** 的空集支，同样必红）。
+  const sabotagedWhole = extractDocKeys(ymlSrc)
+  assert.ok(sabotagedWhole.keys.size > ymlKeys.size + ymlAdv.size,
+    "负控腿 B：改坏段级切分（喂整档）⇒ 实测多抓（" + sabotagedWhole.keys.size + " > 正式 " + (ymlKeys.size + ymlAdv.size) + "）")
+  assert.ok([...sabotagedWhole.keys].some((k) => !allNames.has(k)), "负控腿 B：多抓里必有权威面外的名（「多余」断言不恒空）")
+  // 腿 B（边界形）：段级**起点**前移 ⇒ 吞进 YAML 正文（`insert:` / `engCoderEffort: low` …）⇒ 同样多抓
+  const badYmlSeg = ymlSrc.slice(ymlSrc.indexOf("用户层可配字段白名单：") - 1200)
+  const badYmlKeys = extractDocKeys(badYmlSeg).keys
+  assert.ok([...badYmlKeys].some((k) => !allNames.has(k)),
+    "负控腿 B（边界形）：起点前移后多抓的名里必有权威面外的（本条是「多余」断言不恒空的第二证据）")
+  // 腿 A：**把键名从散文里删掉** ⇒ 「缺项」断言必红（构造真实语义：破坏 `advisor.` 前缀）
+  const removedAdvice = ymlBlock.split("advisor.").join("advisor")
+  const removedKeys = extractDocKeys(removedAdvice).keys
+  const missingAfterRemoval = TOP.filter((k) => ![...removedKeys].filter((x) => !ADV_SUB.includes(x) && !GROUP_FORM.includes(x)).includes(k))
+  assert.ok(missingAfterRemoval.includes("advisor"),
+    "负控腿 A：从散文段删掉一处键名 ⇒ 「缺项」集合必须非空（本条证明 ⓵ 的缺项断言不是恒空）")
+
+  // ★★ 腿 C：**空集 ⇒ 防恒真护栏必红**（批 14 修复轮补——分歧审计点名的**唯一代码面缺口**）。
+  //   设计档 §8.2 的 A4 负控原文：「把提取器**故意改坏**（如吞掉标记剥离）⇒ **空集 ⇒ 必红**」，
+  //   与 §9 的「**空集**：散文块为空 / 提取器返回空集 ⇒ **`assert` 非空后红**（**这是恒真的
+  //   唯一入口**）」。**而交付里这两条从未被任何腿触发**：腿 B 实测走的是「喂整档 ⇒ **多抓**」
+  //   那一支（断言 `sabotagedWhole.keys.size > …`），腿 A 走的是「删键 ⇒ 缺项」——
+  //   **唯一防恒真的护栏 `keys.size >= 1` 自身从未被证明会红** ⇒ 那句承诺当时是**声明**，
+  //   不是已验证的性质。本腿**真的把提取集弄成空集**，并证明护栏会红。
+  //
+  //   构造 ①（**段级失配 ⇒ 块为空**，即 §9 的「散文块为空」支）：真实档字节不动，只把**段起
+  //     标记**改坏 ⇒ `sliceUserLayerSegment` 返回 `null` ⇒ 提取器的**入口非空断言必红**
+  //     （fail-closed：空块不得静默通过、更不得当空集放过）。
+  const noMarkerSrc = ymlSrc.split("用户层可配字段白名单：").join("（段起标记已被改坏）")
+  const noMarkerSeg = sliceUserLayerSegment(noMarkerSrc, "yml")
+  assert.equal(noMarkerSeg, null,
+    "腿 C 构造自证①：段起标记改坏后段级切分必须失配（实得 " + JSON.stringify(noMarkerSeg)
+    + "）——否则本腿验的不是空集")
+  assert.throws(() => extractDocKeys(noMarkerSeg), /白名单段必须可定位/,
+    "腿 C ①：段级失配 ⇒ 提取器入口的**非空断言必红**（空集不得静默通过）")
+  //
+  //   构造 ②（**块非空但零键名 ⇒ 提取器返回空集**，即 §9 的「提取器返回空集」支）：取**真实
+  //     白名单段**，把段内**拉丁 token 机械抹平**（键名与噪声一起消失）⇒ 段级切分照常成功
+  //     （块非空 ⇒ 入口断言通过）⇒ 提取器**返回** `keys.size === 0`。⇒ 对**这条空集**逐字复跑
+  //     ⓵/⓶/⓷ 实际调用的那道护栏 ⇒ **必红**——这就是设计承诺的那条负控。
+  const tokenlessBlock = ymlBlock.replace(/[A-Za-z][A-Za-z0-9]*/g, "键")
+  const emptyKeys = extractDocKeys(tokenlessBlock).keys
+  assert.equal(emptyKeys.size, 0,
+    "腿 C 构造自证②：抹平段内拉丁 token 后提取集必须为**空**（实得 " + emptyKeys.size
+    + " 名：" + JSON.stringify([...emptyKeys]) + "）——否则本条没在验空集")
+  assert.throws(() => assertDocKeysNonEmpty(emptyKeys, "腿 C 构造②"),
+    /提取集非空/,
+    "腿 C ②：提取器返回空集 ⇒ **防恒真护栏必红**（证明 `keys.size >= 1` 真的会红，而它平时是绿的）")
+  //   阳性对照（防「腿 C 恒红」的假绿）：同一道护栏对**非空集**必须**不**抛。
+  assert.doesNotThrow(() => assertDocKeysNonEmpty(new Set(["provider"]), "腿 C 阳性对照"),
+    "腿 C 阳性对照：同一道护栏对非空集不得抛——否则本腿是恒红断言，什么也没证明")
+
+  // —— ⑤ 提取器自证（陷阱实证：不做**行级排除子句切分**就会多抓排除子句里的名）——
+  const noExclSplit = new Set()
+  for (const raw of ymlBlock.split(/\r?\n/)) {
+    const s = raw.replace(/^\s*(\/\/|\*|#|-)\s*/, "").replace(/`/g, "")
+    for (const t of (s.match(DOCKEY_RE) ?? [])) if (t.length >= 3) noExclSplit.add(t)
+  }
+  assert.ok(noExclSplit.size > ymlKeys.size + ymlAdv.size,
+    "实证：不切排除子句会多抓（实测 " + noExclSplit.size + " > 正式提取 " + (ymlKeys.size + ymlAdv.size) + "）")
+  assert.ok(noExclSplit.has("engineering"),
+    "实证：排除句里的 `engineering` 在不切排除子句时会被当成键抓进来")
+  assert.ok(!ymlKeys.has("engineering") && ![...ymlAdv].includes("engineering"),
+    "实证的反面：正式提取器必须滤掉 engineering")
+
+  // —— ⑥ ★ 悬空指针零命中（A9 / AC-14：`lib/**` 内的**两个死名**）——
+  // 批 14 / FR-5 把 10 处指向两份**从未提交**的设计档的引用逐处删净（只删指针 + 连接词手术、
+  // 零新增散文、**不重指**——仓内无对应的 DSH 适配档，重指会造新假指针）。本腿把它变成**常设锁**：
+  // **只扫 `lib/**`**——`docs/` 里对这两个死名的历史记录是合法存在，不进锁域。
+  // ★ 本腿是**变异自证逼出来的**：批 14 的变异 M4（往 `lib/state.mjs` 塞回一处引用）实测**全绿**
+  //   ⇒ 说明 A9 当时**只有 grep 谓词、没有进程内断言** ⇒ 现补上（否则 AC-14 在套件里不可证）。
+  const DEAD_NAMES = ["DESIGN-dsh-port.md", "DESIGN-advisor-token-protocol-fix.md"]
+  const libHits = []
+  const walkLib = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name)
+      if (e.isDirectory()) { walkLib(p); continue }
+      if (!/\.(mjs|js|ts|json|ya?ml|md)$/.test(e.name)) continue
+      const s = readFileSync(p, "utf8")
+      for (const d of DEAD_NAMES) if (s.includes(d)) libHits.push(p.replace(PLUGIN_DIR + "\\", "").replace(PLUGIN_DIR + "/", "") + " ← " + d)
+    }
+  }
+  walkLib(join(PLUGIN_DIR, "lib"))
+  assert.deepEqual(libHits, [], "`lib/**` 内两个死名必须零命中（只锁 lib/**；docs/ 里的历史记录不入锁域）：" + JSON.stringify(libHits))
+  // 谓词自证：域必须真的非空（否则「零命中」是恒真量——空目录永远零命中）
+  const libFiles = []
+  const countLib = (dir) => { for (const e of readdirSync(dir, { withFileTypes: true })) { const p = join(dir, e.name); if (e.isDirectory()) countLib(p); else libFiles.push(p) } }
+  countLib(join(PLUGIN_DIR, "lib"))
+  assert.ok(libFiles.length >= 20, "谓词自证：`lib/**` 域必须非空（实测 " + libFiles.length + " 档）——否则「零命中」恒真")
 })
 
 // ————————————— U7：apply-session / reset-session（stub sessionState） —————————————

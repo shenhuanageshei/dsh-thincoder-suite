@@ -479,15 +479,15 @@ test("T18: eng_coder spawn agentOptions carry maxTokens (≥ config or default 6
   assert.ok(req.agentOptions.provider === "p" && req.agentOptions.model === "m")
   dropSession("t18a")
 
-  // 缺省：config 未配置 → 默认 65536 + effort low
+  // 缺省：config 未配置 → 默认 65536 + effort medium（批 14 / D14-1：默认值与回落目标同源常量）
   const started2 = []
   const state2 = makeEngRunFixture("t18b")
   await runEngCoder(makeEngDeps("t18b", {}, started2), { task: "implement x", designToken: state2.designToken })
   assert.equal(started2[0].agentOptions.maxTokens, 65536)
-  assert.equal(started2[0].agentOptions.reasoningEffort, "low")
+  assert.equal(started2[0].agentOptions.reasoningEffort, "medium")
   dropSession("t18b")
 
-  // N4：非法值警告并回落（不崩溃，spawn 继续）
+  // N4：非法值警告并回落（不崩溃，spawn 继续）——回落目标 = 默认值（同源常量）
   const started3 = []
   const state3 = makeEngRunFixture("t18c")
   const out3 = await runEngCoder(
@@ -496,8 +496,105 @@ test("T18: eng_coder spawn agentOptions carry maxTokens (≥ config or default 6
   )
   assert.ok(out3.includes("[thincoder-suite] warning:"), out3)
   assert.equal(started3[0].agentOptions.maxTokens, 65536)
-  assert.equal(started3[0].agentOptions.reasoningEffort, "low")
+  assert.equal(started3[0].agentOptions.reasoningEffort, "medium")
+  assert.ok(out3.includes('falling back to "medium"'), "回落警告文案随常量（不写死字面）: " + out3)
   dropSession("t18c")
+})
+
+// ————————————— T18d eng_coder 到点文案 + 前置告警（批 14 / FR-4 · D14-5 · D14-6） —————————————
+//
+// 锚 A7（`codexCli.` 前缀 + 第二字面仍 2 次 + failStop 仍 18）与 A8（前置告警的**两条路径**）：
+// 文案的**唯一权威**是 `lib/eng.mjs` 的源码字面——`doc-hygiene.test.mjs` 的 SITES 表
+// （`[2, '）到点，子代理已 abort—— dsh 子代理路径受平台墙钟约束…']`）锁着**第二字面**，
+// 它由两处 `failStop` 各供一次；本用例锁**第一字面**与前置告警的落点。
+/** 假 jobs 服务：只记录 `start` 调用，**不执行** `spec.run`（⇒ spawn 不发生，测试秒级）。 */
+function makeFakeJobs() {
+  const specs = []
+  const jobs = {
+    start(spec) { specs.push(spec); return "eng-dsh-fake-1" },
+    get: () => null, cancel: () => false, list: () => [],
+  }
+  return { jobs, specs }
+}
+
+test("T18d: FR-4 三处第一字面含 codexCli. 前缀 + 第二字面仍 2 次 + 前置告警仅同步路径（budgetCap ≥ 600000）", async () => {
+  // —— ① 文案面（静态源码字节，A7）——
+  const engSrc = readFileSync(join(PLUGIN_DIR, "lib", "eng.mjs"), "utf8")
+  const FIRST = "超内部截止（内部截止值取自 codexCli.budgetCapMs="
+  assert.equal(engSrc.split(FIRST).length - 1, 3,
+    "三处第一字面都须带 codexCli. 前缀（`:1017` console.warn · `:1059`/`:1080` 两条竞态分支）")
+  assert.equal(engSrc.split("超内部截止（budgetCapMs=").length - 1, 0, "旧形态（无节前缀）必须零残留")
+  const SECOND = "）到点，子代理已 abort—— dsh 子代理路径受平台墙钟约束，超限任务被终止；如需长任务请走 codex runner 或拆分 stages。\""
+  assert.equal(engSrc.split(SECOND).length - 1, 2,
+    "第二字面（被引偏的机理**不在**这里）须一字不动、仍 2 次——`doc-hygiene.test.mjs:317` 期望 2")
+  assert.equal(engSrc.split("failStop(").length - 1, 18, "前置告警不得引入 failStop 调用（锁面恒 18）")
+
+  // —— ② 前置告警：仅 dsh 同步路径（默认 background=false），spawn 前恰一条 ——
+  const sidA = "t18d-sync"
+  const stA = makeEngRunFixture(sidA)
+  const startedA = []
+  const capNote = "eng_coder dsh 同步路径的内部截止取自 codexCli.budgetCapMs=700000ms"
+  const capDeps = { ...makeEngDeps(sidA, { codexCli: { budgetCapMs: 700000 } }, startedA), agent: { session: { id: sidA, header: { cwd: PLUGIN_DIR } }, options: { provider: "p", model: "m" } } }
+  const captured = []
+  const origWarn = console.warn
+  let outA
+  try {
+    console.warn = (...a) => { captured.push(a.map(String).join(" ")) }
+    outA = await runEngCoder(capDeps, { task: "implement x", designToken: stA.designToken })
+  } finally { console.warn = origWarn }
+  assert.equal(captured.filter((w) => w.includes(capNote)).length, 1,
+    "同步路径 budgetCap ≥ 600000 ⇒ 恰一条前置告警（spawn 前），实测 " + JSON.stringify(captured))
+  assert.ok(outA.includes(capNote), "告警须随返回文本带出（主会话可见）")
+  assert.equal(startedA.length, 1, "告警 fail-open：不改任何返回路径，spawn 照常发生")
+  dropSession(sidA)
+
+  // —— ③ 默认值 540000 < 600000 ⇒ 零告警（阈值方向负控）——
+  const sidB = "t18d-default"
+  const stB = makeEngRunFixture(sidB)
+  const capB = []
+  try {
+    console.warn = (...a) => { capB.push(a.map(String).join(" ")) }
+    await runEngCoder(makeEngDeps(sidB, {}, []), { task: "implement x", designToken: stB.designToken })
+  } finally { console.warn = origWarn }
+  assert.equal(capB.filter((w) => w.includes("已达或超过平台单次调用墙钟")).length, 0,
+    "缺省 budgetCapMs=540000 < 600000 ⇒ 不告警（否则本告警天天误报）")
+  dropSession(sidB)
+
+  // —— ④ background=true 且 jobs 可用 ⇒ 派发后台，**不经同步路径**（AC-13 的第二条腿）——
+  const sidC = "t18d-bg-jobs"
+  const stC = makeEngRunFixture(sidC)
+  const startedC = []
+  const { jobs, specs } = makeFakeJobs()
+  const capC = []
+  let outC
+  try {
+    console.warn = (...a) => { capC.push(a.map(String).join(" ")) }
+    outC = await runEngCoder(
+      { ...makeEngDeps(sidC, { codexCli: { budgetCapMs: 700000 }, dshBackgroundTimeoutMs: 1000 }, startedC), ctx: { subagents: {}, get: (s) => (s === "jobs" ? jobs : null) } },
+      { task: "implement x", designToken: stC.designToken, background: true },
+    )
+  } finally { console.warn = origWarn }
+  assert.equal(specs.length, 1, "后台服务可用 ⇒ 派发 job（不落同步路径）")
+  assert.equal(capC.filter((w) => w.includes(capNote)).length, 0,
+    "background=true 走后台 ⇒ **不告警**（后台无平台墙钟问题，告警即错告；D14-6）")
+  assert.ok(outC.includes("eng-dsh-fake-1"), "后台句柄可见: " + outC.slice(0, 160))
+  dropSession(sidC)
+
+  // —— ⑤ background=true 但 jobs 不可用 ⇒ 回落同步执行，**此时**同步路径告警才该出现 ——
+  const sidD = "t18d-bg-nojobs"
+  const stD = makeEngRunFixture(sidD)
+  const startedD = []
+  const capD = []
+  try {
+    console.warn = (...a) => { capD.push(a.map(String).join(" ")) }
+    await runEngCoder(
+      makeEngDeps(sidD, { codexCli: { budgetCapMs: 700000 } }, startedD),
+      { task: "implement x", designToken: stD.designToken, background: true },
+    )
+  } finally { console.warn = origWarn }
+  assert.equal(capD.filter((w) => w.includes(capNote)).length, 1,
+    "jobs 不可用 ⇒ 确实回落同步执行 ⇒ 同步路径告警成立（不是错告）")
+  dropSession(sidD)
 })
 
 // ————————————— T19 eng_coder 任务书 git 禁令条款 —————————————
