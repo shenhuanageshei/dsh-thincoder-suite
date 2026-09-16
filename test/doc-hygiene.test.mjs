@@ -862,7 +862,7 @@ function checkCountMarks(text, marks, file = "(内存档)", opts = {}) {
 //   · **腿 1 全域跑**（宽松腿：零存量红是它的验收条件，N-2 的第二次订正口径）；
 //   · **腿 2 / 腿 4 / `require-facts` 只跑声明档**（严格腿）；
 //   · **`docs/consult-minutes/**` 排除**——理由不是白名单而是**范畴**：**机器产物无作者契约**
-//     （纪要是逐字记录面、内容不可控且按纪律不能润色）；实测该子目录有 **7 处**扩展标记形命中。
+//     （纪要是逐字记录面、内容不可控且按纪律不能润色）；**★ 代码评审 #2 订正：初稿此处写「实测该子目录有 7 处扩展标记形命中」，而该数按分歧审计实测不可复现** ⇒ **改用可复现口径：过已交付机器 = 0**（审计读数：原始 43 · 带冒号 23 · 带 `id=` 17 · 枚举 9 · 掩码后 0）——**as-of 批 17**。
 
 /** 交付时点的批次档日期切点（§5.7 D17-4）；消费者见 `checkDeclarationDuty`。 */
 const SHAPE_CUTOFF = "2026-09-16"
@@ -1145,7 +1145,9 @@ function checkExemptGates(text, decl, rel, file = null) {
   }
   // —— 闸 4 **内容证伪**：exempt 档内长出受管面 ⇒ 红（唯一对「时间」免疫的一条）——
   const masked = shapeMaskDoc(text)
-  const badId = /（[0-9]+\s*[项处条档值步腿]/
+  // ★ 代码评审 #6 订正：初稿此处手抄字面量 `[项处条档值步腿]`，与 `SHAPE_DEFAULT_MARKS` 逐字重复
+  // ⇒ 缺省集一旦扩量词，本正则会**静默漂离**（违 D2 单一权威源）。今由权威源 `shapeUnitsSrc` 派生。
+  const badId = new RegExp("（[0-9]+\\s*(" + shapeUnitsSrc(SHAPE_DEFAULT_MARKS) + ")")
   const markLines = []
   for (let i = 0; i < masked.length; i++) {
     if (badId.test(masked[i]) || masked[i].includes("id=")) markLines.push(i + 1)
