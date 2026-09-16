@@ -332,7 +332,7 @@ if (budgetCap >= PLATFORM_WALL_CLOCK_MS) {
 | **A3** | `cordis.patch.yml` + `README.md` 的**白名单块** | FR-2 的 `extractDocKeys` 三轴比对（**逐文件各一条**） | **三轴各零缺项、零多余**（8/8/5） |
 | **A4** | 同上 | **基数钉** | `topAllowed.length === 8` · advisor 子键 `=== 8` · 组字段 `=== 5`；**且提取集非空**（空集 ⇒ **红**） |
 | **A5** | `lib/config-store.mjs` 的 mergeGlobalConfig 头注释 | 同 A3 的组字段轴 | **零缺项**（**P4 修复后**） |
-| **A6** | `test/death-provenance.test.mjs` | 构造 128+not-a-repo 的错误对象，跑锚 A 的分支 | **只打 `:980` 那句**（**不出现**「本批新增档尚未提交」）；**ENOENT 分支**仍打那一句（有意） |
+| **A6** | `test/death-provenance.test.mjs` | **两腿都构造**（**★ 复审 #1 指出初版只构造 128 例 ⇒ 新的 ENOENT 语义无锚兜**）：**腿 1**＝128+not-a-repo 的错误对象；**腿 2**＝ENOENT 的错误对象 | **两腿都不得出现**「本批新增档尚未提交」；**腿 1** 打 `:980` 那句准确的 · **腿 2** 打**新写的**「无 git ⇒ 锚 A 不可判定」；**另加一条正控**：构造「git 可用但 `addingSha` 取不到」的情形 ⇒ **那句话必须出现**（**证明 `:992` 未被误关**） |
 | **A7** | `lib/eng.mjs` | `grep '超内部截止'` 的**第一字面**；**第二字面的精确 needle 见 §5.4**（**评审 #6**：初版三份文档都没写出它 ⇒ 该腿不可复跑） | 三处均含 **`codexCli.`** 前缀；**第二字面仍 2 次**（用 §5.4 的那段精确文本计数）；`failStop(` **仍 18** |
 | **A8** | `lib/eng.mjs` | 用 `captureWarn` + `budgetCap=700000` 跑 dsh 同步路径 | **spawn 前** 恰一条告警；**`background=true` 路径不告警** |
 | **A9** | `lib/**` | `grep -rn 'DESIGN-dsh-port\.md\|DESIGN-advisor-token-protocol-fix\.md'` | **零命中**（**只扫 `lib/**`**——`docs/` 里对死名的历史记录是合法存在） |
@@ -355,7 +355,7 @@ if (budgetCap >= PLATFORM_WALL_CLOCK_MS) {
 | **并发** | **不适用**（无运行时并发面）。**唯一相关**：A8 的告警与 `warn` 通道 → 它进 `warnings` 并随返回文本带出（**只前进、不清空**——批 15 的实测结论） | — |
 | **重启** | **本批改 `lib/**` ⇒ 需重启才生效**（`eng.mjs` · `config-store.mjs` · **7 档注释**）。**`test/**` 改动即时生效**。⇒ **AC 分层须如实**（§11.2）· **收口时须在交接页登记**（**N-6**，owner = 主代理；见 stage 4） | 损失如实声明 |
 | **升级** | **无 schema 变更、无持久化变更 ⇒ 无迁移面**。**唯一**：`AP_TEST_AUTHORIZED` 的追加是**一次性授权记录**（不随版本演化） | 无迁移面 |
-| **失败方向** | **① 谓词面 fail-closed**（空集/缺名/多名都红）· **② 散文面改动 fail-open**（补 `runner` 不阻断任何运行）· **③ 到点文案 fail-open**（改文案不动返回路径）· **④ 前置告警 fail-open**（warn 不改返回；**且不得引入 `failStop(`**）· **⑤ F8 旗标 fail-closed**（**只有 128 分支置位**，其余错误仍 `throw`） | 逐项见左 |
+| **失败方向** | **① 谓词面 fail-closed**（空集/缺名/多名都红）· **② 散文面改动 fail-open**（补 `runner` 不阻断任何运行）· **③ 到点文案 fail-open**（改文案不动返回路径）· **④ 前置告警 fail-open**（warn 不改返回；**且不得引入 `failStop(`**）· **⑤ F8 旗标 fail-closed**（**★ 复审 #1 订正：两个分支都置位**，`:992` 的 else 只在两分支都未命中时触发；其余错误仍 `throw`） | 逐项见左 |
 
 ---
 
@@ -391,7 +391,7 @@ if (budgetCap >= PLATFORM_WALL_CLOCK_MS) {
 | `test/death-provenance.test.mjs` | FR-0（`AP_TEST_AUTHORIZED` 追加 + 注释第 ⑤ 条）· FR-3（旗标）· FR-5（**1 处**注释） | **★ 锁面变更 + 修改** |
 | `lib/config-store.mjs` | FR-2 的因果对（mergeGlobalConfig 头注释补 `runner`） | 修改（注释） |
 | `test/config-api.test.mjs` | FR-2（提取器 + 三轴谓词，**并入既有 U3c2**） | 修改 |
-| `cordis.patch.yml` | 无值改动（**本来就对**）——**但它在谓词的检索目标里** | 零改动（**进锁域**） |
+| `cordis.patch.yml` | **★ 复审 #3 订正：`:43` 的 `engCoderEffort` 示例值 `low` → `medium`**（**D14-10**）——**而它的白名单块无值改动（本来就对）** | **修改（示例一行）** |
 | `README.md` | FR-1 的散文（示例值与「缺省」）· FR-1 的**理据句** | 修改 |
 | `lib/advisor-msgs.mjs`（**2 处**）· `lib/consult.mjs` · `lib/state.mjs` · `lib/readonly-tools.mjs` · `lib/index.mjs` · `lib/advisor.mjs`（**各 1 处**） | FR-5（注释删指针） | 修改（注释） |
 | `CHANGELOG.md` | 本批条目（**仅新增**） | 修改 |
@@ -402,7 +402,7 @@ if (budgetCap >= PLATFORM_WALL_CLOCK_MS) {
 | 标 | 含义 | 本批 AC |
 |---|---|---|
 | **T1** | 进程内 `node --test` 可证 | AC-1 · AC-8 · AC-12 · AC-13 |
-| **T2** | 静态谓词可证（grep / 文件形状 / 集合比对） | AC-2 · **AC-3** · AC-4 · AC-5 · AC-6 · AC-7 · AC-9 · AC-10 · AC-11 · AC-14 · AC-16 · AC-17 … AC-21 · **★ AC-24** |
+| **T2** | 静态谓词可证（grep / 文件形状 / 集合比对） | AC-2 · **AC-3** · AC-4 · AC-5 · AC-6 · AC-7 · AC-9 · AC-10 · AC-11 · AC-14 · AC-16 · AC-17 … AC-21 · **★ AC-24** · **★ AC-25** |
 | **T3** | **仅重启后人工核验**（owner = 用户） | **AC-15**（引用的内容保全——**语义只能人眼**）· **AC-22**（真机 `console.warn` 的即时可见性） |
 | **★ 连 T3 都不是**（owner = **用户 / 运维**，本批只登记） | **AC-23**（仓外部署 profile 的同步——插件够不着） |
 
@@ -418,7 +418,7 @@ if (budgetCap >= PLATFORM_WALL_CLOCK_MS) {
 | **AC-6** | 谓词**先钉基数（8/8/5）且提取集非空** | T2 | A4 | US-3 |
 | **AC-7** | `lib/config-store.mjs` 的头注释**含 `runner`**（P4 修复） | T2 | A5 | US-4 |
 | **AC-8** | 128 分支**不打**「本批新增档尚未提交」 | T1 | A6 | US-5 |
-| **AC-9** | **ENOENT 分支行为不变**（仍只那一句）；其余错误仍 `throw` | T2 | A6 | US-5 |
+| **AC-9** | **两分支都不打**「本批新增档尚未提交」；**ENOENT 打新写的准确那句**；**128 打 `:980`**；**`:992` 的 else 仍在**（正控：git 可用但 `addingSha` 取不到 ⇒ 那句话出现）；其余错误仍 `throw` | T2 | A6 | US-5 |
 | **AC-10** | 三处第一字面**含 `codexCli.` 前缀** | T2 | A7 | US-6 |
 | **AC-11** | **第二字面仍 2 次**；`failStop(` **仍 18** | T2 | A7 | US-6 |
 | **AC-12** | dsh 同步路径 `budgetCap >= 600000` ⇒ **spawn 前恰一条告警** | T1 | A8 | US-7 |
@@ -432,8 +432,9 @@ if (budgetCap >= PLATFORM_WALL_CLOCK_MS) {
 | **AC-20** | **A3/A4 各有负控腿**（删键必红 · 提取器改坏必红） | T2 | **§8.2 自证腿** | US-9 |
 | **AC-21** | R-25 谓词 `未登记 = []` | T2 | A11 | US-10 |
 | **★ AC-24** | **README 散文面与 `medium` 一致**：① `engCoderEffort` 的**示例值**为 `medium`；② 「缺省」字样指向 `medium`；③ **理据句**不再声称「低推理档」（**它曾以该理由支持 `low`**）；④ **`cordis.patch.yml:43` 的示例同为 `medium`**（**D14-10**） | T2 | **A12** | US-1 · US-10 |
+| **★ AC-25** | **A2 的两个锁点都翻到位**：`test/advisor-config.test.mjs` 的 `:487`（**默认值**）与 `:499`（**非法值回落目标**）**各断言 `"medium"`**——**★ 复审 #13 指出：我写了「A1–A12 ↔ AC-1…AC-24 一一对应」的收口不变量，而 A2 当时没有任何 AC 引用它 ⇒ 不变量当场为假**。**本条就是补上那个缺口**（A2 的两处是**独立于 AC-1 的源码级锁**：AC-1 验「三处同源」，AC-25 验「锁本身已改」） | T2 | **A2** | US-1 |
 | **AC-22** | 重启后真机 `console.warn` 可见 | **T3** | — | US-7 |
-| **AC-23** | **仓外部署 profile 同步**（**owner = 用户/运维**，本批只登记） | **T3** | — | — |
+| **AC-23** | **仓外部署 profile 同步**（**owner = 用户/运维**，本批只登记） | **连 T3 都不是** | — | — |
 
 ### §11.4 建议 stages（**五段串行**）
 
@@ -444,8 +445,8 @@ flowchart TD
   S0["**stage 0** FR-0 授权门哨<br/>`test/death-provenance.test.mjs`"] --> S1
   S1["**stage 1** FR-1 默认值三处同源 + FR-4 到点文案与前置告警<br/>`lib/eng.mjs` · `test/advisor-config.test.mjs`"] --> S2
   S2["**stage 2** FR-2 提取器与三轴谓词 ★ 因果对：`config-store:19` 补 runner<br/>`test/config-api.test.mjs` · `lib/config-store.mjs`"] --> S3
-  S3["**stage 3** FR-3 F8 旗标 + FR-5 十处引用清尸<br/>`test/death-provenance.test.mjs` · `lib/**` 六档"] --> S4
-  S4["**stage 4** 收口：全量 + A1–A11 逐锚 + 零改面 + 变异自证（含 A3/A4 负控）<br/>+ README 散文面 + CHANGELOG"]
+  S3["**stage 3** FR-3 F8 两分支各打准确话 + FR-5 十处引用清尸<br/>`test/death-provenance.test.mjs` · `lib/**` **7 档**"] --> S4
+  S4["**stage 4** 收口：全量 + **A1–A12** 逐锚 + 零改面 + 变异自证（含 A3/A4 负控）<br/>+ README 与 `patch.yml:43` 散文面 + **交接页登记** + CHANGELOG"]
   S0 -. "闸：本 stage 须断言数组已含 `test/consult.test.mjs`<br/>（批 15 交付的门哨；缺失 ⇒ 停）" .-> GATE["批 15 已收口 v0.22.0"]
   style GATE fill:#dfd,stroke:#090
   style S2 fill:#ffd,stroke:#cc0
@@ -463,13 +464,16 @@ flowchart TD
 | **1** | **FR-1 + FR-4**：默认值三处同源 + 三处第一字面 + 前置告警 | `lib/eng.mjs` · `test/advisor-config.test.mjs` | `node --test test/advisor-config.test.mjs` |
 | **2** | **FR-2 + P4**：提取器 + 三轴谓词 + `config-store.mjs:19` 补 `runner` | `test/config-api.test.mjs` · `lib/config-store.mjs` | `node --test test/config-api.test.mjs` |
 | **3** | **FR-3 + FR-5**：F8 两分支各打准确话（**D14-9**）+ 10 处引用清尸 | `test/death-provenance.test.mjs` · `lib/**`（**7 档**） | `node --test` |
-| **4** | **收口**：全量 + **A1–A12** 逐锚 + 零改面 8 项 + **变异自证**（**含 A3/A4 的负控**）+ 散文面（**README 与 `patch.yml:43` 的示例与理据句**，D14-10/D14-11）+ **D14-12 的跨批降层（批 15 两档）** + **交接页登记本批 `lib/**` 需重启生效**（**N-6**，owner = **主代理**） + CHANGELOG | 全 | `node --test` |
+| **4** | **收口**：全量 + **A1–A12** 逐锚 + 零改面 8 项 + **变异自证**（**含 A3/A4 的负控**）+ 散文面（**README 与 `patch.yml:43` 的示例与理据句**，D14-10/D14-11）+ **D14-12：★ 核验批 15 两档的 AC-5/AC-25 是否已降层（若无则改）**（**复审 #14**：批 15 的修复轮**已先行**落为「T1（仅 `unattended`）· T3（`goal`/`authorized`）」⇒ **本 stage 的动作是核验、通常为空操作**——**不许按过期前提改错面**） + **交接页登记本批 `lib/**` 需重启生效**（**N-6**，owner = **主代理**） + CHANGELOG | 全 | `node --test` |
 
 > **★ FR-1（默认值三处同源）必须与 FR-4（同档两处改动）同 stage**——**同一文件、同一批次**，且**改默认值不改散文**会立刻制造本批要治的漂移。
 >
 > **★ 派发口径（评审 #11）**：**本批的 eng_coder 派发必须带 `background: true`**（**纪要 R-7 明言末段全量用后台**）——dsh 子代理**同步调用活不过平台 600s**，而收口 stage 要跑全量 + 逐锚 + 变异。
 >
-> **★ 收口不变量**：**A1–A12 与 AC-1…AC-24 必须一一对应**（**每条 AC 至少一个锚，每个锚至少一条 AC**）——**这是 §8.2 与 §11.3 两处枚举不许漂的机械保证**（**本批立项要治的病**）。
+> **★ 收口不变量**：**A1–A12 与 AC-1…AC-25 为满射**（**每条 AC 至少一个锚；每个锚至少被一条 AC 引用**）。
+>
+> **★ 复审 #13 的教训**：本行**初写「A1–A12 ↔ AC-1…AC-24 必须一一对应」**，而 **A2（`advisor-config` 的两处锁）当时没有任何 AC 引用它** ⇒ **不变量当场为假**。**⇒ 补 AC-25 后成立。**
+> **⇒ 而这条不变量本身要用程序验**（**不许人眼**）——**它是 §8.2 与 §11.3 两处枚举不许漂的机械保证**，**也正是本批立项要治的病**。**⇒ 建议它成为本批的常设谓词**（写进 `test/config-api.test.mjs` 或既有文档卫生谓词）。
 
 ---
 
