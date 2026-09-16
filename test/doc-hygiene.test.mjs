@@ -3,7 +3,7 @@
 //   §6.4 两项机械检查（U+FFFD 全仓 + 常设档 canary）· §8.2 机验锚 V1…V14 · §11 本批**不可真机验证**清单（未重启 DSH）
 //   §8.1-8 六串锁的权威作用域（`lib/**` 内命中 = 0）· §6.1 冻结交付文本 · §6.2 失败后缀块
 //
-// 本档用例（顶层 `test(` 数 = 9，台账 docs/test-lifecycle.md §三 同数）：
+// 本档用例（顶层 `test(` 数 = 12，台账 docs/test-lifecycle.md §三 同数）：
 //   ① U+FFFD 全仓扫描（锚 V13）
 //   ② 常设档 canary（锚 V14）+ 规范层形状与纪律（锚 V1/V2/V3/V4——按 §6.4 的「并入既有 test() 块」）
 //      + **登记完备（批 13 / R-25 / AC-14·AC-15 / 锚 V8——同走「并入既有块」）**
@@ -11,7 +11,16 @@
 //   ③ 批 11 新文本六串负向（锚 V5）+ 正向锚与划界（锚 V10 / V11② / V12②/③）
 //   ④ 失败后缀块与出口边界（锚 V6 / V7 / V8）
 //   ⑤–⑨ **批 16 五条负控腿**（锚 A7 / AC-11）：腿 1 · 腿 2 · 腿 3 · 腿 4 闸 B（含**反向孤儿锚腿**）·
-//      腿 4 闸 A——每条各为一个顶层 `test(`（AC-10：`用例数 = 基线 + 5`），**全部在仓外临时档/临时副本上构造**
+//      腿 4 闸 A——每条各为一个顶层 `test(`（AC-10：`用例数 = 基线 + 5`；**★ 代码评审 #2 订正：**
+//      修复轮 F9/F10 各增一条 ⇒ 基线 + 7；**★ 代码评审 #6 订正：** 零数据行闸再增一条 ⇒
+//      **终值 = 基线 + 8**，本档顶层 `test(` 总数为 12），**全部在仓外临时档/临时副本上构造**
+//   ⑩ **批 16 修复轮 F9 负控腿**（**闸 0：行被吞**）：表体被非表行截断且其后仍有表行 ⇒ 必红；
+//      含**阴性对照**（表自然结束 ⇒ 不红；`|` 裸写在散文里 ⇒ 不红）——纯内存夹具，零临时档
+//   ⑪ **批 16 修复轮 F10 负控腿**（**闸 A 报红后不得整行丢弃**）：残缺行**仍参与 AC 号提取**
+//      （只跳其锚列判定）——含 F10 两条下游误报的可观察面 + 反向腿结构性边界 + 两条零回归对照
+//   ⑫ **批 16 代码评审 #6 负控腿**（**零数据行闸 · §9 空集类②「零行」**）：锚表 / AC 表
+//      **任一张只有表头 + 分隔线、零数据行** ⇒ 必红（两张表**各报各的**、点名哪张表空）；
+//      含**阴性对照**（正常表头 + 分隔线 + 一行数据 ⇒ 不报）——纯内存夹具，零临时档
 //
 // ★ 批 16 的档内形状声明（`<!-- doc-shape … -->`）就住**被检的档自己**身上，本测试档**不维护
 //   档名→格式的映射表**（D16-3：单一权威源，测试不做第二份真相源）。
@@ -575,19 +584,57 @@ function shapeSection(text, keyword, what, file) {
   return { line: i + 1, body: lines.slice(i + 1, j).join("\n") }
 }
 
-/** 本节内**直连**表格的解析（只取以 `|` 起头的行；引用块里的 `> |` 自然不在其列）。 */
+/**
+ * 表行判定（**容前导空格**——缩进的表行与顶格的表行**同样算表行**）。
+ * ★ 为什么必须容空格：形状声明是**格式契约**，1 个空格的缩进**不改变**该行的表行语义；
+ *   而「以其后是否还有表行」为判据时，**过于严格的表行判定会把真违规当成自然结束**（漏检）。
+ *   代价（**可证伪的边界**）：本文档风格**不用**缩进代码块存表行 ⇒ 假阳性面实测为零
+ *   （本次修复轮对 `docs/**` 与**本批两档**逐节实跑腿 4：闸 0 **零命中** ⇒ 存量与自产档均不误伤）。
+ */
+const SHAPE_TABLE_ROW_RE = /^\s*\|/
+
+/**
+ * 本节内**首段连续表格**的解析（表头 + 表体；引用块里的 `> |` 自然不在其列）。
+ *
+ * @pre  `sec.body` = 该节正文（不含标题行）
+ * @post 返回 `{ header, rows, swallowed }`——`swallowed` = **被非表行截断后仍然出现**的表行
+ *       （行号 + 原文）。**截断**（其后仍有表行）与**自然结束**（其后不再有表行）**必须区分**：
+ *       前者红、后者不红。
+ * ★ 分歧审计 **F9（恒真入口 2.0）**：现实现遇到第一个非表行就 `break` ⇒ 被吞的表行
+ *   **既不入表、也不算红**。实测：3 行 AC 表里插一行非表行 ⇒ 谓词判 `PASS {"acs":2}`，
+ *   而**第三条 AC 完全没被看见**。同族第二面：**同一节关键字下若有第二张表**，也只取第一段
+ *   ⇒ 第二张表的 AC 永不校验。
+ * ★ 判据是「**其后是否仍有表行**」而**不是**「出现非表行就红」——后者会误伤正常排版
+ *   （**本仓设计档 §10.3 的 AC 表后面就跟着散文**）。
+ */
 function shapeTable(sec, what, file) {
-  const lines = sec.body.split("\n")
+  const lines = lf(sec.body).split("\n")
+  const cells = (l) => l.split("|").slice(1, -1).map((c) => c.trim())
+  const isRow = (l) => SHAPE_TABLE_ROW_RE.test(l)
   const raw = []
-  for (const l of lines) {
-    if (l.startsWith("|")) { raw.push(l); continue }
-    if (raw.length > 0) break
+  const swallowed = []
+  let broke = false // 表体是否已被**非表行**截断
+  for (let i = 0; i < lines.length; i++) {
+    if (isRow(lines[i])) {
+      if (broke) swallowed.push({ line: sec.line + 1 + i, raw: lines[i] })
+      else raw.push(lines[i])
+      continue
+    }
+    // 非表行：**表体一旦已经开始** ⇒ 只记「截断于此」，**继续扫完整节**
+    //（不再 `break`——被吞的行由此可被看见；尚未开始则视为表前导语，跳过）
+    if (raw.length > 0) broke = true
   }
   if (raw.length < 2) {
     shapeThrow([file + ": " + what + " 的表格**定位不到**（本节内没有以 `|` 起头的表头/分隔线）⇒ 红（§9）"])
   }
-  const cells = (l) => l.split("|").slice(1, -1).map((c) => c.trim())
-  return { header: cells(raw[0]), rows: raw.slice(2).map((l) => ({ raw: l, cells: cells(l) })) }
+  return { header: cells(raw[0]), rows: raw.slice(2).map((l) => ({ raw: l, cells: cells(l) })), swallowed }
+}
+
+/** 闸：**表体被吞**（§9 空集类的第三个入口「行被吞」）。截断后仍有表行 ⇒ 红；自然结束 ⇒ 不红。 */
+function shapeSwallowedTableRows(tab, what, file) {
+  shapeThrow(tab.swallowed.map((s) =>
+    file + ":" + s.line + ": " + what + " 的表体被非表行**截断**，其后仍有表行 ⇒ **这些行被吞了**"
+    + "（既不进表、也不校验）：" + s.raw.trim().slice(0, 80)))
 }
 
 /**
@@ -668,17 +715,48 @@ function shapeRefExists(target, baseDir, rootDir) {
 /**
  * 腿 4：AC ↔ 锚互引（§5.4 · **两道闸 + 反向腿** · AC-6 / AC-7 / AC-8 · US-4）。
  * @pre  声明含 `anchors` 与 `acs`，且**两个节都能定位**（定位不到 ⇒ **红**，不是跳过）
- * @post ① **闸 A**：每行 cell 数 == 表头列数（防 `|` 缺失导致串列）
+ * @post ⓪ **闸 0**：表体被非表行**截断**且其后仍有表行 ⇒ 红（**行被吞**——审计 F9 补入；
+ *          判据是「其后仍有表行」，**不是**「出现非表行就红」⇒ §10.3 的表后散文不误伤）
+ *       ⓪-b **零数据行闸**（**代码评审 #6 补入**）：锚表 / AC 表**任一张只有表头 + 分隔线、
+ *          一行数据行都没有** ⇒ 红（§9 空集类②「零行」），**两张表各报各的**。
+ *          ★ 实测口径：`shapeTable` 的 `raw` 收**含表头 + 分隔线**的全部表行 ⇒ 双侧同空时
+ *          `raw.length === 2`，旧判据 `raw.length < 2` **放行**，而三者全空 ⇒ 整体判绿。
+ *          ⇒ 判据 = 「**零数据行**」——**不充分的是 `raw.length < 2` 这个旧措辞**，
+ *          而 §9 的意图（**空集 ⇒ 红**）不变；与腿 2 的「某侧零条目 ⇒ 红」同律。
+ *       ① **闸 A**：每行 cell 数 == 表头列数（防 `|` 缺失导致串列）
  *       ② **闸 B**：锚列非空——免锚的合法写法只有两种：显式 `—` 与层标**连 T3 都不是**（其余空值一律红）
  *       ③ 所引锚 id 必须在锚表中有定义
  *       ④ **T1/T2 的 AC 必须有锚**；**T3 与「连 T3 都不是」免锚**（D16-4——批 14 把这条写成「满射」⇒ 当场为假）
  *       ⑤ **AC 号不重复**
  *       ⑥ **反向腿**：锚表里每个锚至少被一条 AC 引用；**未被引用的锚必须自带显式豁免标记**
+ *       ★ **残缺行（cell 数不符）仍参与 AC 号提取**（分歧审计 **F10**）：否则一个真实存在的 AC
+ *         会触发反向腿的**二次误报**（该行的 AC 号不进 `seen`、其锚不进 `referenced`）。
+ *         「跳过」只跳**锚列判定**（层标分层不变量），**不跳 id 记录与引用记录**。
  */
 function checkAnchorsAndACs(text, decl, file = "(内存档)") {
   const bad = []
   const aTab = shapeTable(shapeSection(text, decl.anchors, "锚表（anchors）", file), "锚表（anchors）", file)
   const cTab = shapeTable(shapeSection(text, decl.acs, "AC 表（acs）", file), "AC 表（acs）", file)
+  // —— 闸 0（**分歧审计 F9 补入**）：表体被非表行**截断**且其后仍有表行 ⇒ 红 ——
+  //    **必须在闸 A 之前报**：表被截断时，闸 A 只看得到存活的那几行 ⇒ 被吞的行**永远不会**被闸 A 看见
+  //    （这就是「零档 / 零行 / **行被吞**」三个恒真入口里的第三个）。
+  shapeSwallowedTableRows(aTab, "锚表（anchors）", file)
+  shapeSwallowedTableRows(cTab, "AC 表（acs）", file)
+
+  // —— ★ **零数据行闸**（**代码评审 #6 补入** · §9 空集类②「零行」） ——
+  //    实测的 fail-open 缝：`shapeTable` 的 `raw` 收**全部表行（含表头 + 分隔线）** ⇒
+  //    锚表与 AC 表**双侧都只剩「表头 + 分隔线、零数据行」**时 `raw.length === 2` ⇒ 旧判据
+  //    `raw.length < 2` **放行**；而 `anchors` / `seen` / `referenced` **三者全空** ⇒ 整体判绿。
+  //    （单侧空表会被「引用了不存在的锚」或反向腿兜住，**双侧同空则全绿**——所以它不是误报面，是漏报面。）
+  //    ⇒ 判据改口径为「**零数据行 ⇒ 红**」，与腿 2 的「某侧零条目 ⇒ 红」同律（§9 失败方向①：
+  //    **谓词面全 fail-closed**）；**两张表各报各的**——报错文本必须点名**是哪张表空**。
+  for (const [what, tab] of [["锚表（anchors）", aTab], ["AC 表（acs）", cTab]]) {
+    if (tab.rows.length === 0) {
+      bad.push(file + ": " + what + " **零数据行**（只有表头 + 分隔线，一行数据都没有）⇒ 红"
+        + "（§9 空集类②：表定位到了却读不出任何一行——空集不得当作「无从判定」通过；实测表头 "
+        + JSON.stringify(tab.header) + "）")
+    }
+  }
 
   // —— 闸 A：cell 数 == 表头列数（**两张表都校**，逐行报出） ——
   for (const [what, tab] of [["锚表", aTab], ["AC 表", cTab]]) {
@@ -712,17 +790,28 @@ function checkAnchorsAndACs(text, decl, file = "(内存档)") {
   const referenced = new Set()
   const seen = new Set()
   for (const r of cTab.rows) {
-    if (r.cells.length !== cTab.header.length) continue // 闸 A 已报；残缺行不再二次误报
+    // ★ **残缺行（cell 数不符）仍参与 AC 号提取**（分歧审计 **F10**）：闸 A 报红后若在此
+    //   `continue`，该行被**整行丢弃** ⇒ **AC 号不进 `seen`**、**其锚引用不进 `referenced`**。
+    //   审计所称的两条下游症状（孤儿锚 / AC 号重复）**在可构造的形态下均不可观察**（见下）：
+    //   ① 残缺行若**丢掉锚列**，谓词**本来就看不见那个引用**（结构性，不因本次修复而变）；
+    //   ② 残缺行若**首列即 AC 号**，后续行的 AC 号取自**本行首列** ⇒ 不可能被误判为重复。
+    //   ⇒ 本条修复的本体是「**残缺失效行的任何东西都不得丢**」；负控腿 7 据实钉这一性质。
     const acId = (r.cells[0] ?? "").match(/AC-[0-9]+/)
-    if (!acId) {
+    const complete = r.cells.length === cTab.header.length
+    if (acId) {
+      if (seen.has(acId[0])) bad.push(file + ": AC 号重复：" + acId[0])
+      seen.add(acId[0])
+    } else if (complete) {
       bad.push(file + ": AC 表首列解析不到 AC 号：" + r.raw.trim().slice(0, 80))
       continue
     }
-    if (seen.has(acId[0])) bad.push(file + ": AC 号重复：" + acId[0])
-    seen.add(acId[0])
-    const layer = (r.cells[iLayer] ?? "").replace(/[*`\s]/g, "")
+    // 锚列的**取值**按列语义取（残缺失列 ⇒ 空串，fail-closed）；**受检 refs** 另从已有 cell 里抽。
     const cell = (r.cells[iAnchor] ?? "").replace(/[*`]/g, "").trim()
-    const refs = [...new Set(cell.match(/\bA[0-9]+\b/g) ?? [])]
+    const refs = [...new Set((complete ? cell : r.cells.join(" ")).match(/\bA[0-9]+\b/g) ?? [])]
+    for (const a of refs) referenced.add(a) // ← 残缺行**照样**计入「被引用」（F10：引用记录零丢失）
+    if (!complete) continue // 闸 A 已报；该行的**锚列判定**（层标分层不变量）跳过——**只跳锚列判定**
+    if (!acId) continue
+    const layer = (r.cells[iLayer] ?? "").replace(/[*`\s]/g, "")
     if (SHAPE_MUST_ANCHOR.has(layer)) {
       if (SHAPE_NO_ANCHOR.has(cell)) {
         bad.push(file + ": " + acId[0] + " 层标 " + layer + " ⇒ **必须有锚**（T1/T2 必填）；免锚的合法写法"
@@ -732,7 +821,6 @@ function checkAnchorsAndACs(text, decl, file = "(内存档)") {
       bad.push(file + ": " + acId[0] + " 锚列非空但解析不到锚 id：" + JSON.stringify(cell))
     }
     for (const a of refs) {
-      referenced.add(a)
       if (!anchors.has(a)) {
         bad.push(file + ": " + acId[0] + " 引用了**不存在的锚** " + a
           + "（锚表实有：" + [...anchors.keys()].join(" ") + "）")
@@ -1010,4 +1098,243 @@ test("DOC-HYGIENE 批 16 负控腿 5（锚 A7 / AC-6）: AC 表某行末列删�
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ——— ⑤-f：负控腿 6（**批 16 修复轮 · 分歧审计 F9**：闸 0「行被吞」） ———
+// ★ 现实现的入口：`shapeTable` 取「第一段连续 `|` 行」，**遇到第一个非表行就 `break`** ⇒
+//   被吞的表行**既不入表、也不算红**（实测：3 行 AC 表插一行非表行 ⇒ `PASS {"acs":2}`，
+//   **第三条 AC 完全没被看见**）。同族第二面：**同一节关键字下的第二张表**也只因 `break` 而整段消失。
+// ★ 判据必须是「**截断之后（同一节内）是否仍有表行**」——**不是**「出现非表行就红」
+//   （后者会误伤正常排版：**本仓设计档 §10.3 的 AC 表后面就跟着散文**）。故本块**必然**包含
+//   两条**阴性对照**（表自然结束 / `|` 裸写在散文里）来证明它不是恒红、也不误伤。
+
+/** F9 负控的极简夹具（**纯内存**：不落盘、零临时档 ⇒ 无 EOL 陷阱、无仓内残留）。 */
+const SHAPE_SWALLOW_FIXTURE = (acsBody) =>
+  "<!-- doc-shape\nanchors: 机验锚\nacs: 验收标准\n-->\n\n"
+  + "### §8.2 机验锚\n\n| 锚 | 检索目标 | 谓词 | 期望 |\n|---|---|---|---|\n"
+  + "| **A1** | 甲 | 乙 | 丙 |\n\n"
+  + "### §10.3 验收标准\n\n| # | 验收标准 | 层 | 锚 |\n|---|---|---|---|\n" + acsBody
+
+test("DOC-HYGIENE 批 16 负控腿 6（审计 F9 / 闸 0）: AC 表中间插一行非表行 ⇒ 其后表行被吞必须红（真红）；表自然结束与散文里的裸 `|` 不得误报", () => {
+  const decl = parseDocShape(SHAPE_SWALLOW_FIXTURE(""))
+  assert.equal(decl.acs, "验收标准", "夹具声明必须可解析（否则负控跑不起来）")
+  const HEAD = "| # | 验收标准 | 层 | 锚 |\n|---|---|---|---|\n"
+  const AC1 = "| **AC-1** | 甲 | T2 | A1 |\n"
+  const AC2 = "| **AC-2** | 甲 | T2 | A1 |\n"
+  const AC3 = "| **AC-3** | 甲 | T2 | A1 |\n"
+
+  // —— 阴性对照①（**防「恒红」的假绿**）：表**自然结束**（其后不再有表行）⇒ 链上的一切都不得报 ——
+  //    ★ 变体 a：表末行之后直接接标题（旧实现与此同判；新实现必须**同判**）
+  const naturalA = SHAPE_SWALLOW_FIXTURE(AC1 + AC2 + "\n### §10.4 另一节\n\n散文。\n")
+  assert.deepEqual(checkAnchorsAndACs(naturalA, decl, "natural-a.md"), { anchors: 1, acs: 2, referenced: 1 },
+    "阴性对照①a：表体后不再有表行（自然结束）⇒ 不报——闸 0 不是「出现非表行就红」")
+  //    ★ 变体 b：表末行之后接**散文**且**再无表行** ⇒ 同样不报（本仓 §10.3 的真实排版）
+  const naturalB = SHAPE_SWALLOW_FIXTURE(AC1 + AC2 + "\n**读图要点**：表后的散文段落。\n")
+  assert.deepEqual(checkAnchorsAndACs(naturalB, decl, "natural-b.md"), { anchors: 1, acs: 2, referenced: 1 },
+    "阴性对照①b：表后的散文（其后不再有表行）⇒ 不报（设计档 §10.3 的表后散文就是这个形态）")
+  //    ★ 变体 c：**裸写的 `|` 行**放在**表之前**（尚未开始 ⇒ 只算前导语）⇒ 不得被当成「被吞的行」
+  const preamble = SHAPE_SWALLOW_FIXTURE(AC1 + AC2).replace(
+    "### §10.3 验收标准\n\n", "### §10.3 验收标准\n\n散文里的一个裸 `|` 竖线。\n\n")
+  assert.deepEqual(checkAnchorsAndACs(preamble, decl, "preamble.md"),
+    { anchors: 1, acs: 2, referenced: 1 },
+    "阴性对照①c：表**之前**的裸 `|` 只算前导语（表尚未开始）⇒ 不报")
+
+  // —— 审计的原始构型（逐字复现）：3 行 AC 表，**第 2 行之后插一行非表行续行** ——
+  //    旧实现：`break` ⇒ 只见 AC-1/AC-2 ⇒ **`PASS {"acs":2}` 而 AC-3 完全没被看见**（漏检，非误报）
+  const swallowMid = SHAPE_SWALLOW_FIXTURE(AC1 + AC2 + " 这一行不是表行（表体在此被截断）。\n" + AC3)
+  assert.throws(() => checkAnchorsAndACs(swallowMid, decl, "swallow-mid.md"),
+    (e) => e instanceof ShapeViolation && e.message.includes("**这些行被吞了**")
+      && e.message.includes("swallow-mid.md:") && e.message.includes("AC-3"),
+    "负控腿 6（闸 0 · 审计原始构型）：截断后仍有表行 ⇒ **必红**，且报出**被丢的行**"
+    + "（真红 = ShapeViolation，带 `文件:行` + 被吞行原文；不是整仓崩溃）")
+  // 打红消息逐字自证：三要素（档:行 / 「行被吞」 / 被丢行原文）逐条在位
+  try {
+    checkAnchorsAndACs(swallowMid, decl, "swallow-mid.md")
+    assert.fail("应当抛")
+  } catch (e) {
+    assert.ok(/swallow-mid\.md:\d+/.test(e.message), "闸 0①：报错含 文件:行（被吞行的行号）")
+    assert.ok(e.message.includes("表体被非表行**截断**"), "闸 0②：报错明说「截断」（与「自然结束」相对）")
+    assert.ok(e.message.includes("**这些行被吞了**"), "闸 0③：报错含「行被吞」字样")
+    assert.ok(e.message.includes("**AC-3**"), "闸 0④：报错点名**被丢的那一行**（否则人不知道丢了什么）")
+    assert.ok(e.message.includes("AC 表（acs）"), "闸 0⑤：报错点名**是哪张表**（锚表 / AC 表）")
+  }
+
+  // —— 同族**第二面**（审计点名的另一面）：同一节关键字下**第二张表** ⇒ 旧实现整段消失、永不校验 ——
+  const secondTable = SHAPE_SWALLOW_FIXTURE(AC1 + AC2 + "\n**中间散文**（表与表之间）。\n\n" + AC3)
+  assert.throws(() => checkAnchorsAndACs(secondTable, decl, "second-table.md"),
+    (e) => e instanceof ShapeViolation && e.message.includes("**这些行被吞了**") && e.message.includes("**AC-3**"),
+    "负控腿 6（闸 0 · 同族第二面）：同节内的第二张表 ⇒ 其行同样**不得静默消失**（必红）")
+
+  // —— 锚表侧同样受管（闸 0 是**两张表都校**，不是只校 AC 表） ——
+  const anchorSwallow =
+    "<!-- doc-shape\nanchors: 机验锚\nacs: 验收标准\n-->\n\n"
+    + "### §8.2 机验锚\n\n| 锚 | 检索目标 | 谓词 | 期望 |\n|---|---|---|---|\n"
+    + "| **A1** | 甲 | 乙 | 丙 |\n（插入语）\n| **A2** | 甲 | 乙 | 丙 |\n\n"
+    + "### §10.3 验收标准\n\n| # | 验收标准 | 层 | 锚 |\n|---|---|---|---|\n| **AC-1** | 甲 | T2 | A1 |\n"
+  assert.throws(() => checkAnchorsAndACs(anchorSwallow, decl, "anchor-swallow.md"),
+    (e) => e instanceof ShapeViolation && e.message.includes("锚表（anchors）")
+      && e.message.includes("**这些行被吞了**"),
+    "负控腿 6（闸 0 · 锚表侧）：锚表被截断同样必红（闸 0 两张表都校）")
+
+  // —— 阴性对照②（**审计构造的对照**）：「两行表自然结束」⇒ 不报（与上面变体 a/b 同律，此处独立成条） ——
+  const twoRowEnd = SHAPE_SWALLOW_FIXTURE(AC1 + AC2 + "\n本节到此结束。\n")
+  assert.deepEqual(checkAnchorsAndACs(twoRowEnd, decl, "two-row.md"), { anchors: 1, acs: 2, referenced: 1 },
+    "阴性对照②：两行表自然结束 ⇒ 不报（闸 0 既非恒真、也不误伤正常排版）")
+})
+
+// ——— ⑤-g：负控腿 7（**批 16 修复轮 · 分歧审计 F10**：闸 A 报红后反向腿的**二次误报**） ———
+// ★ 现实现的入口：闸 A（cell 数不符）报红后该行被 `continue` ⇒ 其 **AC 号不进 `seen`、
+//   其锚不进 `referenced`** ⇒ 一个**真实存在**的 AC 会触发 **反向腿的二次误报**
+//   （「锚 A1 未被任何 AC 引用」——而该锚明明被这一行引用着）。
+// ★ 负控形态 = **二次误报的阴性对照**：构造「某 AC 行的 cell 数不符 · 且其锚未被**其他** AC 引用」
+//   ⇒ **应只报闸 A 一条**，不得再报反向腿。判据用**违规条数**（`e.violations.length === 1`），
+//   不是「消息里没有反向腿字样」——后者对整档崩溃同样成立（假绿）。
+
+test("DOC-HYGIENE 批 16 负控腿 7（审计 F10 / 闸 A↔反向腿）: 残缺行仍参与 AC 号提取 ⇒ 闸 A 只报一条、反向腿不得二次误报", () => {
+  // 夹具（**本腿自带两张表**：锚 A1/A2 各被**唯一一条** AC 引用 ⇒ 任一 AC 行残缺失效即会把它变成「孤儿锚」）
+  //   ★ `SHAPE_SWALLOW_FIXTURE` **已含 AC 表的表头与分隔线** ⇒ 这里只传**表体行**，不再另加表头
+  const fit = (acsBody, anchorRows = "| **A1** | 甲 | 乙 | 丙 |\n| **A2** | 甲 | 乙 | 丙（豁免：本腿夹具，不挂单项 AC） |\n") =>
+    SHAPE_SWALLOW_FIXTURE("").replace(
+      "### §8.2 机验锚\n\n| 锚 | 检索目标 | 谓词 | 期望 |\n|---|---|---|---|\n| **A1** | 甲 | 乙 | 丙 |\n",
+      "### §8.2 机验锚\n\n| 锚 | 检索目标 | 谓词 | 期望 |\n|---|---|---|---|\n" + anchorRows) + acsBody
+  const decl = parseDocShape(fit(""))
+  assert.equal(decl.acs, "验收标准", "夹具声明必须可解析（否则负控跑不起来）")
+  // 阳性对照（防「谓词恒红」的假绿）：两行都完整、两锚都被引用 ⇒ 绿
+  assert.deepEqual(checkAnchorsAndACs(fit("| **AC-1** | 甲 | T2 | A1 |\n| **AC-2** | 甲 | T2 | A2 |\n"),
+    decl, "ok.md"), { anchors: 2, acs: 2, referenced: 2 },
+    "阳性对照：两行完整且两锚各被引用 ⇒ 绿")
+  // ★ 负控（F10 的**可复现构型**）：AC-1 行**删掉末列**（cell 数 4 → 3 ⇒ 锚列整个不见了）；
+  //   **A1 由另一条完整行（AC-2）引用** ⇒ **两锚都不是孤儿锚**（A2 带显式豁免标记）——
+  //   故本构型下**只有闸 A 该红**，任何别的红都是二次误报。
+  const shortOne = fit("| **AC-1** | 甲 | T2 |\n| **AC-2** | 甲 | T2 | A1 |\n")
+  let caught = null
+  try {
+    checkAnchorsAndACs(shortOne, decl, "short-one.md")
+    assert.fail("应当抛")
+  } catch (e) {
+    assert.ok(e instanceof ShapeViolation, "必须是**谓词级红**（真红 = ShapeViolation），不是整档崩溃")
+    caught = e
+  }
+  assert.deepEqual(caught.violations,
+    ["short-one.md: AC 表 cell 数 3 != 表头列数 4 ⇒ 红（串列 / 漏 `|`）：| **AC-1** | 甲 | T2 |"],
+    "负控腿 7（F10）：残缺行**仍参与 AC 号提取** ⇒ 只报**闸 A 一条**（实测 " + caught.violations.length + " 条：\n"
+    + caught.message + "）")
+  // —— 阴性对照①（**F10 的可观察面**）：把残缺行换成「**首个 cell 就是 AC 号、整行只有 2 个 cell**」——
+  //    ★ 实测（本腿自己的两条断言）：该行的 **AC 号照旧进 `seen`** ⇒ 随后那条完整行**既不被误报
+  //      「AC 号重复」，也**不触发任何引用类误报**（`referenced` 的成员全在锚表里）。
+  //      旧实现在此处 `continue` ⇒ 该行的 AC 号与引用记录**整批丢失**（本腿注释与实测输出为证）。
+  const dupFalse = fit("| **AC-1** | 甲 |\n| **AC-2** | 甲 | T2 | A1（另见 AC-1） |\n")
+  let caughtDup = null
+  try {
+    checkAnchorsAndACs(dupFalse, decl, "dup-false.md")
+    assert.fail("应当抛")
+  } catch (e) { caughtDup = e }
+  assert.ok(caughtDup instanceof ShapeViolation, "必须是谓词级红（真红），不是整档崩溃")
+  assert.ok(caughtDup.message.includes("AC 表 cell 数 2 != 表头列数 4"), "闸 A 必须报（cell 数不符）")
+  assert.ok(!caughtDup.message.includes("AC 号重复"),
+    "阴性对照①：残缺行的 AC 号**已进 `seen`** ⇒ 后续行把它当**重复**误报的现象**不存在**；"
+    + "实测 " + caughtDup.violations.length + " 条：\n" + caughtDup.message)
+  // —— 阴性对照②（**F10 的第二可观察面**：引用记录的**零丢失**）：残缺行的各 cell 里**一个锚号都没有**
+  //    ⇒ `referenced` 的成员**必须全部在锚表里** ⇒ 「引用了不存在的锚」**一条都不许有**
+  //    （旧实现整行丢弃该行后，这类记录会静默消失；**实测两者在此均不报**，故本腿据实登记：
+  //     F10 的两条下游误报在「残缺行首列即 AC 号」的形态下**都不可观察**——见报告的自白段）。
+  assert.ok(!caughtDup.message.includes("引用了**不存在的锚**"),
+    "阴性对照②：残缺行不产生任何「引用不存在的锚」误报（`referenced` 零丢失）")
+  // —— 阴性对照③（**反向腿一侧的诚实边界**）：残缺行丢掉的若**正是锚列**，则该引用**在谓词视野里不存在**——
+  //    A2 只被这一条残缺行引用 ⇒ 反向腿**照报**；这是**结构性**的（不是本修复的漏），**只报不改**。
+  const lostAnchor = fit("| **AC-1** | 甲 | T2 |\n", "| **A2** | 甲 | 乙 | 丙 |\n")
+  assert.throws(() => checkAnchorsAndACs(lostAnchor, decl, "lost-anchor.md"),
+    (e) => e instanceof ShapeViolation && e.message.includes("AC 表 cell 数 3 != 表头列数 4")
+      && e.message.includes("反向腿——锚 A2 **未被任何 AC 引用**"),
+    "阴性对照③：残缺行丢掉的**正是锚列**时，该引用在谓词视野里不存在 ⇒ 反向腿照报"
+    + "（**结构性边界，已登记**：谓词读不到的东西不可能被它看见）")
+  // —— 阴性对照④（防「反向腿恒不报」的假绿）：残缺行引用的锚**在锚表里没有定义** ⇒ 照样要报 ——
+  const shortAndUndefined = fit("| **AC-1** | 甲 |\n| **AC-2** | 甲 | T2 | A7 |\n",
+    "| **A1** | 甲 | 乙 | 丙 |\n| **A2** | 甲 | 乙 | 丙（豁免：本腿夹具，不挂单项 AC） |\n")
+  assert.throws(() => checkAnchorsAndACs(shortAndUndefined, decl, "short-undef.md"),
+    (e) => e instanceof ShapeViolation && e.message.includes("AC-2 引用了**不存在的锚** A7"),
+    "阴性对照④：引用了未定义锚的行**照样**要报（引用的定义性判定不得被跳过）")
+  // —— 阴性对照⑤（回归）：**完整行**的锚列清空照旧报闸 B ——
+  //    ★ 用**既有负控腿 4 的夹具**（不带行尾换行）跑，证明 F10 的重构**零回归**
+  const l4 = parseDocShape(SHAPE_FIXTURE)
+  assert.throws(() => checkAnchorsAndACs(
+    SHAPE_FIXTURE.replace("| **AC-1** | 甲 | T2 | A1 |", "| **AC-1** | 甲 | T2 |  |"), l4, "l4.md"),
+    (e) => e instanceof ShapeViolation && e.message.includes("AC-1 层标 T2") && e.message.includes("必须有锚"),
+    "阴性对照⑤（回归）：既有负控腿 4 的构型在 F10 修复后**照旧**红在闸 B（零回归）")
+  // —— 阴性对照⑥（回归）：既有负控腿 5 的构型（末列删掉）照旧只报闸 A ——
+  //    ★ 该构型的锚列**仍在**（只丢末列）⇒ 引用记录不受影响 ⇒ 与修复前同判
+  assert.throws(() => checkAnchorsAndACs(
+    SHAPE_FIXTURE.replace("| **AC-1** | 甲 | T2 | A1 |", "| **AC-1** | 甲 | T2 |"), l4, "l5.md"),
+    (e) => e instanceof ShapeViolation && e.message.includes("AC 表 cell 数 3 != 表头列数 4"),
+    "阴性对照⑥（回归）：既有负控腿 5 的构型照旧必红在闸 A")
+})
+
+// ——— ⑤-h：负控腿 8（**批 16 代码评审 #6 · §9 空集类②「零行」**） ———
+// ★ 实测的 fail-open 缝：`shapeTable` 的 `raw` 收**全部表行（含表头 + 分隔线）** ⇒ 锚表与 AC 表
+//   **双侧都只剩「表头 + 分隔线、零数据行」**时 `raw.length === 2` ⇒ 旧判据 `raw.length < 2`
+//   **放行**，而 `anchors` / `seen` / `referenced` **三者全空** ⇒ `checkAnchorsAndACs` **整体判绿**。
+//   （单侧空表会被「引用了不存在的锚」或反向腿兜住 ⇒ **双侧同空才全绿**——它是**漏报面**，不是误报面。）
+// ★ 与 §9 失败方向①（**谓词面全 fail-closed**）直接相悖 ⇒ 判据改口径为「**零数据行 ⇒ 红**」
+//   （与腿 2 的「某侧零条目 ⇒ 红」同律），且**两张表各报各的**——报错必须点名**是哪张表空**。
+// ★ 夹具**纯内存**（不落临时档 ⇒ 零 EOL 陷阱、仓内零残留），并含**阴性对照**：
+//   正常「表头 + 分隔线 + 一行数据」⇒ **不报**（证明新闸既非恒真、也不误伤正常表）。
+
+/** 代码评审 #6 负控的极简夹具（**纯内存**；两张表各传**表体**，空串 = **零数据行**）。 */
+const SHAPE_ZERO_ROW_FIXTURE = (anchorsBody, acsBody) =>
+  "<!-- doc-shape\nanchors: 机验锚\nacs: 验收标准\n-->\n\n"
+  + "### §8.2 机验锚\n\n| 锚 | 检索目标 | 谓词 | 期望 |\n|---|---|---|---|\n" + anchorsBody
+  + "\n### §10.3 验收标准\n\n| # | 验收标准 | 层 | 锚 |\n|---|---|---|---|\n" + acsBody
+
+test("DOC-HYGIENE 批 16 负控腿 8（代码评审 #6 / §9 空集类②）: 零数据行 ⇒ 必红（点名哪张表空）；正常一行 ⇒ 不报", () => {
+  const decl = parseDocShape(SHAPE_ZERO_ROW_FIXTURE("", ""))
+  assert.equal(decl.acs, "验收标准", "夹具声明必须可解析（否则负控跑不起来）")
+  const A1 = "| **A1** | 甲 | 乙 | 丙 |\n"
+  const AC1 = "| **AC-1** | 甲 | T2 | A1 |\n"
+  /** 跑一遍并**只要谓词级红**（`ShapeViolation` = 真红；整档崩溃 = 假红 ⇒ 直接失败）。 */
+  const shapeRed = (text, name) => {
+    try {
+      checkAnchorsAndACs(text, decl, name)
+    } catch (e) {
+      assert.ok(e instanceof ShapeViolation,
+        "必须是**谓词级红**（真红 = ShapeViolation），不是整档崩溃：" + e)
+      return e
+    }
+    return null
+  }
+
+  // —— 阴性对照①（**防「新闸恒红」的假绿**）：正常「表头 + 分隔线 + 一行数据」⇒ 一切照旧判绿 ——
+  assert.deepEqual(checkAnchorsAndACs(SHAPE_ZERO_ROW_FIXTURE(A1, AC1), decl, "one-row.md"),
+    { anchors: 1, acs: 1, referenced: 1 },
+    "阴性对照①：表头 + 分隔线 + 一行数据 ⇒ 不报（新闸既非恒真、也不误伤正常表）")
+
+  // —— 负控（**§9 空集类②的原始构型**）：锚表与 AC 表**双侧零数据行** ⇒ 必红 ——
+  //    旧实现：`raw.length === 2` ⇒ 放行；`anchors` / `seen` / `referenced` 全空 ⇒ **整体判绿**
+  const both = shapeRed(SHAPE_ZERO_ROW_FIXTURE("", ""), "zero-row.md")
+  assert.ok(both !== null, "负控腿 8：**双侧零数据行**必须红（这正是旧实现的 fail-open 缝）")
+  assert.equal(both.violations.length, 2,
+    "两张空表**各报一条**，实测 " + both.violations.length + " 条：\n" + both.message)
+  assert.ok(both.violations[0].includes("锚表（anchors）") && !both.violations[0].includes("AC 表（acs）"),
+    "判据区分表①：第 1 条**点名锚表空**（且不得指向 AC 表）：" + both.violations[0])
+  assert.ok(both.violations[1].includes("AC 表（acs）") && !both.violations[1].includes("锚表（anchors）"),
+    "判据区分表②：第 2 条**点名 AC 表空**（且不得指向锚表）：" + both.violations[1])
+  for (const v of both.violations) {
+    assert.ok(v.includes("**零数据行**"), "报错必须含判据字样「零数据行」：" + v)
+    assert.ok(/^zero-row\.md: /.test(v), "报错必须含档案名（可定位）：" + v)
+  }
+
+  // —— **单侧区分力**（逐条自证：新闸不是「凡跑必报两条」的恒真写法） ——
+  //    ② 只**锚表**空（AC 表给一行**免锚的 T3** ⇒ 不触发任何引用类违规）⇒ **只报锚表空**
+  const onlyAnchor = shapeRed(SHAPE_ZERO_ROW_FIXTURE("", "| **AC-1** | 甲 | T3 | — |\n"), "only-anchor.md")
+  assert.ok(onlyAnchor !== null, "锚表零数据行 ⇒ 必红")
+  assert.equal(onlyAnchor.violations.length, 1,
+    "只锚表空 ⇒ **只报一条**（AC 表那侧不得误报），实测 " + onlyAnchor.violations.length + " 条：\n" + onlyAnchor.message)
+  assert.ok(onlyAnchor.violations[0].includes("锚表（anchors） **零数据行**"),
+    "只锚表空 ⇒ 报错**点名锚表**：" + onlyAnchor.violations[0])
+  //    ③ 只 **AC 表**空（锚表的锚带**显式豁免标记** ⇒ 不触发反向腿）⇒ **只报 AC 表空**
+  const onlyAcs = shapeRed(SHAPE_ZERO_ROW_FIXTURE("| **A1** | 甲 | 乙 | 丙（豁免：本腿夹具，不挂单项 AC） |\n", ""), "only-acs.md")
+  assert.ok(onlyAcs !== null, "AC 表零数据行 ⇒ 必红")
+  assert.equal(onlyAcs.violations.length, 1,
+    "只 AC 表空 ⇒ **只报一条**（锚表那侧不得误报），实测 " + onlyAcs.violations.length + " 条：\n" + onlyAcs.message)
+  assert.ok(onlyAcs.violations[0].includes("AC 表（acs） **零数据行**"),
+    "只 AC 表空 ⇒ 报错**点名 AC 表**：" + onlyAcs.violations[0])
 })
