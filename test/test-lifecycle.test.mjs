@@ -11,7 +11,7 @@
 //                     档名列与用例数列是**被测事实**，绝不拿来当**别的断言**的期望值。
 //                     即：不存在「先读台账、再按台账自证」的路径。
 //   律 3 还原即红 —— 每条保护性断言都附**变异矩阵**（见 T-LC5 的合成行与交付报告的实测数字）。
-//   律 4 锚不动 —— 基线用**固定 sha 常量** `2e6ca8b`，**禁止** HEAD / 工作树相对锚（D-37 的原罪）。
+//   律 4 锚不动 —— 基线用**固定 sha 常量** `9282882`，**禁止** HEAD / 工作树相对锚（D-37 的原罪）。
 //
 // ★ fail-open 自白（批 9 分歧审计 F5 —— **如实登记既存取舍，不静默，行为零改动**）：
 //   本档在**无 git**（或基线 sha 不可解析）时**降级为 `console.warn` 而非强红**。降级面**恰为**三处：
@@ -41,7 +41,7 @@ const GUARD_E_SRC = join(TEST_DIR, "guard-e.test.mjs")
 const DEATH_SRC = join(TEST_DIR, "death-provenance.test.mjs")
 
 /** 律 4：批 6 开工基线（历史事件常量——**不得**改成 HEAD / 工作树形态）。 */
-const BASELINE_SHA = "2e6ca8b"
+const BASELINE_SHA = "9282882"
 /** R0 排除项（D9-3）：元锁档，其锁存活期间不可退役。 */
 const R0_FILES = ["death-provenance.test.mjs", "guard-e.test.mjs"]
 /** 基线集合（`git ls-tree <BASELINE_SHA> -- test` 的实测值，独立字面常量——不读任何产物的清单）。 */

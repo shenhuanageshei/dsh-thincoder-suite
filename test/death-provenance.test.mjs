@@ -978,14 +978,14 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *   ① `test/design-review-guard.test.mjs` —— D-37 / T-G9 的不可持久锚修（批 6 修复轮，审计 #8）；
  *   ② `test/codex-runner.test.mjs` —— 移植远端分叉 `7b6a845`（v0.9.3）增量时并入的看门狗预算
  *      resolver 断言（父侧任务书明言「`test/codex-runner.test.mjs` 是授权档，可加断言」）。该档在
- *      基线 `2e6ca8b` 时点**已存在**（`git ls-tree 2e6ca8b -- test` 含之）且自基线起零 diff ⇒
+ *      基线 `9282882` 时点**已存在**（`git ls-tree 9282882 -- test` 含之）且自基线起零 diff ⇒
  *      **必须**逐档登记，否则锚 B 必红。**本清单自身住基线之后的档**（`death-provenance.test.mjs`
  *      由批 6 `a5f9551` 引入）⇒ 扩清单不触发锚 B
  *      （**授权通道**的实际落点 = `docs/test-lifecycle.md` **§二「退役的合法路径」**——★ 批 15 修复轮同物种订正：
  *      此处原写「§一」，而 §一 是通用三层判据表、**不含授权通道内容**；旁证 =
  *      `docs/2026-09-13-test-lifecycle-consult-minutes.md:26`「授权通道存在：`AP_TEST_AUTHORIZED` 数组住在
  *      `death-provenance.test.mjs`（**基线后档 ⇒ 可改**）」）。
- *   ③ `test/config-api.test.mjs` —— **批 10（D-31）**：该档是**基线档**（`2e6ca8b` 时点在册），
+ *   ③ `test/config-api.test.mjs` —— **批 10（D-31）**：该档是**基线档**（`9282882` 时点在册），
  *      U3c 把「未知顶层键 → note + `ok:true` + 静默丢弃」的**旧行为逐字编码成期望值**；D-31 取
  *      **报错**（`unknownTop` → `errors` ⇒ PUT 400 ⇒ 写盘前拦下），故期望值必须**翻转**——这是
  *      T-AP9 存在的意义（不是障碍）。**裁定引用**：用户 2026-09-12 裁定 D-31 单独成批；批 10
@@ -993,7 +993,7 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *      （取报错、否决回显）；同档**另加** D10-10 白名单一致性锁（`draftToPayload` 键集 ⊆
  *      `topAllowed`，与该档既有面同族）⇒ **本授权同时覆盖这两处改动**（设计档 §11.1 评审 #2）。
  *   ④ `test/consult.test.mjs` —— **批 15（FR-1/FR-2：会诊结果的投递与消化）**：该档在基线
- *      `2e6ca8b` 时点**已存在**（`git ls-tree -r 2e6ca8b -- test` 含之）且不在本清单内 ⇒ 任何
+ *      `9282882` 时点**已存在**（`git ls-tree -r 9282882 -- test` 含之）且不在本清单内 ⇒ 任何
  *      改动必红。本批把会诊从「三工具轮询协议」改成「**平台 job 投递 + digest 单一消费面**」：
  *      `consult_check` 注册点与其 `waiters` 机制整体退役 ⇒ **该档的消费面从 `checkConsultSession`
  *      改指 `composeConsultDigest` 合成的 digest**（设计档
@@ -1009,7 +1009,7 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *      `consult.test.mjs` 行**。★ 修复轮审计 **F14**：此处原写「见 `docs/test-lifecycle.md` §一」——而 §一 是
  *      **通用三层判据表、没有 consult 行** ⇒ 悬空指针（正是本批要治的 X-1 物种）；现改为**自含理由 + 指向真实落点**）；
  *      §四 退役日志保持为空（T-LC3）——**本清单是「允许改」的通道，不是退役登记**。
- *   ⑤ `test/advisor-config.test.mjs` —— **批 14：默认值锁翻转**：该档是**基线档**（`2e6ca8b`
+ *   ⑤ `test/advisor-config.test.mjs` —— **批 14：默认值锁翻转**：该档是**基线档**（`9282882`
  *      时点在册）且不在本清单内 ⇒ 任何改动必红。批 14 把 `engCoderEffort` 的默认值与回落目标
  *      改为**同源常量 `ENG_CODER_EFFORT_DEFAULT`（值 `medium`）**——T18 里两处**逐字编码旧值
  *      `"low"`** 的断言（默认值腿 + 非法值回落腿）必须随之翻转成 `"medium"`，否则新默认值
@@ -1023,7 +1023,7 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  */
 const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */
-const AP_BASELINE_SHA = "2e6ca8b"
+const AP_BASELINE_SHA = "9282882"
 
 // ————————————— 锚 A 的 git 取数（批 14 / FR-3 · D14-9：两个分支各打**各的**准确话） —————————————
 /** 「无 git ⇒ 锚 A 不可判定」——**ENOENT 分支**的准确话（该分支的 `addingSha` 为空是**环境**所致，
@@ -1107,7 +1107,7 @@ test("T-AP9 (AC-AP9): 既有测试零修改（持久锚：交付提交的历史�
   // —— 锚 B：**基线时已存在的测试档，零修改**（授权例外之外）——
   // 批 6 收口修正（两次）：① 原用 `--name-only` 会把**新增**档也算「改动」⇒ 提交瞬间自红；
   // ② 只加 `--diff-filter=MD` 仍不够——本档自己**被修改过**（就是这次修正），于是它仍以 M 出现。
-  // 语义的正确表述 = 「**在基线 `2e6ca8b` 时就已存在**的测试档，除授权例外外零修改」——
+  // 语义的正确表述 = 「**在基线 `9282882` 时就已存在**的测试档，除授权例外外零修改」——
   // 故先取基线时点的文件清单，再与「自基线起的 M/D 集合」求交。（同一教训第二次命中：锚的谓词必须写全。）
   let baseDiff = null
   let baselineFiles = null

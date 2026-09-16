@@ -764,7 +764,7 @@ test("T-G9 (AC-G9): zero-change static anchors — cap text verbatim, constant u
   // 提交后 trivially 过（证明不了批 4 没碰这两个面），而**批 6 合法改 eng.mjs** 时又误红
   // （批 6 交付实测红）。改为**历史事实锚**：断言**批 4 交付提交自身**（不可变历史）没有触及
   // eng.mjs / prompts 面——不随工作树状态漂移，提交后依然有意义。
-  const BATCH4_SHA = "2e6ca8b" // 批 4 交付提交（feat(batch4): design-review cap exemption … v0.12.0）
+  const BATCH4_SHA = "9282882" // 批 4 交付提交（feat(batch4): design-review cap exemption … v0.12.0）
   let gitOut = null
   try {
     gitOut = execFileSync("git", ["show", "--name-only", "--format=", BATCH4_SHA, "--", "lib/eng.mjs", "lib/prompts.mjs", "lib/prompts"],

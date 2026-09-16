@@ -4,7 +4,7 @@
 //   · §9 边界 · §10.1 写域 · §10.2 验收 AC-1…AC-12（+ AC-5b/7b/7c/9b）
 // 需求档：docs/2026-09-13-prompt-common-requirements.md（US-1…US-7 / N-1…N-6）
 // 本批形态 = **零改面**：四个 advisor 提示词与 lib/prompts.mjs 一律**零字节改动**；
-//   本档是**新增**档（建于基线 2e6ca8b 之后 ⇒ T-AP9 不管它），只需在 test/guard-e.test.mjs
+//   本档是**新增**档（建于基线 9282882 之后 ⇒ T-AP9 不管它），只需在 test/guard-e.test.mjs
 //   的 T-E19 清单按**登记制**追加一行（用户裁定 J8）。
 // 纪律：零网络、零真实 LLM；只读文件 + 纯函数。SHA-256 复用本仓唯一实现点
 //   lib/doc-hash.mjs 的 sha256Hex（零新依赖，N-5）。
