@@ -145,7 +145,7 @@ design-before-code 的运行时门禁：
 
 > **纪要默认落档**：机制在 settle 时先写 `docs/consult-minutes/<date>-consult-<id>-minutes.md` 的 §0 汇总 + §1 原始层（**写盘先于 job complete** —— 投递成不成功，纪要都在盘上），§2–§5 的裁定层由主代理写。未消化的会诊会**拦住下一次 `consult_start`**（拒发并内联未消化的 digest）。
 
-会诊子代理可通过 `main_history` 工具回看主会话历史（60KB 预算，图片折叠为占位符）。
+会诊子代理**能看主会话历史**——本移植把它实现为**历史尾部直接注入会诊 prompt**（60KB 预算，图片折叠为占位符），**不是**一个 `main_history` 工具（DSH 的工具注册表是会话级、无法隔离给子代理，见 `lib/consult.mjs` 档头）。
 
 ## 安装
 
