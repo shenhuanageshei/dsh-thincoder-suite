@@ -676,7 +676,11 @@ function checkRefs(text, baseDir, rootDir, file = "(内存档)") {
   const hit = new Set()
   const lines = lf(text).split("\n")
   const linkRe = /\]\(([^)\s]+)\)/g
-  const pathRe = /(?:^|[^\w`./-])((?:[\w-]+\/)*[\w-]+\.(?:mjs|js|cjs|md|json|txt|ya?ml)):([0-9]+)/g
+  // ★ 代码评审第 2 轮 #3 订正：主干初为 `[\w-]+`（不含 `.`）⇒ **多点文件名**
+  // （如 `test/doc-hygiene.test.mjs:14`、`anything.v2.md:30`）的裸引用**不进受检面**
+  // （`lib/eng.mjs:747` 能匹配而 `doc-hygiene.test.mjs:14` 不能 —— 静默收窄）。
+  // 今放宽为 `[\w.-]+`，与设计档 §5.4「实体受检面」的诚实声明对齐。
+  const pathRe = /(?:^|[^\w`./-])((?:[\w.-]+\/)*[\w.-]+\.(?:mjs|js|cjs|md|json|txt|ya?ml)):([0-9]+)/g
   for (let i = 0; i < lines.length; i++) {
     const masked = maskCodeSpans(lines[i]) // ← 代码 span 之内一律**跳过**（豁免分支）
     for (const m of masked.matchAll(linkRe)) {
