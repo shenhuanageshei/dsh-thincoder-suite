@@ -3,12 +3,18 @@
 //   §6.4 两项机械检查（U+FFFD 全仓 + 常设档 canary）· §8.2 机验锚 V1…V14 · §11 本批**不可真机验证**清单（未重启 DSH）
 //   §8.1-8 六串锁的权威作用域（`lib/**` 内命中 = 0）· §6.1 冻结交付文本 · §6.2 失败后缀块
 //
-// 本档四项用例（顶层 `test(` 数 = 4，台账 docs/test-lifecycle.md §三 同数）：
+// 本档用例（顶层 `test(` 数 = 9，台账 docs/test-lifecycle.md §三 同数）：
 //   ① U+FFFD 全仓扫描（锚 V13）
 //   ② 常设档 canary（锚 V14）+ 规范层形状与纪律（锚 V1/V2/V3/V4——按 §6.4 的「并入既有 test() 块」）
-//      + **登记完备（批 13 / R-25 / AC-14·AC-15 / 锚 V8——同走「并入既有块」，故顶层 test() 数仍为 4）**
+//      + **登记完备（批 13 / R-25 / AC-14·AC-15 / 锚 V8——同走「并入既有块」）**
+//      + **批 16 形状声明解析 + 四条腿对真实档实跑 + `scanned >= 1`（锚 A1–A8——同走「并入既有块」）**
 //   ③ 批 11 新文本六串负向（锚 V5）+ 正向锚与划界（锚 V10 / V11② / V12②/③）
 //   ④ 失败后缀块与出口边界（锚 V6 / V7 / V8）
+//   ⑤–⑨ **批 16 五条负控腿**（锚 A7 / AC-11）：腿 1 · 腿 2 · 腿 3 · 腿 4 闸 B（含**反向孤儿锚腿**）·
+//      腿 4 闸 A——每条各为一个顶层 `test(`（AC-10：`用例数 = 基线 + 5`），**全部在仓外临时档/临时副本上构造**
+//
+// ★ 批 16 的档内形状声明（`<!-- doc-shape … -->`）就住**被检的档自己**身上，本测试档**不维护
+//   档名→格式的映射表**（D16-3：单一权威源，测试不做第二份真相源）。
 //
 // ★ 本档自身的六串洁净：本档**必须**点名常设标准档档名与那六串禁字，故一律用**拼接写法**
 //   （批 9 的 `has` + `Git` 先例）——直写会让本档自己命中 V5 的逐文件负向 grep。
@@ -21,10 +27,10 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
-import { dirname, extname, join, relative, resolve } from "node:path"
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { runEngCoder } from "../lib/eng.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 
@@ -131,7 +137,7 @@ function docsTopLevel() {
     .sort()
 }
 
-test("DOC-HYGIENE T2（锚 V14 + V1/V2/V3/V4 + 批 13 R-25 登记完备）: 常设档 canary（防截断为 1 行）+ 规范层零状态句 + 登记完备", () => {
+test("DOC-HYGIENE T2（锚 V14 + V1/V2/V3/V4 + 批 13 R-25 登记完备）: 常设档 canary（防截断为 1 行）+ 规范层零状态句 + 登记完备", (t) => {
   // —— V14 谓词自证：截断为 1 行的档**必须**被判违规（否则 canary 是恒真锁） ——
   const truncated = STANDARDS_DOC + "\n"
   assert.ok(canaryViolations([[STANDARDS_DOC, CANARY[0][1]]], () => truncated).length > 0,
@@ -205,6 +211,17 @@ test("DOC-HYGIENE T2（锚 V14 + V1/V2/V3/V4 + 批 13 R-25 登记完备）: 常�
   // 事实底座（AC-14「落地即绿」）：域 \ {README} 全部已登记 ⇒ 零追加豁免
   assert.deepEqual(unregisteredDocs(readme, docsOnDisk), [],
     "AC-14：docs/ 顶层每个 basename 必须已登记在 docs/README.md 全文里（新建文档漏登记 ⇒ 本断言红）")
+
+  // —— 批 16（锚 A1–A8）：文档形状谓词——形状声明解析 + 四条腿 + `scanned >= 1` ——
+  //    **并入本既有块**（不新开顶层 test()）：本批新增的顶层用例恰为五条负控腿。
+  const shape = runShapeLegsOnRealDocs()
+  assert.ok(shape.scanned >= 1 && shape.leg4Runs >= 1,
+    "批 16 四腿实跑：扫描域 " + shape.files + " 档 → 作用域 " + shape.scanned + " 档 · 腿 2 " + shape.leg2Runs
+    + " 档 · 腿 3 受检引用 " + shape.leg3Checked + " 条 · 腿 4 " + shape.leg4Runs + " 档")
+  // 实测值打印（锚 A2 的 `scanned` 必须**可被人读到**，不只是被断言）
+  t.diagnostic("批 16 形状谓词实测：扫描域 " + shape.files + " 档 · 进作用域 scanned=" + shape.scanned
+    + " · 腿 1 核到标记 " + shape.leg1Hits + " 处 · 腿 2 实跑 " + shape.leg2Runs + " 档 · 腿 3 受检引用 "
+    + shape.leg3Checked + " 条 · 腿 4 实跑 " + shape.leg4Runs + " 档 ⇒ " + shape.leg4Stats.join(" "))
 })
 
 // ═══════════════ ③ 六串负向（V5）+ 正向锚与划界（V10/V11②/V12②③） ═══════════════
@@ -416,5 +433,581 @@ test("DOC-HYGIENE T4（锚 V6 / V7 / V8）: 失败后缀块挂在每个终态失
   } finally {
     dropSession(sid)
     try { rmSync(home, { recursive: true, force: true }) } catch { /* 已清理 */ }
+  }
+})
+
+// ═══════════════ ⑤ 文档形状谓词（批 16 · 锚 A1–A10） ═══════════════
+//
+// 设计档 `docs/2026-09-16-doc-shape-design.md`（§5.2 腿 1 · §5.3 腿 2 · §5.4 腿 3/4 · §6 伪代码 ·
+// §8.2 锚 A1–A10 与负控表 · §9 边界 · §10.3 AC-1…AC-12）· 需求档
+// `docs/2026-09-16-doc-shape-requirements.md`（US-1…US-6 · N-1…N-7 · §5.1 七项不做）。
+//
+// ★ 两条形态约束（需求档 §2.3 的 P-9 / P-10 直接推出）：**只认显式标记**（不猜中文量词）·
+//   **前向生效**（只作用于档内自带 `doc-shape` 声明的档，存量档**完全跳过**、不追溯）。
+// ★ 失败方向（§9）：**谓词面全 fail-closed**（空集 / 畸形 / 定位失败 ⇒ 红）·
+//   **存量档 fail-open**（无声明即跳过，零触碰既有档）。
+// ★ 谓词只报不改（US-4 的 D1 写权矩阵）：它红了就是红了，改档是主代理 / eng_coder 的事。
+// ★ 一切定位按**字符串 / 符号锚定**，**零行号锚定**（行号只作 as-of 括注——D4）。
+// ★ 本档自身的洁净：本节所有「禁用串」示例一律用拼接写法（与档首六串锁同律）。
+
+/** 形状声明的合法键（§5.1）。未知键 ⇒ 红（§9 畸形输入，**不得**静默降级为空声明）。 */
+const SHAPE_KEYS = new Set(["anchors", "acs", "count-marks", "compare"])
+/** 腿 1 认的量词**缺省**集合（§5.1 的缺省值）。 */
+const SHAPE_DEFAULT_MARKS = ["项", "处", "条", "档", "值", "步", "腿"]
+/** 腿 4 的层标语义（D16-4）：**T1/T2 必须有锚**；**T3 与「连 T3 都不是」免锚**。 */
+const SHAPE_MUST_ANCHOR = new Set(["T1", "T2"])
+/** 免锚的合法写法（§5.4 · §6）：显式 `—`，或层标**连 T3 都不是**。其余空值一律红。 */
+// ★ 分歧审计 F6 订正：初版是 `new Set(["", "—", "-"])`，而设计档 §5.4/§6 逐字写
+// 「免锚的合法写法只有两种：显式 `—` 与层标『连 T3 都不是』」⇒ 半角 `-` 无出处，
+// 属静默放宽（fail-open 方向）。今移除，使代码与设计同值。
+const SHAPE_NO_ANCHOR = new Set(["", "—"])
+/** 反向腿的**显式豁免标记**（§8.2 的 A10 一行写法：`（豁免：…）`）。 */
+const SHAPE_EXEMPT_RE = /（豁免：/
+/** 块级 HTML 注释里的形状声明（§5.1：档头插一份 `<!-- doc-shape … -->`；取**首个**）。 */
+const SHAPE_DECL_RE = /<!--\s*doc-shape\b([\s\S]*?)-->/
+
+/**
+ * 谓词违规（§10.2：负控腿「跑起来就必须红，由 `assert.throws` 捕获」）。
+ * **断言 / 谓词级红 = 真红**；`ReferenceError` / 整档崩溃 = 假红——本类就是把违规收敛成
+ * 「可被 `assert.throws` 抓住、且带逐条明细」的错误，而不是让整档崩掉。
+ */
+class ShapeViolation extends Error {
+  constructor(violations) {
+    super(violations.join("\n"))
+    this.name = "ShapeViolation"
+    this.violations = violations
+  }
+}
+
+/** 有违规就抛（§9 fail-closed：谓词面绝不 fail-open）。 */
+function shapeThrow(violations) {
+  if (violations.length > 0) throw new ShapeViolation(violations)
+}
+
+/**
+ * 形状声明的解析（§5.1 / §6 的 `parseDocShape`）。
+ * @pre  `src` 是整档文本
+ * @post 无声明 ⇒ 返回 `null`（该档**完全跳过**）；有声明 ⇒ 返回键值对象
+ *       **绝不**在解析失败时静默返回「空声明」（那会让谓词空转 ⇒ 恒真）
+ */
+function parseDocShape(src) {
+  const m = SHAPE_DECL_RE.exec(String(src))
+  if (m === null) return null
+  const decl = { anchors: null, acs: null, compare: null, "count-marks": SHAPE_DEFAULT_MARKS.slice() }
+  for (const raw of m[1].split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line === "") continue
+    const at = line.indexOf(":")
+    if (at < 0) throw new Error("doc-shape 声明畸形（缺冒号）：" + JSON.stringify(line))
+    const key = line.slice(0, at).trim()
+    const val = line.slice(at + 1).trim()
+    if (!SHAPE_KEYS.has(key)) throw new Error("doc-shape 声明含未知键：" + JSON.stringify(key))
+    if (val === "") throw new Error("doc-shape 声明的键值为空：" + JSON.stringify(key))
+    decl[key] = key === "count-marks"
+      ? val.split("|").map((s) => s.trim()).filter((s) => s !== "")
+      : val
+  }
+  return decl
+}
+
+/**
+ * 行内代码 span 掩码器（§5.2 边界① / §5.4 腿 3 的豁免面 / D16-5）。
+ * 把 `` `…` `` 连同反引号替换成**同长度空格** ⇒ 行列偏移不变，而**代码 span 之内**的内容
+ * 再也不可能被匹配到——这就是「**代码 span 之内一律跳过（豁免）**」的那条分支。
+ */
+const maskCodeSpans = (line) => line.replace(/`[^`]*`/g, (s) => " ".repeat(s.length))
+
+/**
+ * 腿 1：计数 ↔ 列表（§5.2 · AC-1 / AC-2 · 锚 A1/A3 · US-1）。
+ * @pre  只在**已声明**的档上调用；`marks` = 量词集合（空 ⇒ 用七量词缺省）
+ * @post 每个 `（N <量词>：` 标记的 `·` 项数 == N；违规文本含 **文件:行 + 声明值 + 实际值**
+ *       （三者缺一即不可定位——AC-2）
+ * ★ 三条边界（缺一即错，§5.2）：
+ *   ① **行内代码 span 一律豁免**（否则谓词会对本批两档自己的示例报红）；
+ *   ② **`N` 只认阿拉伯数字**（字面 `N` 不匹配——否则规范文本本身会触发）；
+ *   ③ **只数同一行内的 `·` 项**（跨行不算——跨行会让「N 项」失去肉眼可核性）。
+ * @return 该档被核到的标记数
+ */
+function checkCountMarks(text, marks, file = "(内存档)") {
+  const units = (marks && marks.length > 0 ? marks : SHAPE_DEFAULT_MARKS)
+    .map((u) => u.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|")
+  // 边界②：`[0-9]+` 只认阿拉伯数字（`（N 项：` 里的字面 N 不匹配）
+  const markSrc = "（([0-9]+)\\s*(" + units + ")："
+  const bad = []
+  let hits = 0
+  const lines = lf(text).split("\n")
+  for (let i = 0; i < lines.length; i++) {
+    const masked = maskCodeSpans(lines[i]) // ← 边界①：代码 span 之内的标记一律豁免
+    for (const m of masked.matchAll(new RegExp(markSrc, "g"))) {
+      hits++
+      const rest = masked.slice(m.index + m[0].length)
+      const close = rest.indexOf("）")
+      const seg = close < 0 ? rest : rest.slice(0, close) // ← 边界③：同行为界，跨行不算
+      // 项数 = **本行内非空的** `·` 分隔段数（空段 = 该段的内容不在本行 ⇒ 不计入，
+      // 故 `（2 项：a ·` + 次行 `b）` 判 1 项 ⇒ 红，而不会被「尾随 `·` 凑成 2」蒙混过去）
+      const actual = seg.split("·").filter((s) => s.trim() !== "").length
+      const declared = Number(m[1])
+      if (actual !== declared) {
+        bad.push(file + ":" + (i + 1) + ": 声明 " + declared + " " + m[2]
+          + " · 实际 " + actual + " " + m[2] + "（标记字面 " + JSON.stringify(m[0]) + "）")
+      }
+    }
+  }
+  shapeThrow(bad)
+  return hits
+}
+
+/**
+ * 节定位（按**标题关键字**——符号锚定，**零行号锚定**）。
+ * @throws 定位不到 ⇒ **红**（§9：定位失败**不是**跳过——那正是谓词空转的入口）
+ * @return `{ line, body }`：`line` 只作报错用的 as-of 括注，`body` = 该节正文（不含标题行）
+ */
+function shapeSection(text, keyword, what, file) {
+  const lines = lf(text).split("\n")
+  const i = lines.findIndex((l) => /^#{1,6}\s/.test(l) && l.includes(keyword))
+  if (i < 0) {
+    shapeThrow([file + ": 形状声明的 " + what + " 指向节标题关键字 " + JSON.stringify(keyword)
+      + "，但档内**定位不到**该节标题 ⇒ 红（§9：定位失败不是跳过）"])
+  }
+  let j = i + 1
+  while (j < lines.length && !/^#{1,6}\s/.test(lines[j])) j++
+  return { line: i + 1, body: lines.slice(i + 1, j).join("\n") }
+}
+
+/** 本节内**直连**表格的解析（只取以 `|` 起头的行；引用块里的 `> |` 自然不在其列）。 */
+function shapeTable(sec, what, file) {
+  const lines = sec.body.split("\n")
+  const raw = []
+  for (const l of lines) {
+    if (l.startsWith("|")) { raw.push(l); continue }
+    if (raw.length > 0) break
+  }
+  if (raw.length < 2) {
+    shapeThrow([file + ": " + what + " 的表格**定位不到**（本节内没有以 `|` 起头的表头/分隔线）⇒ 红（§9）"])
+  }
+  const cells = (l) => l.split("|").slice(1, -1).map((c) => c.trim())
+  return { header: cells(raw[0]), rows: raw.slice(2).map((l) => ({ raw: l, cells: cells(l) })) }
+}
+
+/**
+ * 腿 2：同一事实多处一致（§5.3 · AC-3 · US-2）。
+ * @pre  `pair` 形如 `§11.2:§11.3`，**两节都必须能定位**（定位不到 ⇒ **红**，不是跳过）
+ * @post 两侧读出的**集合**相等；**任一侧读到零条目 ⇒ 红**（不能当作「空集 == 空集」通过——那是恒真的入口）
+ * ★ 本节**只做集合型**；**计数型**明确不入本批（需求档 §5.1 第 7 项：需先定义「哪个 N 权威」）。
+ * ★ 集合元素口径 = `AC-<n>` 号（§5.3 的示例形态：§11.2 分层表的 AC 清单 ↔ §11.3 定义的 AC 号集）。
+ */
+function checkComparePair(text, pair, file = "(内存档)") {
+  const [a, b] = String(pair).split(":")
+  if (!a || !b) shapeThrow([file + ": compare 声明形态非法（期望 `节A:节B`）：" + JSON.stringify(pair)])
+  const ids = (sec) => [...new Set(sec.body.match(/AC-[0-9]+/g) ?? [])].sort()
+  const setA = ids(shapeSection(text, a, "比对对左侧（compare 冒号前）", file))
+  const setB = ids(shapeSection(text, b, "比对对右侧（compare 冒号后）", file))
+  const bad = []
+  if (setA.length === 0 || setB.length === 0) {
+    bad.push(file + ": compare " + pair + " 某侧读到**零条目**（左 " + setA.length + " · 右 " + setB.length
+      + "）⇒ 红（不得当作「空集 == 空集」通过）")
+  } else if (setA.join(" ") !== setB.join(" ")) {
+    bad.push(file + ": compare " + pair + " 两侧集合**不等**——左侧独有 ["
+      + setA.filter((x) => !setB.includes(x)).join(" ") + "] · 右侧独有 ["
+      + setB.filter((x) => !setA.includes(x)).join(" ") + "]")
+  }
+  shapeThrow(bad)
+  return { a: setA.length, b: setB.length }
+}
+
+/**
+ * 腿 3：引用可解析（§5.4 · AC-4 / AC-5 · US-3）。
+ * @post 每个**行内代码 span 之外**的相对 md 链接、以及 span 之外裸露的 `` `路径:行号` `` 的**路径**，
+ *       都必须在仓根下存在。**行号不解析**（D4：行号只作 as-of 括注——它会漂）。
+ * ★ **代码 span 之内 ⇒ 跳过（豁免）**：实测 11 个「不存在」里 7 个是示例（`lib/a.mjs` 这类）。
+ * ★ 诚实的现状声明（§5.4）：本仓引用惯例**全部带反引号** ⇒ 实际受检面**主要是 md 链接**。
+ */
+function checkRefs(text, baseDir, rootDir, file = "(内存档)") {
+  const bad = []
+  let checked = 0
+  const hit = new Set()
+  const lines = lf(text).split("\n")
+  const linkRe = /\]\(([^)\s]+)\)/g
+  const pathRe = /(?:^|[^\w`./-])((?:[\w-]+\/)*[\w-]+\.(?:mjs|js|cjs|md|json|txt|ya?ml)):([0-9]+)/g
+  for (let i = 0; i < lines.length; i++) {
+    const masked = maskCodeSpans(lines[i]) // ← 代码 span 之内一律**跳过**（豁免分支）
+    for (const m of masked.matchAll(linkRe)) {
+      const raw = m[1]
+      if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("#")) continue // 外部链接 / 纯页内锚点
+      const target = raw.split("#")[0]
+      if (target === "") continue
+      checked++
+      hit.add(target)
+      if (!shapeRefExists(target, baseDir, rootDir)) {
+        bad.push(file + ":" + (i + 1) + ": 相对链接指向**不存在**的落点 " + JSON.stringify(raw))
+      }
+    }
+    for (const m of masked.matchAll(pathRe)) {
+      // `路径:行号` 的**路径**受检；**行号不解析**（只作 as-of）
+      checked++
+      hit.add(m[1])
+      if (!shapeRefExists(m[1], rootDir, rootDir)) {
+        bad.push(file + ":" + (i + 1) + ": 裸露的 `路径:行号` 的**路径**不存在 " + JSON.stringify(m[1]))
+      }
+    }
+  }
+  shapeThrow(bad)
+  return { checked, targets: [...hit].sort() }
+}
+
+/** 相对链接 / 路径的存在性（域 = `rootDir` 之下；绝对路径或越界 ⇒ 判不存在）。 */
+function shapeRefExists(target, baseDir, rootDir) {
+  if (isAbsolute(target)) return false
+  const abs = resolve(baseDir, target)
+  const root = resolve(rootDir)
+  if (abs !== root && !abs.startsWith(root + sep)) return false
+  return existsSync(abs)
+}
+
+/**
+ * 腿 4：AC ↔ 锚互引（§5.4 · **两道闸 + 反向腿** · AC-6 / AC-7 / AC-8 · US-4）。
+ * @pre  声明含 `anchors` 与 `acs`，且**两个节都能定位**（定位不到 ⇒ **红**，不是跳过）
+ * @post ① **闸 A**：每行 cell 数 == 表头列数（防 `|` 缺失导致串列）
+ *       ② **闸 B**：锚列非空——免锚的合法写法只有两种：显式 `—` 与层标**连 T3 都不是**（其余空值一律红）
+ *       ③ 所引锚 id 必须在锚表中有定义
+ *       ④ **T1/T2 的 AC 必须有锚**；**T3 与「连 T3 都不是」免锚**（D16-4——批 14 把这条写成「满射」⇒ 当场为假）
+ *       ⑤ **AC 号不重复**
+ *       ⑥ **反向腿**：锚表里每个锚至少被一条 AC 引用；**未被引用的锚必须自带显式豁免标记**
+ */
+function checkAnchorsAndACs(text, decl, file = "(内存档)") {
+  const bad = []
+  const aTab = shapeTable(shapeSection(text, decl.anchors, "锚表（anchors）", file), "锚表（anchors）", file)
+  const cTab = shapeTable(shapeSection(text, decl.acs, "AC 表（acs）", file), "AC 表（acs）", file)
+
+  // —— 闸 A：cell 数 == 表头列数（**两张表都校**，逐行报出） ——
+  for (const [what, tab] of [["锚表", aTab], ["AC 表", cTab]]) {
+    for (const r of tab.rows) {
+      if (r.cells.length !== tab.header.length) {
+        bad.push(file + ": " + what + " cell 数 " + r.cells.length + " != 表头列数 " + tab.header.length
+          + " ⇒ 红（串列 / 漏 `|`）：" + r.raw.trim().slice(0, 80))
+      }
+    }
+  }
+  // —— 锚表：抽锚 id（§5.1：`anchors` = 锚表的节标题关键字，用于定位锚表、**抽取锚 id**） ——
+  const anchors = new Map()
+  for (const r of aTab.rows) {
+    const m = (r.cells[0] ?? "").match(/\bA[0-9]+\b/)
+    if (!m) {
+      bad.push(file + ": 锚表首列解析不到锚 id（期望 `A<n>`）：" + r.raw.trim().slice(0, 80))
+      continue
+    }
+    if (anchors.has(m[0])) bad.push(file + ": 锚 id 重复定义：" + m[0])
+    anchors.set(m[0], r.raw)
+  }
+  // —— AC 表的列定位（按**表头关键字**，零列号硬编码） ——
+  const iAnchor = cTab.header.findIndex((h) => h.includes("锚"))
+  const iLayer = cTab.header.findIndex((h) => h.includes("层"))
+  if (iAnchor < 0 || iLayer < 0) {
+    bad.push(file + ": AC 表**定位不到**" + [iAnchor < 0 ? "锚列" : "", iLayer < 0 ? "层列" : ""].filter(Boolean).join(" 与 ")
+      + "（表头实测 " + JSON.stringify(cTab.header) + "）⇒ 红（§9：定位失败不是跳过）")
+    shapeThrow(bad)
+  }
+  // —— 逐行：闸 B + 锚 id 定义性 + 层标分层不变量 + 重复 AC 号 ——
+  const referenced = new Set()
+  const seen = new Set()
+  for (const r of cTab.rows) {
+    if (r.cells.length !== cTab.header.length) continue // 闸 A 已报；残缺行不再二次误报
+    const acId = (r.cells[0] ?? "").match(/AC-[0-9]+/)
+    if (!acId) {
+      bad.push(file + ": AC 表首列解析不到 AC 号：" + r.raw.trim().slice(0, 80))
+      continue
+    }
+    if (seen.has(acId[0])) bad.push(file + ": AC 号重复：" + acId[0])
+    seen.add(acId[0])
+    const layer = (r.cells[iLayer] ?? "").replace(/[*`\s]/g, "")
+    const cell = (r.cells[iAnchor] ?? "").replace(/[*`]/g, "").trim()
+    const refs = [...new Set(cell.match(/\bA[0-9]+\b/g) ?? [])]
+    if (SHAPE_MUST_ANCHOR.has(layer)) {
+      if (SHAPE_NO_ANCHOR.has(cell)) {
+        bad.push(file + ": " + acId[0] + " 层标 " + layer + " ⇒ **必须有锚**（T1/T2 必填）；免锚的合法写法"
+          + "只有两种：显式 `—` 与层标**连 T3 都不是**；实测锚列 " + JSON.stringify(cell))
+      }
+    } else if (refs.length === 0 && !SHAPE_NO_ANCHOR.has(cell)) {
+      bad.push(file + ": " + acId[0] + " 锚列非空但解析不到锚 id：" + JSON.stringify(cell))
+    }
+    for (const a of refs) {
+      referenced.add(a)
+      if (!anchors.has(a)) {
+        bad.push(file + ": " + acId[0] + " 引用了**不存在的锚** " + a
+          + "（锚表实有：" + [...anchors.keys()].join(" ") + "）")
+      }
+    }
+  }
+  // —— 反向腿（评审 #5 补入）：孤儿锚 ——
+  for (const [id, raw] of anchors) {
+    if (referenced.has(id)) continue
+    if (SHAPE_EXEMPT_RE.test(raw)) continue // **显式豁免标记**（写法见 §8.2 的 A10 一行）
+    bad.push(file + ": 反向腿——锚 " + id + " **未被任何 AC 引用**，且其行未带显式豁免标记 `（豁免：…）` ⇒ 红")
+  }
+  shapeThrow(bad)
+  return { anchors: anchors.size, acs: seen.size, referenced: referenced.size }
+}
+
+/** 扫描域 = `docs/` 下**递归**收的全部 `.md`（图 1 的入口）。 */
+const shapeDocFiles = () => walkText(join(PLUGIN_DIR, "docs")).filter((f) => f.endsWith(".md")).sort()
+
+/**
+ * 扫描：**有声明 ⇒ 进作用域；无声明 ⇒ 完全跳过**（D16-2 的前向生效，存量档 fail-open）。
+ * ★ `scanned` 数的是**进作用域的档**，不是「扫到的档」——那个区别就是「零扫描 ⇒ 恒真」的堵口（图 2）。
+ * @throws 声明畸形（缺冒号 / 未知键 / 空值）⇒ 抛（fail-closed，绝不静默返空声明）
+ */
+function shapeScan(files = shapeDocFiles(), loader = read) {
+  const out = []
+  for (const f of files) {
+    const text = lf(loader(f))
+    const decl = parseDocShape(text)
+    if (decl === null) continue
+    out.push({ file: f, text, decl })
+  }
+  return out
+}
+
+/** 把谓词的 `ShapeViolation` 收敛成**断言级红**（真红）：明细必须被人看见，而不是整档崩掉。 */
+function assertShapeClean(label, fn) {
+  try {
+    fn()
+  } catch (e) {
+    if (e instanceof ShapeViolation) assert.fail(label + " ⇒ 红：\n" + e.message)
+    throw e
+  }
+}
+
+// ——— ⑤-a：形状声明解析 + 四条腿对真实档实跑 + 「进作用域的档 >= 1」（锚 A1 / A2 / A3） ———
+// ★ 形态：**并入既有 test() 块**（批 9/11/13 的同款先例），**不新开顶层 `test(`**——
+//   本批新增的顶层用例**恰为五条负控腿**（AC-10 / AC-11：`用例数 = 基线 + 5`）。
+
+function runShapeLegsOnRealDocs() {
+  // —— A1：无声明 ⇒ 返 null（该档**完全跳过**；前向生效，不追溯存量） ——
+  assert.equal(parseDocShape("# 无声明的一档\n\n正文里出现 doc-shape 这几个字也不算声明。\n"), null,
+    "A1：无 `<!-- doc-shape … -->` 注释 ⇒ 必须返 null（存量档完全跳过）")
+  // 解析失败**绝不静默返空声明**（§9 畸形输入 fail-closed——那会让谓词空转 ⇒ 恒真）
+  assert.throws(() => parseDocShape("<!-- doc-shape\nanchors 机验锚\n-->"), /缺冒号/,
+    "畸形声明（缺冒号）必须红，不得降级为空声明")
+  assert.throws(() => parseDocShape("<!-- doc-shape\nunknowne-key: x\n-->"), /未知键/,
+    "未知键必须红（§5.1 的键是封闭集合）")
+  assert.throws(() => parseDocShape("<!-- doc-shape\nanchors:\n-->"), /键值为空/, "空键值必须红")
+  // 声明解读 + 缺省（§5.1）
+  const d = parseDocShape("<!-- doc-shape\nanchors: 机验锚\nacs: 验收标准\ncount-marks: 项|条\ncompare: §1:§2\n-->")
+  assert.deepEqual([d.anchors, d.acs, d["count-marks"], d.compare], ["机验锚", "验收标准", ["项", "条"], "§1:§2"],
+    "四键必须逐字读出")
+  assert.deepEqual(parseDocShape("<!-- doc-shape\nanchors: x\nacs: y\n-->")["count-marks"], SHAPE_DEFAULT_MARKS,
+    "count-marks 缺省 = §5.1 的七量词")
+
+  // —— A2（D16-7）：**扫描集为空 ⇒ 红**；数的是**进作用域的档**，不是「扫到的档」 ——
+  const files = shapeDocFiles()
+  assert.ok(files.length >= 40, "扫描域自证：docs/ 下递归的 .md 实测 " + files.length + " 档")
+  const scanned = shapeScan(files).length
+  assert.ok(scanned >= 1, "A2：**进作用域的档**数（scanned）必须 >= 1，实测 " + scanned
+    + "——零扫描 ⇒ 谓词恒真（D16-7），fail-closed 红")
+  assert.ok(scanned < files.length, "自证：存量档确实被跳过（扫描域 " + files.length + " 档 → 作用域 " + scanned + " 档）")
+
+  // —— 四条腿对**真实档**实跑（腿 2 只在声明了 compare 的档上跑；腿 4 只在声明了 anchors/acs 的档上跑） ——
+  const scope = shapeScan(files)
+  let leg1Hits = 0
+  let leg2Runs = 0
+  let leg3Checked = 0
+  let leg4Runs = 0
+  const leg4Stats = []
+  for (const s of scope) {
+    let l1 = 0
+    assertShapeClean(s.file + " 腿 1（计数 ↔ 列表）", () => { l1 = checkCountMarks(s.text, s.decl["count-marks"], s.file) })
+    leg1Hits += l1
+    if (s.decl.compare) {
+      leg2Runs++
+      assertShapeClean(s.file + " 腿 2（比对对）", () => checkComparePair(s.text, s.decl.compare, s.file))
+    }
+    leg3Checked += checkRefs(s.text, dirname(join(PLUGIN_DIR, s.file)), PLUGIN_DIR, s.file).checked
+    if (s.decl.anchors && s.decl.acs) {
+      leg4Runs++
+      let stats = null
+      assertShapeClean(s.file + " 腿 4（AC ↔ 锚互引）", () => { stats = checkAnchorsAndACs(s.text, s.decl, s.file) })
+      leg4Stats.push(s.file + "（锚 " + stats.anchors + " · AC " + stats.acs + " · 被引用锚 " + stats.referenced + "）")
+    }
+  }
+  assert.ok(leg4Runs >= 1, "腿 4 必须至少在一档上实跑（否则它的正例面无证据），实测 " + leg4Runs)
+  return { files: files.length, scanned, leg1Hits, leg2Runs, leg3Checked, leg4Runs, leg4Stats }
+}
+
+// ——— ⑤-b：负控腿 1（锚 A7 第 1 行 · §8.2 负控表第 1 行） ———
+// ★ 必须在**代码 span 之外**构造：本批两档的 `（N …：` 标记**全部在代码 span 内**（受 D16-5 豁免），
+//   照字面改它们会被自家豁免吞掉、负控不红 ⇒ 在**临时目录新建一份极简档**（D5：不动被锁对象）。
+
+test("DOC-HYGIENE 批 16 负控腿 1（锚 A7）: 裸写「（3 项：a · b）」⇒ 腿 1 必红（真红）+ 三条边界在位", () => {
+  const dir = mkdtempSync(join(tmpdir(), "thincoder-shape-l1-"))
+  try {
+    const SHAPE_HEAD = "<!-- doc-shape\ncount-marks: " + SHAPE_DEFAULT_MARKS.join("|") + "\n-->\n\n# 极简档\n\n"
+    const badDoc = SHAPE_HEAD + "本档（3 项：a · b）是裸写的标记，不在代码 span 内。\n"
+    const okDoc = SHAPE_HEAD + "本档（2 项：a · b）与声明一致。\n"
+    writeFileSync(join(dir, "minimal.md"), badDoc, "utf8")
+    const badText = readFileSync(join(dir, "minimal.md"), "utf8")
+    const decl = parseDocShape(badText)
+    assert.ok(decl !== null, "极简档的声明必须可解析（否则负控跑不起来）")
+    const marks = decl["count-marks"]
+
+    // 阳性对照（防「谓词恒红」的假绿）：声明值与实际一致 ⇒ 零违规
+    assert.equal(checkCountMarks(okDoc, marks, "ok.md"), 1, "阳性对照：2 项 == 2 项 ⇒ 绿")
+    // 负控：声明 3 而实际 2 ⇒ 必红，且必须是**谓词/断言级红**（`ShapeViolation`），不是整档崩溃
+    // ★ 谓词按「档:行」报错，但**本断言不锚行号**（行号只作 as-of；锚形状不锚位置）
+    assert.throws(() => checkCountMarks(badText, marks, "minimal.md"),
+      (e) => e instanceof ShapeViolation && /minimal\.md:[0-9]+: 声明 3 项 · 实际 2 项/.test(e.message),
+      "负控腿 1：裸写的「（3 项：a · b）」必须被抓（真红 = ShapeViolation，带 档:行 + 声明值 + 实际值）")
+    // AC-2：报错文本三要素逐条在位（档:行 / 声明值 / 实际值）
+    try {
+      checkCountMarks(badText, marks, "minimal.md")
+      assert.fail("应当抛")
+    } catch (e) {
+      assert.ok(/minimal\.md:\d+/.test(e.message), "AC-2①：报错含 文件:行")
+      assert.ok(e.message.includes("声明 3"), "AC-2②：报错含声明值")
+      assert.ok(e.message.includes("实际 2"), "AC-2③：报错含实际值")
+    }
+
+    // —— 三条边界逐条自证（缺一即错，§5.2） ——
+    // ① 行内代码 span 一律豁免：同一条违规标记，包进反引号后**不得**再被抓
+    assert.equal(checkCountMarks(SHAPE_HEAD + "示例：`（3 项：a · b）`\n", marks, "span.md"), 0,
+      "边界①：代码 span 之内的计数标记一律豁免（谓词不得对自家示例报红）")
+    // ② `N` 只认阿拉伯数字：字面 `N` 不匹配
+    assert.equal(checkCountMarks(SHAPE_HEAD + "形态：（N 项：a · b）\n", marks, "literal.md"), 0,
+      "边界②：字面 `N` 不是阿拉伯数字 ⇒ 不匹配（否则规范文本本身会触发）")
+    // ③ 只数同一行内的 `·` 项：第 2 项在下一行 ⇒ 本行只数到 1 项 ⇒ 与声明 2 不等 ⇒ 红（不静默放过）
+    assert.throws(() => checkCountMarks(SHAPE_HEAD + "本档（2 项：a ·\nb）\n", marks, "wrap.md"),
+      (e) => e instanceof ShapeViolation && e.message.includes("实际 1 项"),
+      "边界③：跨行的 `·` 项不计入 ⇒ 判 1 项 ≠ 声明 2 ⇒ 红（跨行会让「N 项」失去肉眼可核性）")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+/** 在**仓外临时目录**里做「写档 → 读回」的往返（D5：不动被锁对象；做完即弃、仓内零残留）。 */
+function shapeTempWrite(dir, name, text) {
+  const p = join(dir, name)
+  writeFileSync(p, text, "utf8")
+  return { path: p, read: () => lf(readFileSync(p, "utf8")) }
+}
+
+test("DOC-HYGIENE 批 16 负控腿 2（锚 A7 / AC-3）: §11.2 清单删掉一个 AC 号 ⇒ 腿 2 必红；某侧零条目 ⇒ 必红", () => {
+  const dir = mkdtempSync(join(tmpdir(), "thincoder-shape-l2-"))
+  try {
+    const copy = shapeTempWrite(dir, "copy.md",
+      "<!-- doc-shape\ncompare: §11.2:§11.3\n-->\n\n"
+      + "### §11.2 分层登记\n\n| 层 | 本批 AC |\n|---|---|\n| T2 | AC-1 · AC-2 |\n\n"
+      + "### §11.3 验收标准\n\n- AC-1\n- AC-2\n")
+    const decl = parseDocShape(copy.read())
+    assert.equal(decl.compare, "§11.2:§11.3", "临时副本的 compare 声明必须可解析（否则负控跑不起来）")
+    // 阳性对照（防「谓词恒红」的假绿）：两侧集合相等 ⇒ 绿
+    assert.deepEqual(checkComparePair(copy.read(), decl.compare, "copy.md"), { a: 2, b: 2 },
+      "阳性对照：§11.2 与 §11.3 的集合相等 ⇒ 绿")
+    // 负控 ①：把 §11.2 的 AC-2 从清单里删掉（**改在仓外临时副本上**）
+    shapeTempWrite(dir, "copy.md", copy.read().replace("| T2 | AC-1 · AC-2 |", "| T2 | AC-1 |"))
+    assert.throws(() => checkComparePair(copy.read(), decl.compare, "copy.md"),
+      (e) => e instanceof ShapeViolation && e.message.includes("AC-2") && e.message.includes("两侧集合**不等**"),
+      "负控腿 2：§11.2 少一个 AC 号 ⇒ 集合不等必红（真红 = ShapeViolation，不是整档崩溃）")
+    // 负控 ②（第二面）：某侧读到**零条目** ⇒ 必红（不得当作「空集 == 空集」通过）
+    shapeTempWrite(dir, "copy2.md", copy.read().replace("- AC-1\n- AC-2\n", "- 无 AC 号\n"))
+    const zeroDoc = readFileSync(join(dir, "copy2.md"), "utf8")
+    assert.throws(() => checkComparePair(zeroDoc, decl.compare, "copy2.md"),
+      (e) => e instanceof ShapeViolation && e.message.includes("零条目"),
+      "腿 2 第二面：某侧零条目 ⇒ 必红（「空集 == 空集」是恒真的入口）")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("DOC-HYGIENE 批 16 负控腿 3（锚 A7 / AC-4 · AC-5）: 裸写 `](不存在的档.md)` ⇒ 腿 3 必红；代码 span 内的路径不受检", () => {
+  const dir = mkdtempSync(join(tmpdir(), "thincoder-shape-l3-"))
+  try {
+    shapeTempWrite(dir, "存在档.md", "# 在\n")
+    const copy = shapeTempWrite(dir, "copy.md",
+      "<!-- doc-shape\ncount-marks: " + SHAPE_DEFAULT_MARKS.join("|") + "\n-->\n\n"
+      + "见 [存在档](./存在档.md)。\n\n"
+      + "示例（代码 span 之内 ⇒ **豁免**）：`](./不存在的档.md)`\n")
+    // 阳性对照 + **代码 span 豁免的实测**：span 内那条既不报、也不进受检集
+    const r = checkRefs(copy.read(), dir, dir, "copy.md")
+    assert.equal(r.checked, 1, "阳性对照：只有 1 条受检引用（代码 span 内那条被跳过），实测 " + r.checked)
+    assert.deepEqual(r.targets, ["./存在档.md"],
+      "AC-5：代码 span **之内**的路径既不报也不受检（豁免分支在位）")
+    // 负控：加一个**裸写**（代码 span 之外）的不存在链接 ⇒ 必红
+    shapeTempWrite(dir, "copy.md", copy.read() + "\n见 [缺档](./不存在的档.md)。\n")
+    assert.throws(() => checkRefs(copy.read(), dir, dir, "copy.md"),
+      (e) => e instanceof ShapeViolation && e.message.includes("不存在的档.md") && e.message.includes("不存在**的落点"),
+      "负控腿 3：裸写的 `](不存在的档.md)` ⇒ 路径存在性断言必红")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+/** 腿 4 两条负控共用的极简夹具（锚表 2 锚 + AC 表 2 条 T2，两锚都被引用）。 */
+const SHAPE_FIXTURE =
+  "<!-- doc-shape\nanchors: 机验锚\nacs: 验收标准\n-->\n\n"
+  + "### §8.2 机验锚\n\n| 锚 | 检索目标 | 谓词 | 期望 |\n|---|---|---|---|\n"
+  + "| **A1** | 甲 | 乙 | 丙 |\n| **A2** | 甲 | 乙 | 丙 |\n\n"
+  + "### §10.3 验收标准\n\n| # | 验收标准 | 层 | 锚 |\n|---|---|---|---|\n"
+  + "| **AC-1** | 甲 | T2 | A1 |\n| **AC-2** | 甲 | T2 | A2 |\n"
+
+test("DOC-HYGIENE 批 16 负控腿 4（锚 A7 / AC-7 · AC-8）: T2 锚列清空 ⇒ 闸 B 必红；锚失去全部 AC 引用且无豁免标记 ⇒ 反向腿必红", () => {
+  const dir = mkdtempSync(join(tmpdir(), "thincoder-shape-l4b-"))
+  try {
+    const copy = shapeTempWrite(dir, "copy.md", SHAPE_FIXTURE)
+    const decl = parseDocShape(copy.read())
+    // 阳性对照：T2 都有锚、两锚都被引用 ⇒ 绿
+    assert.deepEqual(checkAnchorsAndACs(copy.read(), decl, "copy.md"), { anchors: 2, acs: 2, referenced: 2 },
+      "阳性对照：T1/T2 都有锚且锚都被引用 ⇒ 绿")
+    // 负控 ①（闸 B）：把某条 **T2** 的 AC 锚列清空 ⇒ 必红
+    shapeTempWrite(dir, "copy.md", SHAPE_FIXTURE.replace("| **AC-1** | 甲 | T2 | A1 |", "| **AC-1** | 甲 | T2 |  |"))
+    assert.throws(() => checkAnchorsAndACs(copy.read(), decl, "copy.md"),
+      (e) => e instanceof ShapeViolation && e.message.includes("AC-1 层标 T2") && e.message.includes("必须有锚"),
+      "负控腿 4①（闸 B）：T2 的锚列清空 ⇒ 必红（T3 与「连 T3 都不是」才免锚——D16-4）")
+    // 负控 ②（**反向 / 孤儿锚腿**）：删掉引用某锚的全部 AC 行且**不给**豁免标记 ⇒ 必红并点名该锚
+    //   ★ 每步都从**干净的夹具**重写（不复用上一步的临时态），否则上一步的违规会污染本步的判定
+    shapeTempWrite(dir, "copy.md", SHAPE_FIXTURE.replace("| **AC-2** | 甲 | T2 | A2 |\n", ""))
+    assert.throws(() => checkAnchorsAndACs(copy.read(), decl, "copy.md"),
+      (e) => e instanceof ShapeViolation && e.message.includes("反向腿——锚 A2")
+        && !e.message.includes("反向腿——锚 A1"),
+      "负控腿 4②（反向腿）：A2 失去全部 AC 引用且无 `（豁免：…）` ⇒ 必红（且只点名 A2）")
+    // 阴性对照（防「反向腿恒红」的假绿）：同一形态 + 给 A2 那一行加**显式豁免标记** ⇒ 反向腿不再报
+    shapeTempWrite(dir, "copy.md",
+      SHAPE_FIXTURE.replace("| **AC-2** | 甲 | T2 | A2 |\n", "")
+        .replace("| **A2** | 甲 | 乙 | 丙 |", "| **A2** | 甲 | 乙 | 丙（豁免：测试用，不挂单项 AC） |"))
+    assert.deepEqual(checkAnchorsAndACs(copy.read(), decl, "copy.md"), { anchors: 2, acs: 1, referenced: 1 },
+      "阴性对照：未引用的锚带显式豁免标记 ⇒ 反向腿不报（该腿不是恒红）")
+    // —— 补面（并入本块，不新开顶层 test()）：AC-8 的另外两面 + AC-7 的免锚行仍须验锚 ——
+    // ① 免锚合法：**T3** 行写 `—`、以及层标**连 T3 都不是**（`—`）的行留空 ⇒ 都绿
+    shapeTempWrite(dir, "copy.md", SHAPE_FIXTURE + "| **AC-3** | 甲 | T3 | — |\n| **AC-4** | 甲 | — |  |\n")
+    assert.deepEqual(checkAnchorsAndACs(copy.read(), decl, "copy.md"), { anchors: 2, acs: 4, referenced: 2 },
+      "免锚例外在位：T3 写 `—` 与层标「连 T3 都不是」留空 ⇒ 均判绿（D16-4）")
+    // ② 免锚行**引了锚**时，「锚 id 必须已定义」仍生效（图 3 的 G 节点）
+    shapeTempWrite(dir, "copy.md", SHAPE_FIXTURE + "| **AC-3** | 甲 | T3 | A7 |\n")
+    assert.throws(() => checkAnchorsAndACs(copy.read(), decl, "copy.md"),
+      (e) => e instanceof ShapeViolation && e.message.includes("AC-3 引用了**不存在的锚** A7"),
+      "免锚行引用的锚仍必须已定义（免锚 ≠ 免检）")
+    // ③ AC 号不重复 ⇒ 同一 AC 号出现两次必红
+    shapeTempWrite(dir, "copy.md", SHAPE_FIXTURE + "| **AC-1** | 甲 | T2 | A1 |\n")
+    assert.throws(() => checkAnchorsAndACs(copy.read(), decl, "copy.md"),
+      (e) => e instanceof ShapeViolation && e.message.includes("AC 号重复：AC-1"),
+      "AC 号不重复：同号出现两次 ⇒ 必红")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("DOC-HYGIENE 批 16 负控腿 5（锚 A7 / AC-6）: AC 表某行末列删掉（cell 数少 1）⇒ 闸 A 必红", () => {
+  const dir = mkdtempSync(join(tmpdir(), "thincoder-shape-l4a-"))
+  try {
+    const copy = shapeTempWrite(dir, "copy.md", SHAPE_FIXTURE)
+    const decl = parseDocShape(copy.read())
+    // 阳性对照：cell 数 == 表头列数 ⇒ 闸 A 不报（上面那条 deepEqual 已证，这里再钉一次列数）
+    assert.match(copy.read(), /\| # \| 验收标准 \| 层 \| 锚 \|/, "夹具的 AC 表表头必须可定位")
+    // 负控：把 AC-1 行的**末列删掉**（cell 数 3 < 表头 4）⇒ 必红
+    shapeTempWrite(dir, "copy.md", copy.read().replace("| **AC-1** | 甲 | T2 | A1 |", "| **AC-1** | 甲 | T2 |"))
+    assert.throws(() => checkAnchorsAndACs(copy.read(), decl, "copy.md"),
+      (e) => e instanceof ShapeViolation && e.message.includes("AC 表 cell 数 3 != 表头列数 4"),
+      "负控腿 5（闸 A）：AC 表某行 cell 数少 1 ⇒ 必红（防 `|` 缺失导致串列）")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })
