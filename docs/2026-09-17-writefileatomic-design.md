@@ -464,3 +464,18 @@ flowchart TD
 **★ 根因（据其返回物逐字读，非推测）**：返回物是一份 **155KB 的流式推演稿**——`Touched files` **0 命中**、`已写入` **0 命中**，而 `renameSyncWithRetry` 被推演 **94 次**；**报告首行即为 `stage verification: UNDECLARED`**（**未以阶段状态表开头**，而任务书明令要求）；末尾它仍在分析任务书里的 `--ignore-cr-at-eol` 注意事项与 `core.autocrlf`。⇒ **它在 1800s 内没有写出任何一行代码，全部预算用于从四份文档重新推导设计。**
 
 **⇒ 与批 14 的自订流程教训同族**（本仓原文）：「**「实施 + 自证」压在一个 1800s 窗口里是设计错配**」。**本批第 1 次派发把这件事推得更远**：**四份文档（需求 9 条 US / 设计 16 锚 · 13 AC · 10 负控 / 摸底 / 纪要 579 行）＋ 4 段 stages ＋ 新档 ＋ 登记级联**，对单个 1800s 窗口**过载**。
+
+**★ 第 2 次派发（收窄后的 `eng-dsh-11`）：成立**——`lib/dsh-home.mjs` **+169/-14** · `lib/config-store.mjs` **+17/-9** · 全量 **485/485** · 零改面断言由实施者给出原始输出。**它并抓到本档两处真错**（睡眠兜底语义 · §6 的 `@pre` 与图 1 互斥），父侧已订正并折回 **§5.1b**。
+
+**★ 第 3 次派发（`eng-dsh-12`，1800s 兜底 **失败**）：部分交付**——**stage 1 完成并已由父侧独立验证**，**stage 2（新档）/ stage 3（T-E19 清单）未动**。
+
+| 核验项 | 实测 |
+|---|---|
+| 工作树 | **恰 1 档**：`lib/dsh-home.mjs` **+9/-4** |
+| `opts.rename` 注入缝 | **在位**（`rename?: (from,to)=>void` 入 JSDoc · `const rename = typeof o.rename === "function" ? o.rename : renameSync` · `rename(from,to)` · `writeFileAtomic` 透传） |
+| 缺省路径等价 | **父侧探针实测**：不传 `rename` ⇒ **逐字走 `renameSync`、落地成功** ✓ |
+| 注入缝可用 | **父侧探针实测**：自定义 `rename` 抛前 2 次 `EPERM` ⇒ **调用 3 次后落地** ✓ |
+| 持续错误语义 | **父侧探针实测**：`maxAttempts:4` + 持续 `EPERM` ⇒ **调用恰 4 次 · 抛原对象（`code=EPERM` 保留）· 遥测在场 · 目标未生成（不假成功）** ✓ |
+| stage 1 的指定 check | `node --check` exit=0 · `node --test test/session-state.test.mjs test/config-api.test.mjs` **45/45 pass** ✓ |
+| `test/write-atomic.test.mjs` | **不存在**（stage 2 未做） |
+| `test/guard-e.test.mjs` | **未动**（stage 3 未做） |
