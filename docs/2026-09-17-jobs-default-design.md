@@ -75,6 +75,7 @@ acs: 验收标准
 | **D21-5** | **`budgetCapMs` 缺省（540s）不动** | 翻转后职责收窄但更纯；**60s 余量是「回落了也拿得到诊断」的保证** | **否决「抬高到 600s」**：消灭余量，回落时连报告一起丢 |
 | **D21-6** | **`preset-static` 锁的那句 persona 文案一字不动** | 它在翻转后**仍为真**（自动节点还在，只是发生在通知回合）⇒ 动它 = 无谓的授权面扩张 | **否决「顺手改写」**：零收益、有仪式成本 |
 | **D21-7** | **回落语义逐字节保持现状**（告警 + 回落同步） | 它是 **`session-state` / `stages` 免于授权仪式的唯一前提**（会诊 **V11** 的推论） | **否决 fail-closed 拒发**（consult 先例）：会扩授权面（需求档 §5.1 第 4 项） |
+| **D21-8** | ★ **stages 纪律与墙钟解耦（取舍条目 · 兑现纪要 D-32-7）** | **阶段自检/可续跑的价值与执行形态正交**：阶段表解析、UNDECLARED 门、漂移探测**全在 output 文本流上**，与「同步还是后台」无关。**同步截止曾是「逼人拆 stages」的压力源，不是设计意图** ⇒ 翻转后**纪律强度只取决于一条描述面纪律**：「父代理必须 `job_output` 读全文（横幅在 job 输出里）」（**FR-4 已落**）。⇒ **代价如实登记**：这句话是**软约束**，硬约束靠 **FR-2 的护栏** | **否决「翻转后同步截止仍留作逼拆 stages 的手段」**：那是把**墙钟压力**当纪律用 |
 
 ---
 
@@ -154,6 +155,8 @@ code 型评审发起时，检查 **eng / escalate** 槽位是否在飞：**在�
 
 ### §5.5 FR-5 **描述面六处**（清单见纪要 D-32-8）
 
+> **★ 权威落点声明（评审 #6 的处置）**：**本档是本清单的实施权威落点**（实施者照本节的六条执行）；**纪要 D-32-8 只存裁定**。⇒ 避免「同一清单两处各自漂移」；**若两处出现不一致，以本档为准并回订纪要**。
+
 README 那节「长任务必须显式传 `background: true`」整节 · schema 描述（`:957/:1002`）· `lib/eng.mjs:19-23` 头注释 · `lib/escalate.mjs:4-7/:285/:562` · `lib/index.mjs:950` · `docs/2026-09-11-token-lifecycle-design.md:326`。
 **★ 但 `doc-hygiene.test.mjs:317` 的第二字面与 `advisor-config:527-529` 的孪生断言不许改写——新指引另起句。**
 
@@ -176,12 +179,17 @@ function wantsBackground(args) { return args?.background !== false }
 
 /**
  * FR-2：code 型评审前的跨机制在飞检查（**与 checkInFlightJob 同构**）。
- * @post 任一 eng/escalate 槽位在飞 ⇒ 返回拒绝文本（含 job id）；否则 null
+ * @pre  会话 id 可取（`agent.session.id`）；评审类型**已解析**（本检查只在 code 型路径上调用）；
+ *       在飞槽位 Map 可达（模块内存态——**它不落盘，重启即空**，见 §9.1 重启行与 R-66）
+ * @post 任一 eng/escalate 槽位在飞 ⇒ 返回拒绝文本（含 job id）；否则 null（**放行**）
  */
 function crossMechanismInFlight(sid) { /* ... */ }
 
 /**
- * FR-3：回落告警双通道（console + 工具返回文本），**行为与文案逐字节不变**。
+ * FR-3：回落告警双通道。
+ * @pre  已判定要回落同步（`ctx.jobs` 缺失 或 `jobs.start` 抛错）；回落文案是**既有字面**（不许改）
+ * @post **两条通道都在**：`console.warn`（既有）+ **工具返回文本**（本批新增）；
+ *       行为仍是**回落同步**、文案**逐字节不变**（N-3 + N-4）
  */
 function jobsFallbackNotice(...) { /* ... */ }
 ```
@@ -216,6 +224,8 @@ function jobsFallbackNotice(...) { /* ... */ }
 | 7 | 零 `test.skip` / `test.only` · `failStop(` 恒 **18** · 六串零命中 | 既有锁 |
 | 8 | 零新依赖 · 零新配置键 | `package.json` 键集不变 |
 | 9 | **`budgetCapMs` 与 `dshBackgroundTimeoutMs` 的缺省值** | 逐字未改 |
+| **10** | **`test/stage-gate.test.mjs` 零改动**（★ 评审 #1 补：**stages 纪律的机械见证者**） | `--numstat` 空；**T-SG4 的四接线 needle 原样全绿**（簿记点 × 门 × 四路接线） |
+| **11** | **`test/path-kind.test.mjs` 零改动**（★ 评审 #3 补：N-8 声明的**三处机械面**之一） | `--numstat` 空 |
 
 ### §8.2 机验锚（**三要素写全：检索目标 / 谓词 / 期望**）
 
@@ -233,6 +243,9 @@ function jobsFallbackNotice(...) { /* ... */ }
 | **A10** | 同上 | **护栏阴性对照** | 槽位不在飞 ⇒ **放行**；**design 型评审不受影响** |
 | **A11** | `lib/prompts/engineering.md` | 过渡态与隔离期纪律 | 两个新段落在位；且 `preset-static` 锁的那句 persona **逐字未改** |
 | **A12** | 全仓 | 描述面六处 + 零改面 | 六处与实现一致；§8.1 各项 `--numstat` 空 |
+| **A13** | `test/stage-gate.test.mjs` · `lib/index.mjs` | **stages 纪律零削弱**（★ 评审 #1 补） | ① 该档**零改动**且 **T-SG4 的四接线 needle 原样**（簿记点与门结构配对）；② 描述面**写明「stage 门横幅随 job 输出可见」**（`job_output` 读全文） |
+| **A14** | `lib/eng.mjs` · `lib/escalate.mjs` · `lib/index.mjs` | **畸形输入的 fail-safe**（★ 评审 #5 补） | 非布尔的 `background`（如字符串）⇒ **非 `false` ⇒ 仍走后台**；**不是**严格布尔判等 |
+| **A15** | `docs/2026-09-13-handoff.md` | **重启事项已写进交接页**（★ 评审 #7 的层标订正后必须配锚：T2 不可免锚） | 该档含**批 21 的重启行**（本批改 `lib/**` ⇒ 重启后生效），且**列出可感变化**（默认后台 / 逃生口 / 回落告警可见） |
 
 ### §8.3 负控与阴性对照
 
@@ -248,6 +261,7 @@ function jobsFallbackNotice(...) { /* ... */ }
 | **N6** | 护栏不误伤 | 把检查改成「任何在飞都拒」 | **A10**（design 型/无在飞被误拒） |
 | **N7** | codex 零漂移 | 把 `:828` 也改成 `!== false` | **A4** |
 | **N8** | persona 未动 | 改 `preset-static` 锁的那句 | 该档当场红（**证明它是锁、不是建议**） |
+| **N9** | **畸形输入 fail-safe**（★ 评审 #5 补） | 把判定改成「严格布尔」（`typeof v === "boolean" && v === false` 之类的**等价改写**） | **AC-15 / A14**（字符串被误判成「同步」——**方向与 N1 相反**） |
 
 | # | 阴性对照（**零编辑必须仍绿**） | 它证明什么 |
 |---|---|---|
@@ -255,6 +269,7 @@ function jobsFallbackNotice(...) { /* ... */ }
 | **M2** | `test/preset-static.test.mjs` 零编辑仍绿 | persona 句未动 |
 | **M3** | 显式 `background: true` 的既有断言全绿 | 旧用法零回归 |
 | **M4** | codex 路径既有断言全绿 | 零漂移 |
+| **M5** | **`test/stage-gate.test.mjs` 零编辑仍绿**（★ 评审 #1 补） | **stages 纪律的机械见证者未被削弱**（与 A13 配对） |
 
 ---
 
@@ -310,7 +325,7 @@ function jobsFallbackNotice(...) { /* ... */ }
 | `test/advisor-config.test.mjs` · `test/codex-runner.test.mjs` | **FR-6**：授权注释追加 + 新腿 | 修改（**均已在授权面** ✓） |
 | `docs/test-lifecycle.md` | **FR-6**：§三计数 + §七历史行 | 修改 |
 | `README.md` · `docs/2026-09-11-token-lifecycle-design.md` | **FR-5** | 修改 |
-| **明确排除（禁改）** | `test/session-state.test.mjs` · `test/stages.test.mjs` · `test/preset-static.test.mjs` · `release-check.mjs` · `test/release-check.test.mjs` · `test/fixtures/**` · `docs/consult-minutes/**` · 平台包 | **零改动** |
+| **明确排除（禁改）** | `test/session-state.test.mjs` · `test/stages.test.mjs` · **`test/stage-gate.test.mjs`** · **`test/path-kind.test.mjs`** · `test/preset-static.test.mjs` · `release-check.mjs` · `test/release-check.test.mjs` · `test/fixtures/**` · `docs/consult-minutes/**` · 平台包 | **零改动** |
 
 **★ EOL 逐档实测表（as-of 2026-09-17；**改前必须逐档实测**）**：`lib/**` **19 CRLF / 11 LF**（`eng.mjs`/`escalate.mjs` 实测为 **LF**；`index.mjs`/`advisor.mjs` 为 **CRLF**）· `lib/prompts/*.md` 与 `docs/*.md` 多数 **LF**，**`README.md` 是 CRLF** · `test/**` **4 档 CRLF**（`codex-runner` / `consult` / `death-provenance` / `preset-static`）。**⇒ 每档改前实测、改后复核 `git diff --stat` 无整档重写**；**`git diff` 必须配 `--ignore-cr-at-eol` 读**（本机有逐档全档的 CR 幻影）。
 
@@ -338,7 +353,11 @@ function jobsFallbackNotice(...) { /* ... */ }
 | **AC-10** | **描述面六处**与实现一致（含 README 那节） | T2 | A12 | US-1 |
 | **AC-11** | **零改面**：§8.1 各项 `--numstat` 空（含三个未授权基线档） | T2 | A12 | US-6 |
 | **AC-12** | **台账与授权注释同批**：§三计数 == fs 实测；§七有新行；授权注释含本次理由 | T2 | A12 | US-6 |
-| **AC-13** | **重启事项写进交接页**（`docs/2026-09-13-handoff.md`，**主代理写**） | T3 | — | US-7 |
+| **AC-13** | **重启事项写进交接页**（`docs/2026-09-13-handoff.md`，**主代理写**） | **T2** | A15 | US-7 |
+| **AC-14** | ★ **stages 纪律零削弱**（评审 #1 补）：`test/stage-gate.test.mjs` **零改动**且 **T-SG4 的四接线 needle 原样全绿**；**且描述面写明「stage 门横幅随 job 输出可见」** | T2 | A13 | US-8 |
+| **AC-15** | ★ **畸形输入的 fail-safe**（评审 #5 补）：非布尔的 `background`（如字符串）⇒ **非 `false` ⇒ 仍走后台**（不静默同步） | T1 | A14 | US-1 |
+
+> **★ 层标订正（评审 #7）**：**AC-13 原标 T3 有误**——「写进交接页」是**文档编辑、静态可查** ⇒ **T2**；**T3 指的是「重启后生效」这件事本身**（那是 **US-7 的另一半**，只能人工验，不可在本仓内生证明）。
 
 ### §10.4 建议 stages（**四段串行**）
 
@@ -355,8 +374,8 @@ flowchart TD
 | stage | goal | 文件 | 检查 |
 |---|---|---|---|
 | **1** | FR-1 + FR-3 + 负控 N1…N4 | `lib/eng.mjs` · `lib/escalate.mjs` · `lib/index.mjs` | `node --test test/codex-runner.test.mjs test/advisor-config.test.mjs` |
-| **2** | FR-2 + N5/N6 | `lib/advisor.mjs` | `node --test test/design-review-guard.test.mjs` |
-| **3** | FR-4 + FR-5 | `lib/prompts/engineering.md` · `README.md` · 头注与描述面 | `node --test test/preset-static.test.mjs test/doc-hygiene.test.mjs` |
+| **2** | FR-2 + N5/N6 | `lib/advisor.mjs` | `node --test test/advisor-config.test.mjs test/codex-runner.test.mjs test/design-review-guard.test.mjs` |
+| **3** | FR-4 + FR-5 | `lib/prompts/engineering.md` · `README.md` · 头注与描述面 | `node --test test/preset-static.test.mjs test/doc-hygiene.test.mjs **test/path-kind.test.mjs**` |
 | **4** | FR-6 + 全量 + 逐锚 + 变异 | `test/*.test.mjs` · `docs/test-lifecycle.md` | `node --test` |
 
 ---
@@ -365,10 +384,19 @@ flowchart TD
 
 | 日期 | 变更 |
 |---|---|
-| 2026-09-17 | 首版（**设计待评审**）：九节 + §10 验收；**D21-1…D21-7**；**US-1…US-8**；**AC-1…AC-13**；**锚 A1…A12**；**负控 8 条 + 阴性对照 4 条**；**图 1/2/3**；§10.4 **四段串行**。**★ 立项前提经会诊纠正**（只有 dsh 路径默认同步；codex 早已后台）· **★ 会诊抓到的两处父侧漏洞已进方案**（**FR-1④ 三态透传** = 静默失效陷阱 · **FR-2 跨机制护栏** = 错序评审窗口）· **★ 「回落同步」升格为硬约束**（保两个未授权基线档免于仪式）。 |
+| 2026-09-17 | 首版（**设计待评审**）：九节 + §10 验收；**D21-1…D21-8**；**US-1…US-8**；**AC-1…AC-15**；**锚 A1…A15**；**负控 9 条 + 阴性对照 5 条**；**图 1/2/3**；§10.4 **四段串行**。**★ 立项前提经会诊纠正**（只有 dsh 路径默认同步；codex 早已后台）· **★ 会诊抓到的两处父侧漏洞已进方案**（**FR-1④ 三态透传** = 静默失效陷阱 · **FR-2 跨机制护栏** = 错序评审窗口）· **★ 「回落同步」升格为硬约束**（保两个未授权基线档免于仪式）。 |
+| 2026-09-17 | **★ 设计评审轮 1 落档（`advisor-dsh-5`，`VERDICT: FAIL`，🔴2 · 🟡4 · 🔵4）——10 条全 Fixed**（**未签发 token**；落档见 **§12.1**）：**🔴 #1/#2 同根**（**stages 纪律面整体缺位**）：US-8 在 AC 表里**零映射**（AC-11 的「`stages.test.mjs` 零改动」映射的是 US-6，而**「测试档零改动」≠「纪律不被削弱」**）⇒ **新增 AC-14 + 锚 A13 + 阴性对照 M5**，并把 `test/stage-gate.test.mjs` / `test/path-kind.test.mjs` 补进 §8.1 与 §10.1；**纪要 D-32-7 未兑现**（裁定要求把「stages 与墙钟解耦」记为取舍条目）⇒ **新增 D21-8**（含代价如实登记：描述面纪律是**软约束**、硬约束靠 FR-2）。**🟡 #3** stage 检查命令与写域不对齐（stage 2 检查指向不在写域的档；stage 3 缺路径谓词档）⇒ **两处对准**。**🟡 #4** §6 伪代码前后置不全（FR-2 缺 `@pre`、FR-3 两者皆缺）⇒ **补齐**。**🟡 #5** §9.1 的畸形输入行为**无锚无负控** ⇒ **新增 AC-15 + 锚 A14 + 负控 N9**。**🔵 #6** FR-5 全量复抄清单（W2 边界）⇒ **声明本档为实施权威落点、纪要只存裁定**。**🔵 #7** AC-13 层标 T3 有误（写档是静态可查）⇒ **改 T2** 并写明 T3 指「重启后生效」本身。**🔵 #8** 需求档指针指向 §9.4（实为威胁模型）⇒ **订正为 §9.3**。**🔵 #9** 纪要 R-68 笔误「eslate」⇒ **已订正**。**🔵 #10** 登记状态无法核实（评审读到的是截断地图）⇒ **父侧回盘核实：两档已在 `docs/README.md` 登记**（本行即为回盘记录）。 |
 
 ---
 
 ## §12 评审落档
 
-> **待填**：设计评审（`advisor type='design'`）的轮次、处置表与 token 签发记录；交付核验、分歧审计、交付代码评审同样落本节（§12.1 设计评审 · §12.2 交付核验 · §12.3 交付代码评审 · §12.4 分歧审计）。
+### §12.1 设计评审落档（**轮 1 = FAIL**）
+
+| 轮 | 结论 | 处置 |
+|---|---|---|
+| **1** | **`VERDICT: FAIL`**（🔴2 · 🟡4 · 🔵4）· **未签发 token** | **10 条全 Fixed**（逐条见 §11 第 2 行）。**评审正评**：「九章节齐备、三张图到位、**四处手术（含 ④ 三态透传陷阱）精确到行**、负控 N1–N8 与阴性对照 M1–M4 成对、锁定面/台账仪式显式声明、边界六类全覆盖」；**两条 🔴 同根**——**「用户故事/裁定无 AC 兜底」这个物种**（批 6b / 批 7 / 批 9 都判过死） |
+
+- **design token**：**轮 1 未签发**（存在未决 🔴，按规则不签发）⇒ **修订后须重跑评审（轮 2）**
+- **★ 父侧自记（本批的物种）**：**两条 🔴 都出在「同一件事的另一半没写」**——**① `stages` 纪律被我用「测试档零改动」当成了证据**（其实纪律的本体是**横幅随 job 输出可见**这条新链路）· **② 会诊的裁定 D-32-7 我只写进了纪要、没落进设计档**。⇒ **这与本批要治的 `index.mjs:1011`（三态压扁 = 一半没改）是同族**：**「改了一半」在四个不同层级上各犯了一次**（会诊面 / 设计面 / 实现面 / 文档面）。
+- **交付核验 / 分歧审计 / 交付代码评审**：见 **§12.2 / §12.4 / §12.3**（**待填**）。
