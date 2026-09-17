@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![topic: dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-8957e5)](https://github.com/topics/dsh-plugin)
 
-**把「AI 写代码时的四条自我纪律」装进 [DSH（DeepSeek Harness）](https://deepseek.com) 桌面壳**——一个插件，四个工具，不用改 DSH 本体一行代码。
+**把「AI 写代码时的四条自我纪律」装进 [DSH（DeepSeek Harness）](https://deepseek.com)**——一个插件，四个工具，**不改 DSH 本体一行代码**。它是给 **DSH 本身**写的（本机那种「桌面壳」只是 DSH 的一种包装方式，插件不依赖壳）。
 
 > 移植自开源项目 [thincoder](https://gitee.com/shanghai-xinbo/thincoder)（上游 MIT 协议），向上游贡献者致谢。
 
@@ -140,7 +140,9 @@ flowchart LR
 
 ## 安装
 
-要求：DSH 桌面壳（cordis `^4.0.0-rc.7`）+ web profile 标准服务（tools / llm / subagents / systemPrompt / webServer——webServer 缺失时仅设置页 API 降级，host 工具不受影响）。
+要求：**DSH（DeepSeek Harness）本体**——**不需要桌面壳**（本机那种包装壳只是 DSH 的一种运行方式）。具体：cordis `^4.0.0-rc.7` + web profile 标准服务（tools / llm / subagents / systemPrompt / webServer——webServer 缺失时仅设置页 API 降级，host 工具不受影响）。
+
+> **⚠ 想让长任务能跑过 10 分钟，请先确认这两个插件在**：**`dsh-jobs-local` + `dsh-tool-jobs`**（后台任务靠它们）。**没装也能跑**，但 `background: true` 会**告警并回落同步执行**，那时仍会撞平台的 600 秒墙钟——**详见下方「最容易被配错的一件事」**。
 
 ```bash
 git clone https://github.com/shenhuanageshei/dsh-thincoder-suite.git
@@ -325,7 +327,8 @@ flowchart TD
 ## 与上游 thincoder 的差异
 
 > **两类差异要分清**：「本仓有意偏离」（移植时的设计决定）与「上游改了而本仓没跟」（滞后 = 欠账）。**混在一起看会掩盖后者。**
-> 权威记录在各批设计档的「上游偏离表」里，最近一份见 [`docs/2026-09-15-consult-delivery-design.md`](./docs/2026-09-15-consult-delivery-design.md) §10。
+>
+> **★ 本节是摘要，不是全量**：下面列 **5 条有意偏离 + 1 条已知滞后**；**权威全量**在两份设计档的「上游偏离表」里（**六列格式**，共约 **19 行**，含只属本仓自纠的条目）——[`docs/2026-09-15-consult-delivery-design.md`](./docs/2026-09-15-consult-delivery-design.md) §10 与 [`docs/2026-09-15-config-surface-design.md`](./docs/2026-09-15-config-surface-design.md) §10。**判据**：偏离表是**唯一**记录「本仓行为 / 上游行为 + 坐标 / 方向 / 理由 / 复检条件 / 锚」的地方。
 
 **有意偏离（移植决定）**：
 
