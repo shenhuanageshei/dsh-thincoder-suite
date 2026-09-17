@@ -2597,8 +2597,19 @@ test("DOC-HYGIENE 批 17 负控腿 10（锚 A10 / AC-8 · FR-6）: 日期 ≥ CU
   assert.throws(() => checkDeclarationDuty(["docs/2026-09-17-bad.md"], SHAPE_CUTOFF, 2, { loader: shapeLoaderOf(badDisk) }),
     /缺冒号/, "畸形声明 ⇒ 抛（fail-closed），**不得**降级成「无声明」而被后面那条判红掩盖")
   // —— 真实仓：全绿（`docs/` 顶层每个 CUTOFF 后的批次档都已声明）——
-  assert.deepEqual(checkDeclarationDuty(docsTopLevel().map((n) => "docs/" + n)), { scanned: docsTopLevel().length, exempts: [] },
-    "真实仓：本批两档都已声明、全域零豁免 ⇒ FR-6 绿（**实测**，" + docsTopLevel().length + " 档）")
+  // ★ 批 18 订正：原先断言「全域零豁免 · exempts: []」——而批 18 的收口/交接档
+  //   （`2026-09-17-batch18-handoff.md`）按 D17-6 用了 `mode: exempt`（它是纯交接档：
+  //   无锚表、无 AC 表、无跨档事实标记）。⇒ 真实仓现在**恰有 1 个有效豁免**。
+  //   ★ 这不是「改档去迎合断言」：**让真实仓实测一个真的豁免档，比让断言只看空集更有覆盖力**
+  //   ——空集下 exempt 分支从未在真实语料上跑过。
+  const realDuty = checkDeclarationDuty(docsTopLevel().map((n) => "docs/" + n))
+  // ★ 自证形：结构断言（豁免档名）与**诊断输出**分开——不符时先看见实得，不再靠猜。
+  assert.deepEqual(realDuty.exempts.map((e) => e.file), ["docs/2026-09-17-batch18-handoff.md"],
+    "真实仓豁免清单（实测：" + JSON.stringify(realDuty.exempts) + "）")
+  assert.equal(realDuty.scanned, docsTopLevel().length,
+    "真实仓扫描数（实测：" + realDuty.scanned + " vs " + docsTopLevel().length + "）")
+  assert.deepEqual(realDuty, { scanned: docsTopLevel().length, exempts: [{ file: "docs/2026-09-17-batch18-handoff.md", reason: "纯收口与交接档——无锚表、无 AC 表、无跨档事实标记；本档的职责是交接，不是规格" }] },
+    "真实仓：本批两档都已声明、**恰 1 个有效豁免**（批 18 的收口/交接档）⇒ FR-6 绿（**实测**，" + docsTopLevel().length + " 档）")
 })
 
 test("DOC-HYGIENE 批 17 负控腿 11（锚 A11b / AC-9b · FR-6b）: 已声明档内有 AC 形表而无 acs 键 ⇒ 红；锚形表同理；普通表 / 未声明档 ⇒ 不红", () => {
