@@ -6,6 +6,8 @@
 // 单次快失败、无环内 sleep（D20-3 fail-closed）· A9 首写失败 ⇒ 零 tmp 残留 + 抛（修 P-4「留半个
 // tmp」）· A10 孤儿清扫：龄 >10min 的 .tmp-/.del- 被扫、刚建的 tmp 与异前缀幸存（D20-10）·
 // A11 clearUserConfig 幂等（缺失 = 已清空；TOCTOU 腿依赖原语 ENOENT 原样上抛）（D20-9）·
+// A11b TOCTOU 真腿（N7 修复轮 · 审计🟡6：前置检查后、rename 前删走活文件 ⇒ catch 幂等分支被真覆盖）·
+// A2 源码级锁（N7 修复轮 · 审计🟡7：clearUserConfig 函数体走 renameSyncWithRetry，不退化为裸 renameSync）·
 // M1 阴性对照：常态写一次成功、零环内 sleep（重试不付常态路径代价）· A1 导出常量值锁。
 // 失败注入全部走 opts 缝（delays / maxAttempts / write / onEnoent / rename——§5.1/§5.1c），
 // 零 mock.module、零 test.skip、零真机持锁（「另一进程持有句柄」面 = §9.4 残差 #10，不进套件）。
@@ -261,4 +263,51 @@ test("A11 (AC-7): clearUserConfig 幂等——目标缺失 ⇒ true；TOCTOU 腿
     assert.ok(thrown === enoent, "ENOENT 不在主白名单且无回调 ⇒ 原对象直抛（不重试）")
     assert.ok(!thrown.message.includes("rename-retry-exhausted"), "立即抛（非耗尽）⇒ 无遥测拼接")
   } finally { rmDir(home) }
+})
+
+test("A11b (N7 修复轮 · AC-7): TOCTOU 真腿——前置检查后、rename 前活文件被删走 ⇒ catch 幂等分支返回 true", () => {
+  const home = mkDir()
+  try {
+    mkdirSync(join(home, ".thincoder"), { recursive: true })
+    const cfg = join(home, ".thincoder", "config.json")
+    writeFileSync(cfg, JSON.stringify({ version: 1, config: {} }))
+    // 手法（确定性，非竞态；自白①）：clearUserConfig 零 opts 调原语（opts.rename 注入缝够不到），
+    // 而 node:fs 的具名导入是链接期快照（仓外探针实测：patch 默认导出对象不生效）⇒ 唯一确定性缝
+    // = delPath 计算处的 Date.now()——它恰在 existsSync 前置检查与 renameSyncWithRetry 之间，即
+    // TOCTOU 窗口本身。定向 patch：首次调用（即窗口内）删走活文件、恒返回定值 ⇒ rename 对真缺失
+    // 的源抛真 ENOENT（A11 ③ 已锁原语直抛面）⇒ catch 的 TOCTOU 分支被真实进入。
+    const origNow = Date.now
+    let deleted = false
+    Date.now = () => { if (!deleted) { deleted = true; unlinkSync(cfg) } return 9 }
+    try {
+      assert.equal(clearUserConfig(home), true,
+        "TOCTOU：existsSync 见「在」而 rename 时已被删走 ⇒ ENOENT ⇒ 判「已清空」返回 true（D20-9 幂等）"
+          + "——前置 existsSync 对活文件为真 ⇒ 本 true 只能出自 catch 的 ENOENT 分支（非前置早返回）")
+      assert.equal(deleted, true, "窗口内删除确实发生（Date.now 缝被走到 ⇒ 非前置早返回的旁证）")
+    } finally {
+      Date.now = origNow
+    }
+    assert.ok(Date.now === origNow, "Date.now 补丁已还原（零泄漏）")
+  } finally { rmDir(home) }
+})
+
+test("A2 源码级锁 (N7 修复轮 · AC-7): clearUserConfig 函数体调 renameSyncWithRetry，不退化为裸 renameSync", () => {
+  // 先例形态（test/config-api.test.mjs 的 U3c2：从源码字节解析并断言）：「两个消费者共用原语」是
+  // 纯静态事实（审计实测：换成正确 import 的裸 renameSync ⇒ 全套件 0 红）⇒ 唯一锁得住它的面是
+  // 源码文本本身。EOL 归一（config-store.mjs 为 CRLF——散文面解析先例的既知陷阱）。
+  const src = readFileSync(new URL("../lib/config-store.mjs", import.meta.url), "utf8")
+    .replace(/\r\n/g, "\n")
+  const i0 = src.indexOf("export function clearUserConfig(")
+  assert.ok(i0 >= 0, "clearUserConfig 定义不可定位（形态变了 ⇒ 本锁必须随之复核）")
+  const i1 = src.indexOf("\n}\n", i0) // 列 0 的收口大括号 = 函数体边界（体内收口皆缩进）
+  assert.ok(i1 > i0, "clearUserConfig 函数体边界不可定位")
+  const body = src.slice(i0, i1)
+  assert.ok(body.includes("existsSync("), "切片自证：确为 clearUserConfig 本体（含前置存在性检查，防恒真空切片）")
+  assert.ok(body.includes("renameSyncWithRetry("),
+    "rename 必须走 renameSyncWithRetry（A2/D20-9：与 writeFileAtomic 共用同一重试原语）")
+  // 口径（自白①）：先把 renameSyncWithRetry 整体替换为占位符、再以词边界查裸调用（容忍函数名与
+  // 括号间的空白）——排除「renameSyncWithRetry(」与「renameSync(」的前缀口径歧义。
+  const deRetry = body.replaceAll("renameSyncWithRetry", "RR")
+  assert.ok(!/\brenameSync\s*\(/.test(deRetry),
+    "clearUserConfig 不得退化为裸 renameSync（丢了白名单重试原语 ⇒ A2 静态锚失守）")
 })
