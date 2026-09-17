@@ -1,7 +1,7 @@
 # 设计：原子写的可重试与失败可见 —— 批 20
 
 - 日期：2026-09-17
-- 需求档：[`2026-09-17-writefileatomic-requirements.md`](./2026-09-17-writefileatomic-requirements.md)（**US-1…US-8** · **N-1…N-14** · §5.1 九条不做 · §5.2 **R-61…R-65**）
+- 需求档：[`2026-09-17-writefileatomic-requirements.md`](./2026-09-17-writefileatomic-requirements.md)（**US-1…US-9** · **N-1…N-14** · §5.1 九条不做 · §5.2 **R-61…R-65**）
 - 摸底记录：[`2026-09-17-writefileatomic-recon.md`](./2026-09-17-writefileatomic-recon.md)（**因果判定 · 机制四条实测 · 调用面订正 · 失败可见性**）
 - 会诊纪要：[`consult-minutes/2026-09-17-consult-19-minutes.md`](./consult-minutes/2026-09-17-consult-19-minutes.md)（**3/4 交付** · **§3 八条裁定 D-19-1…D-19-8**）
 - 章节：按 [`METHODOLOGY.md`](../METHODOLOGY.md)：**九节**（§1 背景 · §2 问题 · §3 目标 · §4 决策与理由 · §5 方案 · §6 机制伪代码 · §7 状态与 schema · §8 防偏离 · §9 边界）+ **§10 受影响文件与验收** + **§11 变更记录** + **§12 评审落档**
@@ -130,7 +130,7 @@ flowchart LR
     A1["目标被 AV / 索引器短暂持有<br/>（≤ ~210ms）"] --> A2["k 次后写成<br/>**探针实测：第 6 次 / 190ms**"]
   end
   subgraph V["**腿 ②：失败可见**（治持续）"]
-    B1["持续持有 / 目录 ACL / 非白名单错误"] --> B2["重试耗尽 ⇒ **诚实抛**<br/>+ 遥测 message（code · 次数 · 耗时）"]
+    B1["持续持有 / 目录 ACL / 非白名单错误"] --> B2["重试耗尽 ⇒ **诚实抛**<br/>+ 遥测 message（code · errno · 次数 · 耗时）"]
     B2 --> B3["store：warn + **return false**（契约不变）"]
     B3 --> B4["**用户面**：`DELETE /config` 不再谎报 ok"]
   end
@@ -219,7 +219,7 @@ function clearUserConfig(dshHomeOverride, cwdHint) { /* ... */ }
 | 面 | 本批的动作 | 谁写 | 谁读 |
 |---|---|---|---|
 | `writeFileAtomic` 的**返回值** | **不变**（成功返回 / 失败抛） | — | 5 处调用点 |
-| 耗尽错误的 **message** | **新增遥测**（`code` · 次数 · 耗时 · 可 grep 签名） | helper | 三个 store 的 warn 行（`e?.message`）+ **宿主日志** |
+| 耗尽错误的 **message** | **新增遥测**（`code` · `errno` · 次数 · 耗时 · 可 grep 签名） | helper | 三个 store 的 warn 行（`e?.message`）+ **宿主日志** |
 | **`DELETE /config` 的响应** | **`ok:true` → 失败时 `ok:false` + 500**（US-8） | `lib/index.mjs` | **设置页 UI** |
 | `test/write-atomic.test.mjs` | **新增档** | eng_coder（任务书指名） | `node --test` |
 | `docs/test-lifecycle.md` §三/§五/§七 | **新档行 + `R-13` 状态翻转 + 历史行** | **主代理定内容、eng_coder 落笔** | `test-lifecycle.test.mjs` |
@@ -376,14 +376,14 @@ D-19-1…D-19-8 的全文在 [`consult-minutes/2026-09-17-consult-19-minutes.md`
 | **AC-2** | 持续 `EPERM` ⇒ **抛** 且 store 返回 `false`（**不假成功**） | T1 | A7 | US-7 |
 | **AC-3** | **非白名单**（`ENOTDIR` / `ENOSPC`）⇒ **单次快失败、无环内 sleep** | T1 | A1 · A8 | US-1 |
 | **AC-4** | **首写失败** ⇒ **零 tmp 残留** + 抛（**改前必留半个 tmp**） | T1 | A3 · A9 | US-1 |
-| **AC-5** | 耗尽 message 含 **`code` + 已试次数 + 可 grep 签名** | T1 | A4 | US-2 |
+| **AC-5** | 耗尽 message 含 **`code` + `errno` + 已试次数 + 可 grep 签名**（四处齐备，与 N-12 / A4 同值） | T1 | A4 | US-2 |
 | **AC-6** | 孤儿清扫：**龄 > 10min 的旧 tmp 被扫、新 tmp 幸存** | T1 | A5 · A10 | US-1 |
 | **AC-7** | `clearUserConfig` **复用原语**；**TOCTOU**（目标已被删）⇒ 返回 `true` | T1 | A2 · A11 | US-4 |
 | **AC-8** | **`DELETE /config` 失败 ⇒ `ok:false` + 500**（**改前无条件 `ok:true`**） | T1 | A12 | US-8 |
 | **AC-9** | **契约零变更**：三个 store 仍 `warn + return false`（既有断言全绿） | T1 | A15 | US-2 |
 | **AC-10** | **`R-13` 行状态翻转且不删行**；台账 §三/§五/§七 同批；**`release-check.test.mjs` 零改动** | T2 | A13 | US-3 |
 | **AC-11** | **疗效门槛**：全量 ×10 + 单档 ×20 **全绿**（记录进 §12） | T1 | A16 | US-3 |
-| **AC-12** | **零改面** + **新档登记级联**（T-E19 / 台账 / 双 parity）+ 描述面同步（`lib/**` 五档头注） | T2 | A14 | US-9 |
+| **AC-12** | **零改面** + **新档登记级联**（T-E19 / 台账 / 双 parity）+ 描述面同步（**五档实施域、四档头注**——`lib/index.mjs` 对 `writeFileAtomic` 零命中，只做接线） | T2 | A14 | US-9 |
 | **AC-13** | **重启事项写进交接页**（`docs/2026-09-13-handoff.md`，**主代理写**；本批改 `lib/**`） | T3 | — | US-6 |
 
 ### §10.4 建议 stages（**四段串行**）
@@ -392,7 +392,7 @@ D-19-1…D-19-8 的全文在 [`consult-minutes/2026-09-17-consult-19-minutes.md`
 flowchart TD
   S1["**stage 1** FR-1 原语（8×30ms · code 白名单 · ENOENT 特判 · 耗尽遥测）+ FR-2 重排 + FR-4 并入<br/>＋ 其负控（改前红/改后绿）"] --> S2
   S2["**stage 2** 新建 `test/write-atomic.test.mjs`（A6…A11 + 负控）<br/>（**不建真机持锁测试**——见 §8.3 头注与 §9.4 残差 #10）"] --> S3
-  S3["**stage 3** FR-3 可见性（helper 遥测 + **`DELETE /config` 接线** + A12）＋ FR-5 描述面四处"] --> S4
+  S3["**stage 3** FR-3 可见性（helper 遥测 + **`DELETE /config` 接线** + A12）＋ FR-5 描述面（**四档头注**）"] --> S4
   S4["**stage 4** 收口：**登记级联**（T-E19 + 台账 §三/§五/§七）· 全量 · **疗效门槛 ×10 / ×20** · 逐锚复核 + 变异自证"]
   style S1 fill:#ffd
   style S4 fill:#dff
@@ -402,7 +402,7 @@ flowchart TD
 |---|---|---|---|
 | **1** | FR-1 + FR-2 + FR-4 + 负控（N1…N5） | `lib/dsh-home.mjs` · `lib/config-store.mjs` | `node --test test/session-state.test.mjs test/config-api.test.mjs` |
 | **2** | 新档 + A6…A11 + 负控（N2/N3/N6/N7） | `test/write-atomic.test.mjs` | `node --test test/write-atomic.test.mjs` |
-| **3** | FR-3 + FR-5 + A12 | `lib/index.mjs` · `lib/dsh-home.mjs` · `lib/config-store.mjs` · `test/config-api.test.mjs` | `node --test` |
+| **3** | FR-3 + FR-5（**四档头注**） + A12 | `lib/index.mjs` · `lib/dsh-home.mjs` · `lib/config-store.mjs` · `lib/session-store.mjs` · `lib/token-store.mjs` · `test/config-api.test.mjs` | `node --test` |
 | **4** | 登记级联 + 全量 + **疗效门槛** + 逐锚 + 变异 | 全部 | `node --test`（×10） |
 
 ---
@@ -424,6 +424,9 @@ flowchart TD
 |---|---|---|
 | **1** | **`VERDICT: FAIL`**（🔴2 · 🟡5 · 🔵2）· **未签发 token** | **9 条全 Fixed**（逐条见 §11 第 2 行）。**评审正评**：「设计整体质量高：九章节齐备、双图、**锚三要素写全**、**负控与阴性对照成对**、**诚实残差清单完整**、**两条腿的裁定贯穿三档一致**」；**两条 🔴 都是「同一事物两处相反描述」** ⇒ 照字面实施会触发本批明令规避的发布门级联（#1）或使 FR-5 与 §10.1 互斥（#2） |
 
-- **design token**：**轮 1 未签发**（存在未决 🔴，按规则不签发）⇒ **修订后须重跑评审（轮 2）**
+| **2** | **`VERDICT: PASS`**（🔴0）· **签发 token** | **轮 1 的 9 条全部逐条核实为 Fixed**（评审以本轮现行内容为准）· 另出 **4 条非阻塞新项（1 🟡 + 3 🔵）**，**父侧已同批折入**：**#10** 档头「US-1…US-8」未随 US-9 同改 ⇒ 订正（§11 首版历史行按纪律不动）· **#11** `errno` 摘要在 AC-5 / 图 2 注 / §7 表三处残留 ⇒ 三处补齐（与 N-12 / A4 四处齐备）· **#12** 摸底档 §5 节标题仍写「已发，未回」 ⇒ 订正 · **#13** 描述面计数措辞不一致（AC-12 写「五档头注」而实际是**五档实施域、四档头注**）⇒ AC-12 与 stage 3 统一为「**四档头注**」。**评审正评**：「轮 1 的两条 🔴 均已**实证修复**，未发现新的 🔴 或崩溃/数据丢失/逻辑错误级问题」。**★ 评审员还独立复核了两条依据**：`lib/session-store.mjs` 与 `lib/token-store.mjs` **确引用 helper**（K11 的依据成立）· 纪要的 K10/K11/D-19-6 抽查与设计档引用一致 |
+
+- **design token**：**轮 1 未签发**（存在未决 🔴，按规则不签发）；**轮 2 `PASS` ⇒ 签发** `e5e81eff-100f-4c58-af47-6d0627eac06d` : `1790235497070`（**有效至 2026-09-24**；**逐字经 `designToken` 参数传给 `eng_coder`，不写进任务书文本**）
+  - **★ 实测事实（与计划的一句话不符，如实登记）**：**本 token 与批 19 的 token 逐字相同**——而夜班计划 §2 步 8 写「**token 由「会话 + 文档集」定长派生 ⇒ 换文档集 ⇒ 换 token**」。**实测不支持该说法**（两批的文档集不同而 token 同值）⇒ **据实登记，不按计划假设行事**（token 仍按返回的逐字值使用；**且这是一种弱绑定，登记为已知边界**）。
 - **★ 父侧自记（本批的物种，第 2 次）**：**🔴 #1 是我折入会诊时「改了 US-3 与 §5.2 却漏改 N-7」**——**与本批要治的 `R-13`（「写没落地」被静默吞掉）无关，却与批 16 那条自订规矩「任何『改了两处之一』都不算修好」直接同族**。**⇒ 可执行对策**：**折入「翻转某条既有要求」的裁定后，必须全档检索该要求的**所有**副本**（本批已用 `grep` 逐条复核 US/N/不做项三处，并**在轮 1 折入时补跑了这一步**）。
 - **交付核验 / 分歧审计 / 交付代码评审**：见 **§12.2 / §12.4 / §12.3**（**待填**）。
