@@ -42,7 +42,7 @@ acs: 验收标准
 | # | 问题 | 实测（as-of 2026-09-17） |
 |---|---|---|
 | **P-1** | **瞬态持有者 ⇒ 写必然失败**：`renameSync` 遇目标被另一进程持有句柄时抛 **`EPERM` / errno `-4048`**，而 helper **无重试** | 仓外探针：**锁中途释放 ⇒ 第 6 次成功、190ms**；**锁持续 ⇒ 8 次全败**（摸底档 §3） |
-| **P-2** | **失败被静默吞掉**：store 的 `catch` 只 `warn` + `return false`，而**返回值多数没人查** | 摸底档 §4：**token / config 面已接住**，**`saveSessionState` 的 8 处调用几乎全忽略返回值** |
+| **P-2** | **失败被静默吞掉**：store 的 `catch` 只 `warn` + `return false`，而**返回值多数没人查** | 摸底档 §4：**token / config 面已接住**，**`saveSessionState` 的 7 处调用全部忽略返回值**（另 1 处 `removeSessionState` 同类） |
 | **P-3** | **★ 一处面向用户的谎**：`DELETE /config`（「恢复默认」）调 `clearUserConfig(...)` **丢弃返回值**并无条件 `send({ ok: true })` | **父侧逐字回盘核实**；对照 PUT 路径已正确（`if (!saved) … 500`） |
 | **P-4** | **首写失败留半个 tmp 且不清理**：`writeFileSync(tmpPath, …)` 在 `try` **之外** | **父侧回盘核实**（`lib/dsh-home.mjs:69`；会诊 v4-pro 独立指出） |
 | **P-5** | **第二处同族面**：`clearUserConfig` 的**独立 `renameSync`**（原子删除路径）不在 helper 内 | 摸底档 §4（`lib/config-store.mjs:226`） |
@@ -72,7 +72,7 @@ acs: 验收标准
 | **3** | **不改那 7 处 `session-state` 调用点** | 内存态是第一事实源、盘是镜像（三档头注的既定契约）（**R-65**） |
 | **4** | **不改基线档 `test/session-state.test.mjs`** | 它的**持续全绿就是疗效见证**；改它要动授权面（会诊 D-19-4） |
 | **5** | **不采纳 `EAGAIN`、不采纳「每次新 tmp 名」、不做 `fsync`** | 前两者未实测 / 已被实测证伪（**R-61** / D-19-3）；后者镜像语义下登记 accepted（V11） |
-| **6** | **不扩写域**：`lib/**` 仅四档（§10.1） | 常设约束「不擅自扩大范围」 |
+| **6** | **不扩写域**：`lib/**` **仅五档**（§10.1 逐档列出） | 常设约束「不擅自扩大范围」 |
 
 ---
 
@@ -85,7 +85,7 @@ acs: 验收标准
 | **D20-3** | **可重试集 = `EPERM` / `EACCES` / `EBUSY`（按 `e.code` 字符串）+ `ENOENT` 特判重铸 tmp** | **按 `code` 而非 `errno` 数字**：Windows 的 errno 是负数、POSIX 是正数，只有 `code` 跨平台稳定（V1/K1）；`ENOENT` 只在「tmp 被外部清走」时出现 ⇒ 重铸即自愈 | **否决 `EAGAIN`**（v4-pro 独家、未实测——**白名单是带注释的常量**，加它是一次显式动作，R-61）；**否决把 `ENOENT` 并入主白名单**（它需要**重铸 tmp** 这个额外动作，语义不同） |
 | **D20-4** | **只重试 `renameSync`**；`mkdirSync` 留环外 | 保 **F12-T5 契约**（`badHome` 的 `ENOTDIR` 必须**快失败**） | **否决「把 mkdir 也纳入重试」**：确定性失败重试只是拖慢 |
 | **D20-5** | **写 + rename 同入环内 `try`（失败即 `unlink`）**；**tmp 名保持单次** | 修 **P-4 的真缺陷**（首写失败既抛又留半个 tmp）；而**「每次新名」解决的是一个已被实测证伪的碰撞面** | **否决「每次生成新 tmp 名」**（v4-pro 的 V3 后半）：跨进程 pid 不同、进程内全同步不可自交错（kimi 的 K9 实测证伪）⇒ **不为不存在的问题加机制** |
-| **D20-6** | **耗尽后重抛原对象 + 追加遥测 message**（`code` / 已试次数 / 总耗时）+ **可 grep 的失败签名** | 保调用方依赖的 `.code`；把「失败原因」变成**日志里可检索**的东西 ⇒ **复发可判真伪**（这是「机制假设」姿态的观测面，V4/K5） | **否决「wrap 成新 Error」**：会丢 `.code`，而 store 的 warn 拼的就是 `e?.message` |
+| **D20-6** | **耗尽后重抛原对象 + 追加遥测 message**（`code` / `errno` / 已试次数 / 总耗时）+ **可 grep 的失败签名** | 保调用方依赖的 `.code`；把「失败原因」变成**日志里可检索**的东西 ⇒ **复发可判真伪**（这是「机制假设」姿态的观测面，V4/K5；**`errno` 按需求档 N-12 一并入消息**） | **否决「wrap 成新 Error」**：会丢 `.code`，而 store 的 warn 拼的就是 `e?.message` |
 | **D20-7** | **契约零变更**（三个 store 仍 `warn + return false`） | 那是写进三档头注的**既定 fail-safe**（内存态兜底）；改 throw 会把「镜像失败」升级成「工具流崩溃」 | **否决「改 throw」**：需要独立批次 + 用户裁定（三家一致） |
 | **D20-8** | **只修一处用户面**：`DELETE /config` 接住返回值 ⇒ 失败返回 `ok:false` + 500 | 它是**面向用户的谎**（P-3），且**与 PUT 路径的先例同形** | **否决「把 7 处 session-state 调用点全改」**：横跨四档 lib、收益配不上 churn（R-65） |
 | **D20-9** | **`clearUserConfig` 复用同一原语**（抽 `renameSyncWithRetry`）+ **TOCTOU 幂等**（`ENOENT` ⇒ 判「已清空」返回 true） | 同族暴露（P-5）；TOCTOU 下「已清空」语义上应判成功 | **否决「把 clear 的 rename 塞进 `writeFileAtomic`」**：方向相反（活文件→`.del`），塞进去是削足适履 |
@@ -161,7 +161,7 @@ flowchart LR
 
 | # | 落点 | 动作 |
 |---|---|---|
-| **1** | helper 的耗尽错误 | message 追加 `code` + 已试次数 + 总耗时 + **稳定可 grep 的失败签名**（D20-6） |
+| **1** | helper 的耗尽错误 | message 追加 `code` + **`errno`** + 已试次数 + 总耗时 + **稳定可 grep 的失败签名**（D20-6；字段清单与需求档 N-12 同值） |
 | **2** | 三个 store | **零改动**（它们的 warn 拼 `e?.message` ⇒ **遥测自动流入**） |
 | **3** | **`lib/index.mjs` 的 `DELETE /config`** | 接住 `clearUserConfig` 的返回值 ⇒ 失败 `send({ ok:false, error:… }, 500)`（**对齐 PUT 先例**）（US-8） |
 
@@ -171,7 +171,7 @@ flowchart LR
 
 ### §5.5 FR-5 描述面同步（**D2 单一权威源 + 纪律 #5**）
 
-`lib/dsh-home.mjs` 的头注（现写「任何失败向上抛」）⇒ 改为「**白名单 errno 有界重试，耗尽向上抛**」；**三个 store 头注里引用 `writeFileAtomic` 行为处**同批过一遍（会诊 K11）。
+`lib/dsh-home.mjs` 的头注（现写「任何失败向上抛」）⇒ 改为「**白名单 errno 有界重试，耗尽向上抛**」；**`lib/**` 五档头注里引用 `writeFileAtomic` 行为处**同批过一遍（会诊 K11：`lib/session-store.mjs` · `lib/token-store.mjs` 的头注在列；**仅注释、契约零改动**）。
 
 ### §5.6 FR-6 台账与验收面
 
@@ -250,7 +250,7 @@ function clearUserConfig(dshHomeOverride, cwdHint) { /* ... */ }
 | **A1** | `lib/dsh-home.mjs` | 常量 `RENAME_MAX_ATTEMPTS` / `RENAME_BACKOFF_MS` | **导出且值 = 8 / 30**；白名单常量**按 `code` 字符串**（含 `EPERM`/`EACCES`/`EBUSY`，**不含** `EAGAIN`） |
 | **A2** | 同上 | `renameSyncWithRetry` | 定义**恰 1 处**且**被两个消费者调用**（`writeFileAtomic` + `clearUserConfig`） |
 | **A3** | 同上 | `writeFileAtomic` 的结构 | **`mkdirSync` 在循环外**；**写与 rename 同在一个 `try`**；**tmp 名在循环外定格一次** |
-| **A4** | 同上 | 耗尽路径 | **重抛原对象**（非 wrap）+ message 含 **`code`** 与**已试次数**与**可 grep 签名** |
+| **A4** | 同上 | 耗尽路径 | **重抛原对象**（非 wrap）+ message 含 **`code`**、**`errno`**、**已试次数**与**可 grep 签名**（四处齐备，与 N-12 同值） |
 | **A5** | 同上 | 孤儿清扫 | 存在「同目录 + 同前缀 + **龄 ≥ 10min**」的清扫分支（`.tmp-` 与 `.del-` 两形） |
 | **A6** | `test/write-atomic.test.mjs` | **重试生效** | 注入 `{delays:[1,1,1]}` + 前 k 次 `EPERM` ⇒ **内容落地 + 零 tmp 残留** |
 | **A7** | 同上 | **不假成功** | 持续 `EPERM` ⇒ **抛** + store 返回 `false` |
@@ -258,7 +258,7 @@ function clearUserConfig(dshHomeOverride, cwdHint) { /* ... */ }
 | **A9** | 同上 | **首写失败清理** | 注入写失败 ⇒ **零 tmp 残留** + 抛（**改前必留半个 tmp** ⇒ 该锚是「改前红/改后绿」） |
 | **A10** | 同上 | **孤儿清扫** | 龄 > 10min 的旧 tmp **被扫**；刚建的 tmp **幸存**（阴性对照） |
 | **A11** | 同上 | **TOCTOU 幂等** | `clearUserConfig` 在目标已被删时 ⇒ **返回 true**（判「已清空」） |
-| **A12** | `test/config-api.test.mjs` 或 `write-atomic` | **`DELETE /config` 的失败面** | clear 失败 ⇒ 响应 **`ok:false` + 500**（**改前必红** ⇒ 改前无条件 `ok:true`） |
+| **A12** | **`test/config-api.test.mjs`**（**落点已定死**——该档已在 `AP_TEST_AUTHORIZED` 授权面内，§10.1 不再有「视落点而定」） | **`DELETE /config` 的失败面** | clear 失败 ⇒ 响应 **`ok:false` + 500**（**改前必红** ⇒ 改前无条件 `ok:true`） |
 | **A13** | `docs/test-lifecycle.md` | **`R-13` 的状态翻转** | §五 那行的处置列含 **「已根治」**，且**该行仍在**（**不删行**）；§三 有 `write-atomic` 新行；§七 有新行 |
 | **A14** | 全仓 | **零改面** | §8.1 第 1/2/3/4/6 项逐档 `--numstat` 空 |
 | **A15** | 三个 store（`config-store` / `session-store` / `token-store`） | **契约不变** | 三个 `save*` 的 `catch` **仍为 `console.warn` + `return false`**（**不含 `throw`**） |
@@ -267,7 +267,7 @@ function clearUserConfig(dshHomeOverride, cwdHint) { /* ... */ }
 ### §8.3 负控与阴性对照（**每条新判据与每条保守约束各一条**）
 
 > **做法**：负控**全部在仓外临时副本 / 内存夹具上构造**（D5：仓内零残留）；**且必须区分真红与假红**（断言级红 = 真红；`ReferenceError` / 整档崩溃 = 假红）。
-> **★ 持句柄夹具必须用另一进程**（会诊 K10 实测：Node 的 `fs.open` 默认 share-delete ⇒ **同进程锁不住 `rename`**）。
+> **★ 「真机持锁」测试本批不建（评审 #6 的处置）**：本批的重试逻辑由**注入式** A6–A11 覆盖；**真实的「另一进程持有句柄」面登记为不可真机验证的残差**（§9.4 第 10 条）——理由：它 **Windows-only**，而与 `G-常驻1` 的**「零 `test.skip`」锁**冲突（平台分支要写也只能写成**两边都断言**的形态，得不偿失）。**若将来要建**：必须用**另一进程**（会诊 K10 实测：Node 的 `fs.open` 默认 share-delete ⇒ **同进程锁不住 `rename`**）。
 
 | # | 判据 / 约束 | 负控构造 | 必须红在哪 |
 |---|---|---|---|
@@ -333,6 +333,7 @@ D-19-1…D-19-8 的全文在 [`consult-minutes/2026-09-17-consult-19-minutes.md`
 | **7** | **`G6` 对已根治档的复跑豁免空转** | R-63——**「不删行」的已知代价**（D20-11） |
 | **8** | **「删行 + 门内三处谓词改造」** | R-64——**独立门改造，另立批次** |
 | **9** | **宿主日志面的 `console.warn` 可见性** | 与批 19 同款；不可在本仓内生验证 |
+| **10** | **真实的「另一进程持有句柄 ⇒ `EPERM`」面**（评审 #6） | 它 **Windows-only**，且与 `G-常驻1` 的**「零 `test.skip`」锁**冲突；**本批只用注入式覆盖重试逻辑**（A6–A11），真机面**不可在仓内稳定复现**（★ 探针是在**仓外**用 holder 子进程复现的，不进套件） |
 
 ### §9.5 威胁模型
 
@@ -348,12 +349,14 @@ D-19-1…D-19-8 的全文在 [`consult-minutes/2026-09-17-consult-19-minutes.md`
 |---|---|---|
 | `lib/dsh-home.mjs` | **FR-1 + FR-2 + FR-5（头注）** | **修改（核心）** |
 | `lib/config-store.mjs` | **FR-4（`clearUserConfig` 复用原语 + TOCTOU）** + 头注 | 修改 |
+| `lib/session-store.mjs` | **仅头注同步**（引用 `writeFileAtomic` 行为处；**契约零改动**） | 修改（注释级） |
+| `lib/token-store.mjs` | **仅头注同步**（同上；**契约零改动**） | 修改（注释级） |
 | `lib/index.mjs` | **仅 `DELETE /config` 的返回值接线**（US-8） | 修改（一行级） |
 | `test/write-atomic.test.mjs` | **新增档**（A6…A11 + 负控） | **新增（触发登记级联）** |
-| `test/config-api.test.mjs` | 视落点而定：`DELETE /config` 的失败面断言（A12） | 修改（`AP_TEST_AUTHORIZED` 已含该档 ✓） |
+| `test/config-api.test.mjs` | **`DELETE /config` 的失败面断言（A12）**——**落点定死在此档**（已在授权面 ✓） | 修改 |
 | `test/guard-e.test.mjs` · `docs/test-lifecycle.md` | **登记级联**：T-E19 清单 + 台账 §三/§五/§七 | 修改 |
 | `CHANGELOG.md` · `package.json` | 本批条目 + 版本 bump | 修改（**收口时**） |
-| **明确排除（禁改）** | **`test/session-state.test.mjs`** · **`test/release-check.test.mjs`** · **`release-check.mjs`** · `test/fixtures/**` · `lib/advisor.mjs` · `lib/state.mjs` · `lib/token-store.mjs`（契约不变） · `docs/consult-minutes/**` · 平台包 | **零改动** |
+| **明确排除（禁改）** | **`test/session-state.test.mjs`** · **`test/release-check.test.mjs`** · **`release-check.mjs`** · `test/fixtures/**` · `lib/advisor.mjs` · `lib/state.mjs` · `docs/consult-minutes/**` · 平台包 | **零改动**（**注意**：`lib/token-store.mjs` 与 `lib/session-store.mjs` **不在禁止面**——它们只允许**头注同步**，**契约与行为零改动**） |
 
 **★ EOL 逐档实测表（as-of 2026-09-17，`core.autocrlf=false`；**改前必须按本表**）**：`lib/dsh-home.mjs` · `lib/config-store.mjs` · `lib/index.mjs` = **CRLF**（`lib/**` 实测 19 CRLF / 11 LF）· `test/*.test.mjs` 与 `docs/*.md` = **多数 LF**，而 `test/codex-runner.test.mjs` 等 **4 档是 CRLF** ⇒ **每档改前逐档实测**（夜班计划 trap 12 的订正口径）· **`git diff` 必须配 `--ignore-cr-at-eol` 读**（本机有 CR 幻影）。
 
@@ -369,7 +372,7 @@ D-19-1…D-19-8 的全文在 [`consult-minutes/2026-09-17-consult-19-minutes.md`
 
 | # | 验收标准 | 层 | 锚 | US |
 |---|---|---|---|---|
-| **AC-1** | 注入前 k 次 `EPERM` 后释放 ⇒ **写成、零 tmp 残留** | T1 | A1 · A6 | US-1 |
+| **AC-1** | 注入前 k 次 `EPERM` 后释放 ⇒ **写成、零 tmp 残留** | T1 | A1 · A6 | US-1 · US-5 |
 | **AC-2** | 持续 `EPERM` ⇒ **抛** 且 store 返回 `false`（**不假成功**） | T1 | A7 | US-7 |
 | **AC-3** | **非白名单**（`ENOTDIR` / `ENOSPC`）⇒ **单次快失败、无环内 sleep** | T1 | A1 · A8 | US-1 |
 | **AC-4** | **首写失败** ⇒ **零 tmp 残留** + 抛（**改前必留半个 tmp**） | T1 | A3 · A9 | US-1 |
@@ -380,15 +383,15 @@ D-19-1…D-19-8 的全文在 [`consult-minutes/2026-09-17-consult-19-minutes.md`
 | **AC-9** | **契约零变更**：三个 store 仍 `warn + return false`（既有断言全绿） | T1 | A15 | US-2 |
 | **AC-10** | **`R-13` 行状态翻转且不删行**；台账 §三/§五/§七 同批；**`release-check.test.mjs` 零改动** | T2 | A13 | US-3 |
 | **AC-11** | **疗效门槛**：全量 ×10 + 单档 ×20 **全绿**（记录进 §12） | T1 | A16 | US-3 |
-| **AC-12** | **零改面** + **新档登记级联**（T-E19 / 台账 / 双 parity）+ 描述面同步 | T2 | A14 | US-5 |
-| **AC-13** | **重启事项写进交接页**（本批改 `lib/**`） | T3 | — | US-6 |
+| **AC-12** | **零改面** + **新档登记级联**（T-E19 / 台账 / 双 parity）+ 描述面同步（`lib/**` 五档头注） | T2 | A14 | US-9 |
+| **AC-13** | **重启事项写进交接页**（`docs/2026-09-13-handoff.md`，**主代理写**；本批改 `lib/**`） | T3 | — | US-6 |
 
 ### §10.4 建议 stages（**四段串行**）
 
 ```mermaid
 flowchart TD
   S1["**stage 1** FR-1 原语（8×30ms · code 白名单 · ENOENT 特判 · 耗尽遥测）+ FR-2 重排 + FR-4 并入<br/>＋ 其负控（改前红/改后绿）"] --> S2
-  S2["**stage 2** 新建 `test/write-atomic.test.mjs`（A6…A11 + 负控）<br/>＋ **持句柄夹具用另一进程**"] --> S3
+  S2["**stage 2** 新建 `test/write-atomic.test.mjs`（A6…A11 + 负控）<br/>（**不建真机持锁测试**——见 §8.3 头注与 §9.4 残差 #10）"] --> S3
   S3["**stage 3** FR-3 可见性（helper 遥测 + **`DELETE /config` 接线** + A12）＋ FR-5 描述面四处"] --> S4
   S4["**stage 4** 收口：**登记级联**（T-E19 + 台账 §三/§五/§七）· 全量 · **疗效门槛 ×10 / ×20** · 逐锚复核 + 变异自证"]
   style S1 fill:#ffd
@@ -409,9 +412,18 @@ flowchart TD
 | 日期 | 变更 |
 |---|---|
 | 2026-09-17 | 首版（设计待评审）：九节 + §10 验收；**D20-1…D20-11**；**US-1…US-8**；**AC-1…AC-13**；**锚 A1…A16 写全三要素**；**负控 10 条 + 阴性对照 6 条**；**图 1 / 图 2**；§10.4 **四段串行**。**★ 会诊 `#19`（3/4）定形**：**两条腿缺一不可**（「只做重试就是超卖」）· 平铺 30ms（否决爬升）· 按 `code` 判白名单 · `ENOENT` 特判重铸 · 保住「写进环内 try」但**不为已证伪的碰撞面加机制** · 耗尽遥测 · **`R-13` 只翻转状态不删行**（**不采纳会诊的一致建议**，理由三条见 §3.1）。**★ 姿态如实声明**：**「按机制假设根修」，不是「已确诊 EPERM」**。 |
+| 2026-09-17 | **★ 设计评审轮次 1 落档（`advisor-dsh-3`，`VERDICT: FAIL`，🔴2 · 🟡5 · 🔵2）——9 条全 Fixed**（**未签发 token**；落档见 **§12.1**）：**🔴 #1 同一机制两处相反指令**——需求档 **N-7 仍是会诊前首版的「移出 flake 表」**，而 US-3 / §5.2 / 本档 AC-10 / A13 / FR-6 / D20-11 全部裁定「**不删行**」（**父侧折入会诊时改了 US-3 与 §5.2 却漏改 N-7**——**正是本仓「改了引用点却没改被引用的副本」这个物种，第十三次**）⇒ **N-7 改写为「状态翻转、不删行」** + 需求档 §6 补记该订正；**🔴 #2 写域自相矛盾**——§3.1 第 6 项写「`lib/**` 仅**四档**」而 §10.1 只列 **3** 个 lib 档，且 **FR-5 要求三个 store 头注同步**而 §10.1 把 `lib/token-store.mjs` 列进**禁改**、`lib/session-store.mjs` 两张清单都没有 ⇒ **对齐为五档**（`dsh-home` · `config-store` · `session-store`〔仅头注〕 · `token-store`〔仅头注〕 · `index`）并把 token-store 移出禁改行；**🟡 #3 消息字段缺 `errno`**（N-12 要求四处，D20-6/FR-3/A4 只三处）⇒ 三处补齐；**🟡 #4「8 处」与摸底档 §4 权威枚举「7 处」矛盾** ⇒ 订正为 7 处（另 1 处 `removeSessionState` 同类）；**🟡 #5 AC-12 挂 US-5 而 US-5 无 AC 覆盖** ⇒ 新增 **US-9** 并改挂，AC-1 同挂 US-5；**🟡 #6「持句柄夹具用另一进程」无 AC 覆盖且与「零 `test.skip`」锁冲突** ⇒ **裁定本批不建真机持锁测试**（注入式 A6–A11 覆盖重试逻辑），真机面进 §9.4 残差 #10 + §8.3 头注改写；**🟡 #7 摸底档状态行陈旧** ⇒ 改为「会诊 #19 已折入」；**🔵 #8 A12 落点「或」不定** ⇒ **定死 `test/config-api.test.mjs`**（已在授权面）· §10.1 同步；**🔵 #9 AC-13 未指名交接页路径与写者** ⇒ 补 `docs/2026-09-13-handoff.md` + **主代理**。 |
 
 ---
 
 ## §12 评审落档
 
-> **待填**：设计评审（`advisor type='design'`）的轮次、处置表与 token 签发记录；交付核验、分歧审计、交付代码评审的落档同样落本节（§12.1 设计评审 · §12.2 交付核验 · §12.3 交付代码评审 · §12.4 分歧审计）。
+### §12.1 设计评审落档（**轮 1 = FAIL**）
+
+| 轮 | 结论 | 处置 |
+|---|---|---|
+| **1** | **`VERDICT: FAIL`**（🔴2 · 🟡5 · 🔵2）· **未签发 token** | **9 条全 Fixed**（逐条见 §11 第 2 行）。**评审正评**：「设计整体质量高：九章节齐备、双图、**锚三要素写全**、**负控与阴性对照成对**、**诚实残差清单完整**、**两条腿的裁定贯穿三档一致**」；**两条 🔴 都是「同一事物两处相反描述」** ⇒ 照字面实施会触发本批明令规避的发布门级联（#1）或使 FR-5 与 §10.1 互斥（#2） |
+
+- **design token**：**轮 1 未签发**（存在未决 🔴，按规则不签发）⇒ **修订后须重跑评审（轮 2）**
+- **★ 父侧自记（本批的物种，第 2 次）**：**🔴 #1 是我折入会诊时「改了 US-3 与 §5.2 却漏改 N-7」**——**与本批要治的 `R-13`（「写没落地」被静默吞掉）无关，却与批 16 那条自订规矩「任何『改了两处之一』都不算修好」直接同族**。**⇒ 可执行对策**：**折入「翻转某条既有要求」的裁定后，必须全档检索该要求的**所有**副本**（本批已用 `grep` 逐条复核 US/N/不做项三处，并**在轮 1 折入时补跑了这一步**）。
+- **交付核验 / 分歧审计 / 交付代码评审**：见 **§12.2 / §12.4 / §12.3**（**待填**）。
