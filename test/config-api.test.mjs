@@ -807,6 +807,39 @@ test("T-D31 (AC-D1/AC-D2/AC-D3 / 锚 M7+M8): 含未知顶层键的 PUT ⇒ 400 +
   } finally { rmHome(home) }
 })
 
+// ————————————— 批 20 修复轮（D20-8 / AC-8 / US-8 / 锚 A12）：DELETE /config 的失败可见面（handler 级） —————————————
+
+test("A12 (批 20 修复轮 / AC-8 / US-8): DELETE /config 清除失败 ⇒ ok:false + 500（改前无条件 ok:true —— 面向用户的谎）", async () => {
+  // 审计🔴1：AC-8 / A12 / FR-3§5.3-③ / D20-8 / US-8 完全未实施——DELETE /config 丢弃 clearUserConfig
+  // 返回值并无条件 send({ok:true})。注入「清除失败」无需 fs 竞态：dshHomeOverride 缺省 + cwdHint 指向
+  // 无 profile 根的深层临时目录（U6c 同款已证形态）⇒ resolveConfigStorePath ⇒ null ⇒ clearUserConfig
+  // 直接返回 false（存储路径不可解析失败面）。前置断言钉死注入成立，防假绿。对照先例：PUT 路径的
+  // save 失败面（T-D31 档内：ok:false + 500 + error 文案）。
+  const root = mkHome()
+  try {
+    const unreachable = join(root, "no", "profile", "here")
+    assert.equal(resolveConfigStorePath(undefined, unreachable), null,
+      "前置自证：注入的清除失败必须真的成立（路径不可解析 ⇒ clearUserConfig 必返回 false）")
+    const handler = makeApiHandler({}, {
+      baseConfig: {}, sessionExists: () => false, agentOptionsOf: () => ({}),
+      stateOf: () => ({}), settingsGet: () => null,
+      cwdHint: () => unreachable, dshHomeOverride: undefined,
+    })
+    let status = 0, payload = ""
+    const res = { writeHead: (c) => { status = c }, end: (t) => { payload = String(t) } }
+    const req = {
+      url: "http://localhost" + CONFIG_API_PREFIX + "/config", method: "DELETE",
+      [Symbol.asyncIterator]: async function* () { },
+    }
+    await handler(req, res)
+    const body = payload ? JSON.parse(payload) : null
+    assert.equal(status, 500, "清除失败 ⇒ 500（改前是无条件 200「成功」）：" + JSON.stringify(body))
+    assert.equal(body && body.ok, false, "响应必须 ok:false（改前无条件 ok:true）：" + JSON.stringify(body))
+    assert.ok(typeof (body && body.error) === "string" && body.error.length > 0,
+      "error 字段在场且非空（对齐 PUT 先例的失败面形态）：" + JSON.stringify(body))
+  } finally { rmHome(root) }
+})
+
 // ————————————— 评审 #1 回归：handler 级集成（生产形状 opts，防「stateOf 未接线被 stub 掩盖」） —————————————
 
 test("review#1: handler-level integration — production-shaped opts (stateOf wired via sessionState) serve POST /apply-session and GET /session", async () => {
