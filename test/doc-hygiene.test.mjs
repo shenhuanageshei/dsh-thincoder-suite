@@ -3,7 +3,7 @@
 //   §6.4 两项机械检查（U+FFFD 全仓 + 常设档 canary）· §8.2 机验锚 V1…V14 · §11 本批**不可真机验证**清单（未重启 DSH）
 //   §8.1-8 六串锁的权威作用域（`lib/**` 内命中 = 0）· §6.1 冻结交付文本 · §6.2 失败后缀块
 //
-// 本档用例（顶层 `test(` 数 = 24，台账 docs/test-lifecycle.md §三 同数）：
+// 本档用例（顶层 `test(` 数 = 25，台账 docs/test-lifecycle.md §三 同数）：
 //   ① U+FFFD 全仓扫描（锚 V13）
 //   ② 常设档 canary（锚 V14）+ 规范层形状与纪律（锚 V1/V2/V3/V4——按 §6.4 的「并入既有 test() 块」）
 //      + **登记完备（批 13 / R-25 / AC-14·AC-15 / 锚 V8——同走「并入既有块」）**
@@ -45,6 +45,16 @@
 //   ㉓ **批 17 负控腿 11**（**锚 A11b / AC-9b · FR-6b**）：已声明档内有 AC 形表而无 `acs` ⇒ 红（锚形表同理）；
 //      **普通表 ⇒ 不红** · **未声明档 ⇒ 不跑**（fail-open）
 //   ㉔ **批 17 负控腿 12**（**锚 A11 / AC-9 · FR-6**）：**exempt 四闸**各自红 ＋ 超 `EXEMPT_BUDGET` ⇒ 红
+//
+// ★ 批 18 新增 **1 条顶层用例**（**`test(` 24 → 25**；台账 §三 同批同步——`T-LC2` 等值锁）：
+//   ㉕ **批 18 窄腿 ③**（**`consult #13` §3 逐字判据 · 设计档 §9.4 残差 #6 兑现**）：
+//      **FR-5 定位器绑定的区域内**，令牌 `基线 N` 与 `本批 N` 的**去重值集各恰 1 个**
+//      （**即「两处推导式取值一致」，不是「令牌基数唯一」**）——四条负控（① **不扫非绑定节** ·
+//      ② **双推导式不一致 ⇒ 红且报区域与两处 `文件:行:原文`** · ③ **span 内示例 ⇒ 绿**（含**真实语料**两态：
+//      CHANGELOG 的 `## [0.23.0]` 节那条不一致的历史引用住在反引号里）· ④ **边界不存在 ⇒ fail-closed**）
+//      ＋ 阴性对照（单处推导式 ⇒ 绿 · 空集 ⇒ 红 · 无版本头 / 标记住第二节 ⇒ 红）。
+//      **实现只消费 `shapeLocateCountLine` 的绑定输出**（`state` ＋ `from`/`to` 行区间，**批 18 加性扩展**），
+//      **自己不再切节**（D2：两个定位器是同一种病高一层）。
 //
 // ★ 批 17 的三处**既有正确性修复**（FR-0a/0b/0c）**先于**一切新判据落地；**扫描域**改为
 //   `docs/**` 递归（− `docs/consult-minutes/**`）＋ `CHANGELOG.md`：**腿 1 全域跑**（宽松档位），
@@ -274,6 +284,15 @@ test("DOC-HYGIENE T2（锚 V14 + V1/V2/V3/V4 + 批 13 R-25 登记完备）: 常�
     + " · 出现处合计 " + shape.factStats.occurrences
     + " · CHANGELOG 定位态 " + shape.lock.state + "（行 " + shape.lock.line + " · 等值锁 "
     + (shape.lock.state === "first-section" ? (shape.lock.locked ? "已生效" : "未生效") : "不适用（死区态）") + "）")
+  // ★ 批 18 窄腿 ③（`consult #13` §3）：**真实 CHANGELOG 的绑定区域内，两个令牌的去重值集各恰 1 个**。
+  //   ★ 它读的正是**本次交付正在写的那个死区条目**（交付时点态）⇒ **自噬面由本断言兜住**：
+  //     写完条目后若说明文字里裸写了第二个不等值，这条**当场红**（而不是等人眼）。
+  assert.deepEqual([shape.boundTokens["基线"].length, shape.boundTokens["本批"].length], [1, 1],
+    "批 18 窄腿 ③：真实 CHANGELOG 的绑定区域（" + shape.boundTokens.state + " · 第 "
+    + shape.boundTokens.region[0] + "–" + shape.boundTokens.region[1] + " 行）内两个令牌的去重值集必须各恰 1 个")
+  t.diagnostic("批 18 窄腿 ③实测（`consult #13` §3）：绑定态 " + shape.boundTokens.state + " · 区域 第 "
+    + shape.boundTokens.region[0] + "–" + shape.boundTokens.region[1] + " 行 · `基线` 去重值 "
+    + JSON.stringify(shape.boundTokens["基线"]) + " · `本批` 去重值 " + JSON.stringify(shape.boundTokens["本批"]))
 })
 
 // ═══════════════ ③ 六串负向（V5）+ 正向锚与划界（V10/V11②/V12②③） ═══════════════
@@ -895,10 +914,16 @@ const SHAPE_COUNT_MARK = "【计数行】"
 
 /**
  * **FR-5 定位器**（锚 A9）：切「死区」= `# Changelog` 到**首个 `## [`** 之间。
- * @post `{ state, line, text }`——`state ∈ {"deadzone","first-section"}`；`line` = 命中行号（1-based）
+ * @post `{ state, line, text, from, to }`——`state ∈ {"deadzone","first-section"}`；`line` = 命中行号（1-based）
  *       · 死区含**恰 1 处** `【计数行】` ⇒ 绑死区（交付时点态）
  *       · 死区含 **>1 处** ⇒ **红**（两批同飞不是本仓惯例，fail-closed）
  *       · 死区 0 处 ⇒ **首节含 ⇒ 绑首节**（收口后态）；**两处都不含 ⇒ 红**（定位失败不是跳过）
+ *       ★ **批 18 加性扩展：`from` / `to` = 绑定区域的**行区间**（0-based、半开 `[from, to)`）**——
+ *         **死区态** = `# Changelog` 之后到首个版本头之前；**首节态** = 首个版本头到下一版本头之前。
+ *         **为什么在这里扩而不是让消费者自己切**：批 18 的窄腿 ③ 要「区域内」的一致性，
+ *         而**两个定位器是同一种病高一层**（FR-5 的等值锁防的是「两个**抽取器**漂成两种方言」）
+ *         ⇒ **腿必须消费本定位器的绑定输出，不得自己再切一次节**（`consult #13` §3 的实现要点 · D2）。
+ *         **对既有消费者逐字加性**：它们只读 `state` / `line` / `text`，两个新字段是纯新增。
  */
 function shapeLocateCountLine(text, file = "CHANGELOG.md") {
   const lines = lf(text).split("\n")
@@ -919,7 +944,7 @@ function shapeLocateCountLine(text, file = "CHANGELOG.md") {
       + " 处 `" + SHAPE_COUNT_MARK + "`（期望 ≤1）⇒ 红（两批同飞不是本仓惯例，fail-closed）"])
   }
   if (dead.length === 1) {
-    return { state: "deadzone", line: dead[0] + 1, text: lines[dead[0]] }
+    return { state: "deadzone", line: dead[0] + 1, text: lines[dead[0]], from: iHead + 1, to: iFirst }
   }
   const first = pick(iFirst, lines.length)
   if (first.length === 0) {
@@ -932,7 +957,7 @@ function shapeLocateCountLine(text, file = "CHANGELOG.md") {
   if (inFirst.length === 0) {
     shapeThrow([file + ": `" + SHAPE_COUNT_MARK + "` 既不在死区、也不在**首节**内 ⇒ 红（定位失败不是跳过）"])
   }
-  return { state: "first-section", line: inFirst[0] + 1, text: lines[inFirst[0]] }
+  return { state: "first-section", line: inFirst[0] + 1, text: lines[inFirst[0]], from: iFirst, to: end }
 }
 
 /**
@@ -974,6 +999,76 @@ function shapeChangelogLock(text, file = "CHANGELOG.md") {
   }
   shapeThrow(bad)
   return { state: loc.state, locked: true, line: loc.line, mine, ref }
+}
+
+// ═══════════ 批 18 · 窄腿 ③：**绑定区域内的令牌值一致**（`consult #13` §3 逐字判据） ═══════════
+//
+// 出处：`docs/consult-minutes/2026-09-17-consult-13-rulings.md` §3（**四家收敛、逐字冻结**）·
+// 设计档 §9.4 诚实残差 **#6** 的 2026-09-17 状态更新（「登记为后续候选」→「批 18 兑现」）·
+// 本批的设计档（`docs/2026-09-17-scope-alignment-design.md`）§5.6 的 FR-5 两态定位器。
+//
+// ★ 判据的**形态**是「**两处推导式取值一致**」，**不是「令牌基数唯一」**：
+//   批 16 条目 `:30` 的收官实测行**刻意复述**了推导式（值一致），那是**有文档价值的写法**；
+//   按「恰 1 处」它在两态皆红（`consult #13` 的 [4] 实测），**而真正雷过两次的缺陷物种是「两处取值不一致」**。
+// ★ **绝不可扫非绑定节 / 全文件**：`## [0.24.0]`（批 16 条目）与 `## [0.23.0]`（批 14 条目）
+//   今天就违反唯一性 ⇒ **全文件版在每个收口后态恒红**（负控腿 ① 钉住这一条）。
+// ★ **边界不确定或不存在 ⇒ 判失败（红）**，**不回退全文件扫描**（fail-closed）。
+// ★ **行内代码 span 与围栏内一律掩码不计**（复用 `shapeMaskDoc`：FR-0b 围栏 ＋ FR-0c 占位符）。
+//   **批 14 那条不一致的历史引用就住在反引号里** ⇒ 不掩码则它红、掩码则绿（负控腿 ③ 钉住两态）。
+// ★ **D2 单一权威源**：本腿**消费 `shapeLocateCountLine` 的绑定输出**（`state` ＋ `[from, to)` 行区间），
+//   **自己不再切一次节**——FR-5 的等值锁防的是「两个**抽取器**漂成两种方言」，
+//   而**两个定位器是同一种病高一层**（`consult #13` §3 的实现要点）。
+
+/**
+ * 窄腿 ③ 认的两个令牌（`consult #13` §3 冻结的字面：`基线\s*(\d+)` 与 `本批\s*(\d+)`）。
+ * ★ **掩码后的文本上匹配** ⇒ 住在行内代码 span / 围栏里的示例**不计入**。
+ */
+const SHAPE_BOUND_TOKENS = [["基线", /基线\s*(\d+)/], ["本批", /本批\s*(\d+)/]]
+
+/**
+ * **批 18 · 窄腿 ③：绑定区域内的令牌值一致**（`consult #13` §3）。
+ * @pre   `loc` = `shapeLocateCountLine(text)` 的返回（**腿消费它的绑定输出，不自己切节**——D2）
+ * @post **绑定区域**（`loc.from` / `loc.to` 给出的行区间）内，`基线\s*(\d+)` 与 `本批\s*(\d+)` 的
+ *       **去重值集各恰 1 个** ⇒ 否则红，报错含**绑定区域**（态 ＋ 行区间）与**每一处的 `文件:行:原文`**
+ *       ★ **区域外（非绑定节）一律不扫**——这是本腿的**判据本身**，不是优化（全文件版恒红）
+ *       ★ **空集也红**：去重值集「**恰** 1 个」的字面读法（0 ≠ 1）＋ §9 的 fail-closed
+ *         ——区域里抽不到令牌**不是跳过**，也**不回退全文件扫描**
+ *       ★ **掩码面**：匹配跑在 `shapeMaskDoc` 的**逐行掩码文本**上，报错回显**原文行**
+ * @return `{ state, region: [首行, 末行], **令牌名 → 去重值数组** }`（值数组长度恒为 1，否则已抛）
+ */
+function checkBoundTokenValues(loc, text, file = "CHANGELOG.md") {
+  const raw = lf(text).split("\n")
+  const masked = shapeMaskDoc(text)
+  const region = loc.state === "deadzone"
+    ? "死区（`# Changelog` 到首个版本头之间）"
+    : "首节（首个版本头到下一版本头之间）"
+  const where = "**绑定区域** = " + region + " · 第 " + (loc.from + 1) + "–" + loc.to + " 行"
+  const bad = []
+  const out = { state: loc.state, region: [loc.from + 1, loc.to] }
+  for (const [label, re] of SHAPE_BOUND_TOKENS) {
+    const rx = new RegExp(re.source, "g")
+    const occ = []
+    for (let i = loc.from; i < loc.to; i++) {
+      rx.lastIndex = 0
+      let m
+      while ((m = rx.exec(masked[i] ?? "")) !== null) {
+        occ.push({ value: Number(m[1]), line: i + 1, raw: raw[i] ?? "" })
+      }
+    }
+    const values = [...new Set(occ.map((o) => o.value))].sort((a, b) => a - b)
+    out[label] = values
+    if (values.length === 1) continue
+    if (values.length === 0) {
+      bad.push(file + ": " + where + " 内**抽不到** `" + label + " N` ⇒ 红（去重值集「恰 1 个」的字面读法："
+        + "0 ≠ 1；§9 fail-closed——区域里没有载荷**不是跳过**，也**不回退全文件扫描**）")
+      continue
+    }
+    bad.push(file + ": " + where + " 内 `" + label + " N` 的**去重值集不是恰 1 个**——实测 " + values.length
+      + " 个 " + JSON.stringify(values) + " ⇒ 红（`consult #13` §3：区域内两处推导式必须**取值一致**）；"
+      + "**全部出现处**：" + occ.map((o) => file + ":" + o.line + ":" + o.raw).join(" │ "))
+  }
+  shapeThrow(bad)
+  return out
 }
 
 // ═══════════ 批 17 · FR-2：事实 id 腿（跨档分组 ＋ 两条不变量） ═══════════
@@ -1608,6 +1703,10 @@ function runShapeLegsOnRealDocs() {
   const lock = shapeChangelogLock(cl.text)
   assert.ok(lock.state === "deadzone" || lock.locked,
     "FR-5：CHANGELOG 必须处于**两态之一**且定位成功（实测 state=" + lock.state + " · line=" + lock.line + "）")
+  // —— 批 18 新腿：**绑定区域内的令牌值一致**（窄腿 ③；`consult #13` §3）——
+  //    ★ **消费同一定位器的绑定输出**（`shapeLocateCountLine`；等值锁消费的也是它）⇒
+  //      **权威切节点只有一个**，腿**不自己再切一次节**（D2：两个定位器是同一种病高一层）。
+  const boundTokens = checkBoundTokenValues(shapeLocateCountLine(cl.text, "CHANGELOG.md"), cl.text, "CHANGELOG.md")
   // —— 批 17 新腿：**FR-6 强制声明**（`docs/` 顶层批次档义务 ＋ exempt 四闸 ＋ 预算）——
   const duty = checkDeclarationDuty(docsTopLevel().map((n) => "docs/" + n))
   // —— 批 17 新腿：**FR-6b 面级结构触发**（**只在已声明档**上跑——未声明档 fail-open）——
@@ -1616,7 +1715,7 @@ function runShapeLegsOnRealDocs() {
   }
   return {
     files: files.length, scanned, leg1Hits, leg1Loose, leg2Runs, leg3Checked, leg4Runs, leg4Stats,
-    factStats, lock, regMulti, duty,
+    factStats, lock, regMulti, duty, boundTokens,
   }
 }
 
@@ -2604,4 +2703,154 @@ test("DOC-HYGIENE 批 17 负控腿 12（锚 A11 / AC-9 · FR-6）: exempt 四闸
   // 阴性对照③：同三档、预算抬到 3 ⇒ 绿（⇒ 红的是**预算关系**，不是 exempt 本身）
   assert.equal(checkDeclarationDuty(Object.keys(three), SHAPE_CUTOFF, 3, { loader: shapeLoaderOf(three) }).exempts.length, 3,
     "阴性对照③：预算抬到 3 ⇒ 同样三档全绿（红的是预算关系）")
+})
+
+// ═══════════════ ⑩ 批 18 · 窄腿 ③ 的负控腿（**绑定区域内的令牌值一致**） ═══════════════
+//
+// 出处：`docs/consult-minutes/2026-09-17-consult-13-rulings.md` §3（**四家收敛、逐字冻结**）·
+// 设计档 §9.4 诚实残差 **#6** 的 2026-09-17 状态更新（「登记为后续候选」→「批 18 兑现」）。
+// ★ 判据逐字：**在 FR-5 定位器绑定的区域内**，`基线\s*(\d+)` 与 `本批\s*(\d+)` 的去重值集**各恰 1 个**
+//   ——**即「两处推导式取值一致」，不是「令牌基数唯一」**。
+// ★ **四条负控 ＋ 阴性对照全部在纯内存夹具上构造**（D5：零临时档 ⇒ 零 EOL 陷阱、仓内零残留）；
+//   另有一条**真实语料**的两态自证（读 `CHANGELOG.md`，只读不改）。
+// ★ **自噬雷**（四家一致点名）：**批 18 的死区条目自己会讨论这条腿**，而两态绑定下腿检查的正是
+//   **批 18 自己的死区条目** ⇒ **任何说明文字里的示例令牌一律进代码 span / 围栏，或用字面 `N`**
+//   （**批 17 §5.6 教训的同形重演**：定位标记在说明性文字里第二次逐字出现 ⇒ 当场红）。
+
+test("DOC-HYGIENE 批 18 窄腿 ③（`consult #13` §3 · 残差 #6 兑现）: 绑定区域内令牌值一致——① 不扫非绑定节 ② 双推导式不一致 ⇒ 红 ③ span 内示例 ⇒ 绿 ④ 边界不存在 ⇒ fail-closed", () => {
+  /** 死区 ＋ 尾部（缺省尾部 = 一份合规的历史节）。 */
+  const CL = (dead, tail) => "# Changelog\n\n引言行。\n\n" + dead
+    + (tail === undefined ? "## [0.25.0] — 2026-09-17\n\n- 批 17 条目：【计数行】**476/476**（基线 464 + 本批 12）。\n" : tail)
+  const run = (text, file = "changelog.md") => checkBoundTokenValues(shapeLocateCountLine(text, file), text, file)
+  const distinct = (text, re) => [...new Set([...text.matchAll(re)].map((m) => m[1]))]
+
+  // ——① **不扫非绑定节**（**四家一致点名的硬要求**）——
+  //   夹具：死区里**一致**；其下两个历史节**各自违反唯一性**（批 16 条目与批 14 条目的真实形态）。
+  const HISTORY_BAD = CL("- **【计数行】**：**477/477**（基线 476 + 本批 1）。\n\n",
+    "## [0.25.0] — 2026-09-17\n\n- 批 16 形态：【计数行】**464/464**（基线 456 + 本批 8 · 收官实测 464 = 基线 455 + 本批 9）。\n\n"
+    + "## [0.24.0] — 2026-09-16\n\n- 批 14 形态：【计数行】**456/456**（基线 453 + 本批 3 · 复审又写 基线 456 + 本批 8）。\n")
+  const r1 = run(HISTORY_BAD)
+  assert.equal(r1.state, "deadzone", "① 边界：死区含**恰 1 处**定位标记 ⇒ **绑死区**（交付时点态）")
+  assert.deepEqual([r1["基线"], r1["本批"]], [[476], [1]],
+    "① **不扫非绑定节** ⇒ 两个历史节的违反唯一性**一律不报**（四家一致点名的那条硬要求）")
+  assert.ok(distinct(HISTORY_BAD, /基线\s*(\d+)/g).length > 1,
+    "① 夹具自证（防「夹具其实没违反」的假绿）：**全文件**口径的 `基线` 值集 = "
+    + JSON.stringify(distinct(HISTORY_BAD, /基线\s*(\d+)/g)) + "（>1 个）⇒ **全文件版必红**")
+  assert.ok(distinct(HISTORY_BAD, /本批\s*(\d+)/g).length > 1, "① 夹具自证：`本批` 同理（全文件版必红）")
+  // 同一份历史节、换到**首节态**（死区 0 处 ⇒ 绑首节）⇒ 仍只扫首节
+  const FIRST_CLEAN = CL("", "## [0.25.0] — 2026-09-17\n\n- 批 17 条目：【计数行】**476/476**（基线 464 + 本批 12）。\n\n"
+    + "## [0.24.0] — 2026-09-16\n\n- 历史节：【计数行】**456/456**（基线 453 + 本批 3）。\n")
+  const r1b = run(FIRST_CLEAN)
+  assert.deepEqual([r1b.state, r1b["基线"], r1b["本批"]], ["first-section", [464], [12]],
+    "① 收口后态：死区 0 处 ⇒ **绑首节**，且**仍不扫第二节**（域由定位器决定，不由腿决定——D2）")
+
+  // ——② **双推导式取值不一致 ⇒ 红**（批 16 的 P-5 形态：同一节里两处推导式）——
+  const P5 = "# Changelog\n\n引言行。\n\n## [0.25.0] — 2026-09-17\n\n"
+    + "- **【计数行】**：**476/476**（基线 464 + 本批 12）。\n"
+    + "  - **★ 收官实测**：全量 476 = 基线 465 + 本批 12。\n"
+  try {
+    run(P5)
+    assert.fail("应当抛")
+  } catch (e) {
+    assert.ok(e instanceof ShapeViolation, "② 必须是**谓词级红**（真红 = ShapeViolation），不是整档崩溃（假红）")
+    assert.ok(/绑定区域/.test(e.message) && /首节/.test(e.message),
+      "② 报错必须点名**绑定区域**（含态）：" + e.message)
+    assert.ok(/第 5–\d+ 行/.test(e.message),
+      "② 区域是**整节的行区间**（起点 = 版本头那一行），不是定位行本身：" + e.message)
+    assert.ok(e.message.includes("- **【计数行】**：**476/476**（基线 464 + 本批 12）。")
+      && e.message.includes("  - **★ 收官实测**：全量 476 = 基线 465 + 本批 12。"),
+      "② 报错必须含**两处的 `文件:行:原文`**（R-6 同律：绝不只报归一值）：" + e.message)
+    assert.ok((e.message.match(/changelog\.md:/g) ?? []).length >= 2, "② 两处出现处各自带 `档名:行号`：" + e.message)
+    assert.ok(e.message.includes("464") && e.message.includes("465"), "② 报错必须点名两个不同的值： " + e.message)
+    assert.ok(!e.message.includes("`本批 N`"),
+      "② **精度**：本夹具里 `本批` 两处**同值** ⇒ **只报真的那条（`基线`）**，不得连坐：" + e.message)
+  }
+
+  // ——③ **行内代码 span 内的示例 ⇒ 绿**（★ 掩码是判据的一部分）——
+  const SPAN_OK = "# Changelog\n\n引言行。\n\n## [0.25.0] — 2026-09-17\n\n"
+    + "- **【计数行】**：**476/476**（基线 464 + 本批 12）。\n"
+    + "  - 历史引用（示例）：`全量 476 = 基线 465 + 本批 11`。\n"
+  const r3 = run(SPAN_OK)
+  assert.deepEqual([r3["基线"], r3["本批"]], [[464], [12]],
+    "③ **行内代码 span 内一律掩码不计**（复用 FR-0b/FR-0c 的 `shapeMaskDoc`）⇒ 同一份夹具**绿**")
+  assert.throws(() => run(SPAN_OK.replace(/`/g, "")),
+    (e) => e instanceof ShapeViolation && e.message.includes("去重值集不是恰 1 个"),
+    "③ 两态自证：**去掉反引号** ⇒ 同一处立刻**真红**（⇒ 掩码是承重件，不是装饰）")
+  // ★ **真实语料的两态自证**（`consult #13` §3 点名的那一条）：CHANGELOG 的 `## [0.23.0]` 节（批 14）里，
+  //   那条**不一致**的历史引用**住在反引号内** ⇒ `基线` **掩码则绿、不掩码则红**。
+  //   ★ 该节另有**裸写的** `本批` 漂移（引文里的「本批 5」对断言值的「本批 8」）⇒ **两态皆红**；
+  //     故本夹具**只**就 `基线` 这个令牌做两态对照，并以「掩码态下报错里不得出现 `基线 N`」为判据。
+  //     **该节在生产上永远不进绑定区域**（它既非死区、也非首节）⇒ 这正是「绝不可扫非绑定节」的价值；
+  //     **同时如实登记一条天花板**：本腿**分不清「引用的历史错值」与「断言的错值」**（§9.4 残差 #4 引文族）。
+  const realCl = lf(read("CHANGELOG.md"))
+  const realLines = realCl.split("\n")
+  // ★ 锚定到**行首**的版本头（不是子串）——本批条目自己的说明文字里就**引用了**这两个版本头
+  //   （它们在反引号内 ⇒ 掩码态下不计），故子串锚会被自己的散文截胡。
+  const i023 = realLines.findIndex((l) => /^##\s*\[0\.23\.0\]/.test(l))
+  const i022 = realLines.findIndex((l) => /^##\s*\[0\.22\.0\]/.test(l))
+  assert.ok(i023 > 0 && i022 > i023, "真实语料锚定失败：`## [0.23.0]` / `## [0.22.0]` 两处**行首字符串锚**必须在位（禁行号锚定）")
+  const histLines = realLines.slice(i023, i022)
+  histLines.splice(1, 0, "", "- **【计数行】**") // 把该节搬进夹具当「首节」⇒ 只加一个定位标记，节内字节不动
+  const hist = "# Changelog\n\n" + histLines.join("\n")
+  const catchOf = (fn) => { try { fn(); return null } catch (e) { return e } }
+  const histMasked = catchOf(() => run(hist))
+  assert.ok(histMasked instanceof ShapeViolation, "③ 真实语料（掩码态）：该节在 `本批` 上确实漂移 ⇒ **真红**")
+  assert.ok(histMasked.message.includes("`本批 N`") && !histMasked.message.includes("`基线 N`"),
+    "③ 真实语料（掩码态）：**`基线` 不报**（那条不一致的历史引用被埋进反引号 ⇒ 掩码吃掉），只报 `本批`："
+    + histMasked.message)
+  // ★ 两态断言**只钉结构**（掩码态 ⇒ 基线不报；不掩码 ⇒ 基线报），**不冻结历史数值**——
+  //   历史节按仓规「既有内容零改动」冻结，但把 453/456 这类**实测值**写进断言会让
+  //   下一次无害的历史润色变成假红（值本身作为**实测记录**留在台账 §三 与交付报告里，带 as-of）。
+  const histBare = catchOf(() => run(hist.replace(/`/g, "")))
+  assert.ok(histBare instanceof ShapeViolation && histBare.message.includes("`基线 N`")
+    && histBare.message.includes("去重值集不是恰 1 个"),
+    "③ 真实语料（**不掩码**）：同一节的 `基线` 立刻变成「多个值」⇒ **真红**（⇒ 掩码是承重件，不是装饰）："
+    + histBare.message)
+
+  // ——④ **阴性对照**——
+  //   (a) 区域内**只有一处推导式** ⇒ 绿
+  assert.deepEqual(run(CL("- **【计数行】**：**477/477**（基线 476 + 本批 1）。\n\n"))["基线"], [476],
+    "④a 区域内只有一处推导式 ⇒ **绿**（⇒ 该腿不是恒红）")
+  //   (b) **区域里抽不到令牌（空集）⇒ 红**（去重值集「**恰** 1 个」的字面读法：0 ≠ 1 ＋ fail-closed）
+  try {
+    run(CL("- **【计数行】**：**477/477**（基线 476）。\n\n"))
+    assert.fail("应当抛")
+  } catch (e) {
+    assert.ok(e instanceof ShapeViolation && e.message.includes("抽不到") && e.message.includes("本批"),
+      "④b 区域内**抽不到** `本批 N` ⇒ 红（**不是跳过**，也**不回退全文件扫描**）：" + e.message)
+  }
+  //   (c) **边界不存在 ⇒ 判失败**：散文里明明有两处不一致，而**两态都定位不到** ⇒ 仍红在**定位失败**
+  try {
+    run("# Changelog\n\n- 散文里的两处推导式：基线 464 与 基线 476。\n")
+    assert.fail("应当抛")
+  } catch (e) {
+    assert.ok(e instanceof ShapeViolation && e.message.includes("定位失败"),
+      "④c 无版本头 ⇒ **边界不存在 ⇒ 判失败（红）**（fail-closed）：" + e.message)
+    assert.ok(!e.message.includes("去重值集"),
+      "④c 红的是**定位失败**而不是值比较 ⇒ 证明它**没有回退全文件扫描**：" + e.message)
+  }
+  //   (d) 定位标记住在**第二节**（既不在死区、也不在首节）⇒ 红（**定位失败不是跳过**）
+  try {
+    run("# Changelog\n\n## [1.0.0]\n\n- 无标记。\n\n## [0.9.0]\n\n- 【计数行】**1/1**（基线 0 + 本批 1）。\n")
+    assert.fail("应当抛")
+  } catch (e) {
+    assert.ok(e instanceof ShapeViolation && e.message.includes("定位失败不是跳过"),
+      "④d 标记住在第二节 ⇒ 红（它**不是**「全域找不到标记」那种跳过）：" + e.message)
+  }
+  //   (d2) **两态都不含定位标记** ⇒ 红（**定位失败不是跳过**——负控表的「都不含」构型）
+  try {
+    run("# Changelog\n\n无标记。\n\n## [1.0.0]\n\n- 无标记。\n")
+    assert.fail("应当抛")
+  } catch (e) {
+    assert.ok(e instanceof ShapeViolation && e.message.includes("两态都不含"),
+      "④d2 死区与首节**都不含**标记 ⇒ 红（**定位失败不是跳过**）：" + e.message)
+  }
+  //   (e) **真实 CHANGELOG**：两态之一且**绿**——这条断言就是**自噬面的兜底**
+  //       （写完本批死区条目后，本腿检查的正是它自己那一节）
+  const realRes = run(lf(read("CHANGELOG.md")), "CHANGELOG.md")
+  assert.ok(realRes.state === "deadzone" || realRes.state === "first-section",
+    "④e 真实 CHANGELOG 必须处于两态之一（实测 " + realRes.state + "）")
+  assert.deepEqual([realRes["基线"].length, realRes["本批"].length], [1, 1],
+    "④e 真实 CHANGELOG 的绑定区域（" + realRes.state + " · 第 " + realRes.region[0] + "–" + realRes.region[1]
+    + " 行）内两个令牌各恰 1 个去重值")
 })
