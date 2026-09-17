@@ -782,6 +782,14 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
     //        runEngCoder 失败返回串的**进程内**行为断言（② 性质）——台账层号枚举无 `①+③` 形态，
     //        故按**来历与保留政策**记 ③，构成如实写在本行与台账理由格。
     "doc-hygiene.test.mjs",
+    // 批 20（writeFileAtomic 有界重试 + 失败可见性）新增档——**在其落地的同一 stage 内登记**
+    // （批 9 §七 已立此纪律：台账-历史一致闸的「T-E19 ↔ fs」等值腿会在「fs 已 +1 而本表未登记」时先红）。
+    // 理由与设计档引用：write-atomic.test.mjs = 批 20 的 A6…A11 注入式机验锚腿——rename/write
+    //   缝注入 EPERM/ENOENT/ENOSPC ⇒ 重试落地 + 零残留 · 耗尽重抛原对象 + 耗尽遥测 · 非白名单
+    //   单次快失败 · 首写失败零残留 · 孤儿清扫（龄 ≥ 10min）· clearUserConfig 幂等；负控 N2/N3
+    //   在仓外临时副本上会话期自证（不进套件）。设计档 docs/2026-09-17-writefileatomic-design.md
+    //   §8.2（锚 A6…A11）· §10.1（新增档，触发登记级联）· §10.4 stage 2。台账行由主代理同批登记。
+    "write-atomic.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」
