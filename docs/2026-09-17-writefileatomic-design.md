@@ -112,7 +112,7 @@ flowchart TD
   I --> J{"还有预算？"}
   G -- "是" --> J
   H -- "否" --> THROW["耗尽 / 不可重试 ⇒ **重抛原对象** + 追加遥测 message"]
-  J -- "是" --> K["同步 sleep 30ms（Atomics.wait；失败则自旋兜底）"]
+  J -- "是" --> K["同步 sleep 30ms（`Atomics.wait`；**环境禁用则退化为立即重试**，不忙等）"]
   K --> C
   J -- "否" --> THROW
   style OK fill:#dfd,stroke:#090
@@ -148,10 +148,27 @@ flowchart LR
 | 量 | 值 | 依据 |
 |---|---|---|
 | 尝试次数 | **8** | 探针包络（第 6 次成功）+ 余量 |
-| 退避 | **平铺 30ms**（`Atomics.wait` 同步 sleep，**feature-detect + 自旋兜底**） | D20-2 · K4 |
+| 退避 | **平铺 30ms**（`Atomics.wait` 同步 sleep，**feature-detect + 环境禁用则退化为「立即重试」**——**不忙等**） | D20-2 · K4 |
 | 可重试 | `EPERM` / `EACCES` / `EBUSY`（**按 `e.code`**） | D20-3 |
 | 特判 | `ENOENT` ⇒ 调用方**重铸 tmp**（由 `writeFileAtomic` 提供回调） | D20-3 |
 | 注入缝 | `opts.delays`（测试传 `[1,1,1]`） | 沿用本仓 `storPathOverride` 惯例 |
+
+### §5.1b ★ 实施期补明（**父侧确认 · 来自第 1 次派发的自白**）
+
+第 1 次收窄派发（`eng-dsh-11`）在**设计未写清处**自行拍定了四处，父侧**逐条确认并折回本档**（使设计与实现同值）：
+
+| # | 它拍的 | 父侧确认与理由 |
+|---|---|---|
+| **1** | **`opts.write` 钩子**（把「写步骤」注入原语的环内 `try`）——这是同时满足 §5.1（原语被 `writeFileAtomic` 调用）与 A3/D20-5（写在环内）的**唯一结构**；**且以它的存在与否门控「失败路径是否 `unlink(from)`」** | **采纳**（★ 后半是它自己发现的必要细节：否则 `clearUserConfig` 的 `from` 是**活配置文件**，会在重试间被 unlink 摧毁） |
+| **2** | **`opts.maxAttempts`** 作为 §9.1「预算为 0 次」的注入缝（0 ⇒ 抛普通 Error——此时无原错误对象可重抛） | **采纳**（与 `delays`/`onEnoent` 同为 opts 级注入，不引入模块级可变状态） |
+| **3** | **遥测格式**：` [thincoder-suite] rename-retry-exhausted code=… errno=… attempts=… elapsedMs=…`（**追加**不替换原 message） | **采纳**（key=value 且**签名可 grep**，即 A4 要的「复发可判真伪」；`[thincoder-suite]` 前缀与本仓既有警告族同形） |
+| **4** | **`onEnoent` 回调自身抛错** ⇒ **fail-closed**：按不可重试处理，**重抛原错误对象**（保 `.code`），回调的次生错误被吞 | **采纳**（§9.1 的「fs 面 fail-closed」总方向） |
+
+**★ 并订正本档两处与之冲突的措辞**：① §5.1 表与**图 1** 原写「`Atomics.wait` 失败则**自旋**兜底」——派发任务书写的是「**退化为立即重试**」（不忙等）；**以任务书为准**（自旋会烧 CPU、且与「同步阻塞预算须小」的 N-3 相抵），§5.1 与图 1 已同改；② §6 的 `@pre from 存在且可读` 与图 1/A3/D20-5 互斥 ⇒ 已在 §6 按图 1 改写并写明两种消费者形态。
+
+### §5.1c ★ 注入缝族（**供后续测试派发**）
+
+失效注入面实测为 **`{ delays, maxAttempts, write, onEnoent }`**（`renameSyncWithRetry`）与 **`{ delays, maxAttempts }`**（`writeFileAtomic` 透传）。**缺口（第 1 次派发如实上报）**：**「rename 阶段前 k 次 `EPERM`」没有直接注入缝** ⇒ **本档追加一个 `opts.rename`（缺省 = `renameSync`）**，使 A6/A7/A8 可在不 `mock.module` 的前提下直接注入（与既有注入族同形）。**该缝属后续测试派发的工作项。**
 
 ### §5.2 FR-2 `writeFileAtomic` 重排 + 孤儿清扫
 
@@ -184,7 +201,8 @@ flowchart LR
 ```js
 /**
  * FR-1：有界重试的 rename（**原语单一事实源**；writeFileAtomic 与 clearUserConfig 共用）。
- * @pre   from 存在且可读；to 的父目录存在
+ * @pre   `to` 的父目录存在；**若提供了 `opts.write`，则 `from` 由它在环内创建**（否则调用方保证 `from` 已存在且可读）
+ *        ★ **订正（实施期自白 #2）**：本行原写「`from` 存在且可读」，与图 1 / A3 / D20-5（**写在环内、`from` = 环内新建的 tmp**）**互斥**；今按图 1 为准，并写明两种消费者形态
  * @post  成功 ⇒ 返回；白名单错误在预算内重试（8 次 × 30ms，首试零延迟）
  *        非白名单 ⇒ **立即抛**；耗尽 ⇒ **重抛最后一个原对象**（保 .code）+ 追加遥测 message
  *        ★ `code` 而非 `errno`（Windows 为负 / POSIX 为正）
@@ -358,7 +376,7 @@ D-19-1…D-19-8 的全文在 [`consult-minutes/2026-09-17-consult-19-minutes.md`
 | `CHANGELOG.md` · `package.json` | 本批条目 + 版本 bump | 修改（**收口时**） |
 | **明确排除（禁改）** | **`test/session-state.test.mjs`** · **`test/release-check.test.mjs`** · **`release-check.mjs`** · `test/fixtures/**` · `lib/advisor.mjs` · `lib/state.mjs` · `docs/consult-minutes/**` · 平台包 | **零改动**（**注意**：`lib/token-store.mjs` 与 `lib/session-store.mjs` **不在禁止面**——它们只允许**头注同步**，**契约与行为零改动**） |
 
-**★ EOL 逐档实测表（as-of 2026-09-17，`core.autocrlf=false`；**改前必须按本表**）**：`lib/dsh-home.mjs` · `lib/config-store.mjs` · `lib/index.mjs` = **CRLF**（`lib/**` 实测 19 CRLF / 11 LF）· `test/*.test.mjs` 与 `docs/*.md` = **多数 LF**，而 `test/codex-runner.test.mjs` 等 **4 档是 CRLF** ⇒ **每档改前逐档实测**（夜班计划 trap 12 的订正口径）· **`git diff` 必须配 `--ignore-cr-at-eol` 读**（本机有 CR 幻影）。
+**★ EOL 逐档实测表（as-of 2026-09-17，`core.autocrlf=false`；**改前必须按本表**）**：`lib/dsh-home.mjs` · `lib/config-store.mjs` · `lib/index.mjs` = **CRLF**（`lib/**` 实测 19 CRLF / 11 LF）· `test/*.test.mjs` 与 `docs/*.md` = **多数 LF**，而 `test/codex-runner.test.mjs` 等 **4 档是 CRLF** ⇒ **每档改前逐档实测**（夜班计划 trap 12 的订正口径）· **`git diff` 必须配 `--ignore-cr-at-eol` 读**（本机有 CR 幻影：**订正（实施期自白 #3）**——幻影是**逐档全档显示**，不是某个「总量」数：实测 `lib/dsh-home.mjs` 232/77 · `lib/config-store.mjs` 371/363，而 `--ignore-cr-at-eol` 后才是真实增量 169/14 · 17/9；**它是本机 checkout 的既有状态**，`git status --porcelain` 干净即证）。
 
 ### §10.2 可验性分层登记
 
