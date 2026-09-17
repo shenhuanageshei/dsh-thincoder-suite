@@ -907,18 +907,20 @@ test("R1 effort(dsh): 非法档 → 最近支持档 + note（DP-2：medium 缺�
   assert.ok(r.note.includes("supported: low|high"))
 })
 
-test("R1 effort(dsh): 非等距取序距离最近（high 对 [off,low] → low；历史事故 low 对 [off,high,max] → off）", async () => {
+test("R1 effort(dsh): 非等距取序距离最近（high 对 [off,low] → low；历史事故形状 low 对 [off,high,max] 批 19 起回落 high）", async () => {
   const a = await resolveSupportedEffort(ladderLlm(["off", "low"]), "p", "m", "high")
   assert.equal(a.effort, "low")
-  // 2026-09-04 生产事故复现档：glm-5.3-flash efforts 仅 off/high/max，engCoderEffort "low" 秒死
+  // 2026-09-04 生产事故形状：glm-5.3-flash efforts 仅 off/high/max，engCoderEffort "low" 曾被
+  // 静默回落到 off（推理全关）——批 19（D19-1）起 off 退出距离竞争，回落力度域最近档 high
   const b = await resolveSupportedEffort(ladderLlm(["off", "high", "max"]), "p", "glm-5.3-flash", "low")
-  assert.equal(b.effort, "off", "off 序距离最近（D-裁决-2 最近支持档，绝不秒死）")
+  assert.equal(b.effort, "high", "low 对 [off,high,max] 回落力度域最近档 high（off 是开关不参与距离，批 19 D19-1；绝不秒死不变）")
   assert.ok(b.note.includes("falling back"))
 })
 
-test("R1 effort(dsh): off 参与档位序（未受支持 → 最近档；受支持 → 保持）", async () => {
+test("R1 effort(dsh): 显式 off（未受支持 → 省略 effort 交提供方默认 + 专属 note；受支持 → 保持）", async () => {
   const a = await resolveSupportedEffort(ladderLlm(["low", "high"]), "p", "m", "off")
-  assert.equal(a.effort, "low")
+  assert.equal(a.effort, null, "显式 off 关不掉 ⇒ 省略 reasoningEffort（D19-3，交还提供方默认档）")
+  assert.ok(a.note && a.note.includes("未能关闭推理"), "关不掉必须明说（专属 note，纪要 D-3）")
   const b = await resolveSupportedEffort(ladderLlm(["off", "high"]), "p", "m", "off")
   assert.equal(b.effort, "off")
   assert.equal(b.note, null)
@@ -934,6 +936,228 @@ test("R1 effort(dsh): 元数据不可得（resolveModelInfo 缺失/抛错）→ 
   assert.equal(r2.value.effort, "low")
   assert.ok(r2.value.note.includes("lookup failed"))
   assert.ok(r2.warnings.some((w) => w.includes("lookup failed")))
+})
+
+// ————————————— 批 19（FR-1/FR-2/FR-3 验收用例 · 设计档 2026-09-17-effort-off-fallback-design.md §8.2/§8.3） —————————————
+// 锚覆盖：A5 穷尽差集 · A6/A7 退化兜底与措辞分叉 · A8 显式 off 关不掉 · A9 接线级 null 出口 ·
+// A10 五个 dsh 消费点各一条读数断言。每条新断言均为「旧实现下会红」（红的方式见各断言消息：
+// 值红 / 键红 / 措辞红——退化支只钉值是恒真断言，判别力全在专属子串「退化兜底」上）。
+
+test("R1 批19 A5: 穷尽 31 个非空支持集（requested=low）——effort 值差集恰 3 组且逐组点名（值面口径；note 面单列）", async () => {
+  // 旧语义 oracle：改前 resolveSupportedEffort 对 requested=low 的取值（最近支持档 + 透传；
+  // 31 个梯子子集全部与梯子有交集 ⇒ 透传不触发 ⇒ 旧值 = nearestEffort 本体）。nearestEffort
+  // 未导出 ⇒ 测试内本地参照实现（与改前 lib 函数体同语义：序距离最近、等距向上取）。
+  const LADDER = ["off", "low", "medium", "high", "max"]
+  const oldNearest = (supported) => {
+    const ri = 1 // "low" 在梯子上的下标
+    let best = null
+    let bestIdx = -1
+    let bestDist = Infinity
+    for (const cand of supported) {
+      const ci = LADDER.indexOf(cand)
+      if (ci < 0) continue
+      const dist = Math.abs(ci - ri)
+      if (dist < bestDist || (dist === bestDist && ci > bestIdx)) { best = cand; bestIdx = ci; bestDist = dist }
+    }
+    return best
+  }
+  const subsets = []
+  for (let mask = 1; mask < 32; mask++) subsets.push(LADDER.filter((_, i) => (mask & (1 << i)) !== 0))
+  assert.equal(subsets.length, 31, "5 档梯子的非空子集恰 31 个")
+  const diffs = []
+  for (const s of subsets) {
+    const r = await resolveSupportedEffort(ladderLlm(s), "p", "m", "low")
+    const oldV = oldNearest(s)
+    if (r.effort !== oldV) diffs.push({ set: s.join("|"), from: oldV, to: r.effort })
+  }
+  assert.deepEqual(diffs, [
+    { set: "off|high", from: "off", to: "high" },
+    { set: "off|max", from: "off", to: "max" },
+    { set: "off|high|max", from: "off", to: "high" },
+  ], "改动差集恒等于 3 组（US-4 / N-2：其余 28 个非空集的 effort 值逐字不变；退化集 {off} 值不变而措辞变 ⇒ 由 A6/A7 用例单列钉）")
+})
+
+test("R1 批19 A6/A7: 退化集 {off} 五种请求全落 off 且 note 命中退化专属子串（不含普通回落句）；{off,xhigh} 同落退化支（D19-2）", async () => {
+  for (const req of ["off", "low", "medium", "high", "max"]) {
+    const r = await resolveSupportedEffort(ladderLlm(["off"]), "p", "m", req)
+    assert.equal(r.effort, "off", "退化集 {off} 上请求 " + req + " ⇒ 唯一可执行值 off（值与改前相同——判别力在 note 措辞）")
+    if (req === "off") {
+      assert.equal(r.note, null, "显式 off 受支持 ⇒ 命中快路径无 note（M4 顺序陷阱守卫）")
+    } else {
+      assert.ok(r.note && r.note.includes("退化兜底"), "退化专属子串可见（只钉值则新旧实现同绿 = 恒真断言）：" + String(r.note))
+      assert.ok(!r.note.includes("falling back to nearest supported effort"), "A7：退化支不得复用普通回落句（措辞分叉）")
+    }
+  }
+  // D19-2 边界形状 {off,xhigh}：xhigh 不在插件梯子上 ⇒ cands=[off]、degrees=[] ⇒ 退化支取 off。
+  // （若按「nearest 返回 null 即退化」误判，会透传一个已知不被支持的值 ⇒ 秒死路径——本断言就是那条守卫）
+  const x = await captureWarn(() => resolveSupportedEffort(ladderLlm(["off", "xhigh"]), "p", "m", "high"))
+  assert.equal(x.value.effort, "off", "{off,xhigh} 落退化支（纪要 D-1：off 是该形状唯一已验证可执行值）")
+  assert.ok(x.value.note && x.value.note.includes("退化兜底") && x.value.note.includes("off|xhigh"), "退化 note 回显 supported 全集（不掩盖 xhigh 的存在）")
+  assert.ok(!x.value.note.includes("falling back to nearest supported effort"), "{off,xhigh} 退化支同样不复用普通回落句")
+  assert.ok(x.warnings.some((w) => w.includes("退化兜底")), "退化告警 console.warn 留档")
+})
+
+test("R1 批19 A8: 显式 off 关不掉 ⇒ effort null + 专属 note（含「未能关闭推理」，不含 falling back 句）+ console.warn", async () => {
+  const r = await captureWarn(() => resolveSupportedEffort(ladderLlm(["low", "high"]), "p", "m", "off"))
+  assert.equal(r.value.effort, null, "{low,high} 配 off ⇒ null（用户裁定②：交还提供方默认，不再悄悄改落力度档）")
+  assert.ok(r.value.note && r.value.note.includes("未能关闭推理"), "关不掉必须明说（纪要 D-3：对称性只转移值，不转移沉默）")
+  assert.ok(!r.value.note.includes("falling back to nearest supported effort"), "不是最近档事件——不得复用回落句（防两侧断言交叉误绿）")
+  assert.ok(r.warnings.some((w) => w.includes("未能关闭推理")), "console.warn 响亮留档（A4）")
+  for (const efforts of [["medium", "high"], ["max"]]) {
+    const x = await resolveSupportedEffort(ladderLlm(efforts), "p", "m", "off")
+    assert.equal(x.effort, null, "{" + efforts.join("|") + "} 配 off ⇒ null（旧实现改落 " + efforts[0] + "——用户要关推理却被打开）")
+    assert.ok(x.note && x.note.includes("未能关闭推理"))
+  }
+})
+
+test("R1 批19 A9/A10 接线 consult dsh 行: 显式 off 关不掉 ⇒ agentOptions 无 reasoningEffort 键且 provider/model 仍在", async () => {
+  const started = []
+  const j = consultJobs()
+  const ctx = {
+    llm: ladderLlm(["low", "high"]),
+    get: (svc) => (svc === "jobs" ? j.jobs : null),
+    subagents: {
+      async start(_kind, req) {
+        started.push(req)
+        return { result: Promise.resolve({ output: [{ type: "text", text: "second opinion" }], stopReason: "completed" }), dispose: async () => { } }
+      },
+    },
+  }
+  const sid = "r1-consult-dsh-off"
+  const state = sessionState(sid)
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
+  const r = await startConsultSession(
+    { ctx, agent, config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "off" }] }, state, dshHome: mkdtempSync(join(tmpdir(), "b15-home-")) },
+    "problem brief", undefined,
+  )
+  const digest = await consultDigestOf(state, r.id)
+  assert.equal(started.length, 1)
+  const ao = started[0].agentOptions
+  assert.ok(!("reasoningEffort" in ao), "null ⇒ 键缺席（键在值错正是病灶形态——必须钉键而非钉值）: " + JSON.stringify(ao))
+  assert.equal(ao.provider, "qax", "provider 仍传")
+  assert.equal(ao.model, "glm-5.3", "model 仍传")
+  assert.ok(digest.includes("second opinion"))
+  assert.ok(digest.includes("未能关闭推理"), "专属 note 入 digest 尾部（主 agent 可见）")
+  dropSession(sid)
+})
+
+test("R1 批19 A9/A10 接线 escalate dsh 行: 显式 off 关不掉 ⇒ agentOptions 无 reasoningEffort 键且 provider/model 仍在", async () => {
+  const started = []
+  const ctx = {
+    llm: ladderLlm(["low", "high"]),
+    subagents: {
+      async start(_kind, req) {
+        started.push(req)
+        return { result: Promise.resolve({ output: [{ type: "text", text: "done the work\n\nTouched files: none" }], stopReason: "completed" }), dispose: async () => { } }
+      },
+    },
+  }
+  const sid = "r1-esc-dsh-off"
+  const deps = {
+    ctx,
+    agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
+    config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "off" }] },
+    state: sessionState(sid), signal: undefined,
+    spawn: () => { throw new Error("codex must not spawn for a dsh row") }, platform: "linux", env: {},
+  }
+  const out = await runEscalate(deps, "fix it", undefined)
+  assert.ok(out.includes("post-op report"))
+  const ao = started[0].agentOptions
+  assert.ok(!("reasoningEffort" in ao), "null ⇒ 键缺席: " + JSON.stringify(ao))
+  assert.equal(ao.provider, "qax")
+  assert.equal(ao.model, "glm-5.3")
+  assert.ok(out.includes("未能关闭推理"), "专属 note 入术后报告尾部")
+  dropSession(sid)
+})
+
+test("R1 批19 A9/A10 接线 eng dsh 分支: 显式 off 关不掉 ⇒ agentOptions 无 reasoningEffort 键且 provider/model 仍在", async () => {
+  const started = []
+  const subagents = {
+    async start(_kind, req) {
+      started.push(req)
+      return { result: Promise.resolve({ output: [{ type: "text", text: "ok\n\nTouched files: none" }], stopReason: "completed" }), dispose: async () => { } }
+    },
+  }
+  const sid = "r1-eng-dsh-off"
+  const st = sessionState(sid)
+  st.engineering = true
+  const token = makeEngToken(st)
+  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "glm-5.3" } }
+  const out = await runEngCoder(
+    { ctx: { subagents, llm: ladderLlm(["low", "high"]) }, agent, config: { engCoderEffort: "off" }, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
+    { task: "implement z", designToken: token, docs: [] },
+  )
+  assert.ok(out.includes("eng_coder delivery:"))
+  const ao = started[0].agentOptions
+  assert.ok(!("reasoningEffort" in ao), "null ⇒ 键缺席（eng 的 !== null 判空——R-59 已登记）: " + JSON.stringify(ao))
+  assert.equal(ao.provider, "qax")
+  assert.equal(ao.model, "glm-5.3")
+  assert.ok(out.includes("未能关闭推理"), "专属 note 经 warn 通道随工具返回可见")
+  dropSession(sid)
+})
+
+test("R1 批19 A9/A10 接线 advisor dsh 主路径: 显式 off 关不掉 ⇒ streamOpts 无 reasoningEffort 键且 provider/model 仍在", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const sid = "r1-adv-dsh-off"
+  const streamOptsSeen = []
+  const llm = {
+    ...ladderLlm(["low", "high"]),
+    stream(opts) {
+      streamOptsSeen.push(opts)
+      return (async function* () {
+        yield { type: "block-end", block: { type: "text", text: "| # | I | D |\n|---|---|---|\n| 1 | a | b |" } }
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+  const out = await runAdvisorReview(
+    { llm },
+    { agent, config: { advisor: { round1: { provider: "qax", model: "glm-5.3", effort: "off", timeoutMs: 300000 } } }, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  assert.equal(streamOptsSeen.length, 1)
+  const so = streamOptsSeen[0]
+  assert.ok(!("reasoningEffort" in so), "null ⇒ 键缺席: " + JSON.stringify(Object.keys(so)))
+  assert.equal(so.provider, "qax")
+  assert.equal(so.model, "glm-5.3")
+  assert.ok(out.includes("| 1 | a | b |"), "评审正文照常交付")
+  assert.ok(out.includes("未能关闭推理"), "专属 note 入结果尾部（finalize 之后，不破坏 completed 判定）")
+  dropSession(sid)
+})
+
+test("R1 批19 A9/A10 接线 advisor 智能回落轮: 显式 off 关不掉 ⇒ streamOpts 无 reasoningEffort 键且 provider/model 仍在", async () => {
+  const { runAdvisorReview } = await import("../lib/advisor.mjs")
+  const emptyHome = mkdtempSync(join(tmpdir(), "codex-empty-"))
+  const streamOptsSeen = []
+  const llm = {
+    ...ladderLlm(["low", "high"]),
+    stream(opts) {
+      streamOptsSeen.push(opts)
+      return (async function* () {
+        yield { type: "block-end", block: { type: "text", text: "FB REVIEW OUTPUT" } }
+        yield { type: "finish", reason: { kind: "stop" } }
+      })()
+    },
+  }
+  const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args) : { events: [], exitCode: 1 })
+  const sid = "r1-adv-fb-off"
+  const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", effort: "off" } } }
+  const run = () => runAdvisorReview(
+    { llm, spawn, platform: "linux", env: { CODEX_HOME: emptyHome } },
+    { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+  )
+  await run() // codex 失败 ×2（PROCESS_ERROR）
+  await run()
+  const r3 = await run() // 第 3 轮自动回落 dsh
+  assert.ok(r3.includes("自动回落 dsh 路由"))
+  assert.ok(r3.includes("FB REVIEW OUTPUT"))
+  const so = streamOptsSeen[0]
+  assert.ok(!("reasoningEffort" in so), "null ⇒ 键缺席: " + JSON.stringify(Object.keys(so)))
+  assert.equal(so.provider, "qax")
+  assert.equal(so.model, "glm-5.3")
+  assert.ok(r3.includes("未能关闭推理"), "专属 note 入回落轮结果尾部")
+  dropSession(sid)
 })
 
 test("R1 effort(codex): catalog 命中同名 → 保持；非法档 → 最近档（等距向上取 high）", async () => {
@@ -999,7 +1223,7 @@ test("R1 接线 consult dsh 行：effort 按行 provider/model 解析（agentOpt
   )
   const digest = await consultDigestOf(state, r.id)
   assert.equal(started.length, 1)
-  assert.equal(started[0].agentOptions.reasoningEffort, "off", "low 对 [off,high,max] 序距离最近 = off")
+  assert.equal(started[0].agentOptions.reasoningEffort, "high", "low 对 [off,high,max] 回落 high（off 不参与距离竞争，批 19）")
   assert.ok(digest.includes("second opinion"))
   assert.ok(digest.includes("falling back to nearest supported effort"), "note 入回复尾部（主agent 可见）")
   dropSession(sid)
@@ -1116,7 +1340,7 @@ test("R1 接线 eng dsh 分支：effort 按父代理路由模型解析（agentOp
     { task: "implement y", designToken: token, docs: [] },
   )
   assert.ok(out.includes("eng_coder delivery:"))
-  assert.equal(started[0].agentOptions.reasoningEffort, "off", "low 对 [off,high,max] 最近 = off")
+  assert.equal(started[0].agentOptions.reasoningEffort, "high", "low 对 [off,high,max] 回落 high（off 不参与距离竞争，批 19）")
   assert.ok(out.includes("is not supported by model glm-5.3-flash"), "note 经 warn 通道随工具返回可见")
   dropSession(sid)
 })
@@ -1172,7 +1396,7 @@ test("R1 接线 advisor dsh 主路径：effort 按路由模型解析（stream re
     { llm },
     { agent, config: { advisor: { round1: { provider: "qax", model: "glm-5.3-flash", effort: "low", timeoutMs: 300000 } } }, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
   )
-  assert.equal(streamOptsSeen[0].reasoningEffort, "off", "low 对 [off,high,max] 最近 = off")
+  assert.equal(streamOptsSeen[0].reasoningEffort, "high", "low 对 [off,high,max] 回落 high（off 不参与距离竞争，批 19）")
   assert.ok(out.includes("falling back to nearest supported effort"))
   dropSession(sid)
 })

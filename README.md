@@ -25,7 +25,7 @@
 | **失败可归因** | 空响应四形态分类（finish/stop/length/error）+ 流观测（finish.kind/usage/blocks）；codex 信封上浮 usage、stderr 保尾；从不静默截断——同步路径钳制必响亮告警 |
 | **自愈与封顶** | codex 连续 2 次失败自动回落 dsh 一轮；回落连败 2 次硬停并输出双路由诊断；空响应重试一次；任何零进度循环有界 |
 | **并发与状态安全** | 三机制 per-session single-flight（复合键）；后台完成代际检查（晚到结果不复活已重置状态）；全局 codex 并发准入 `maxConcurrent`（默认 8） |
-| **effort 智能校验** | 全部消费点按目标模型实际档位回落到**最近支持档**（等距向上取，绝不秒死）；设置页下拉目录化（dsh 行 /catalog、codex 行 codex catalog） |
+| **effort 智能校验** | 全部消费点按目标模型实际档位回落到**最近支持档**（等距向上取，绝不秒死）；**`off` 是关闭开关不是力度档——回落不落 `off`（仅退化兜底：模型除 `off` 外无力度档时才用并专属告警）；显式 `off` 关不掉时省略 effort 交还提供方默认并告警**（批 19）；设置页下拉目录化（dsh 行 /catalog、codex 行 codex catalog） |
 | **安全模型（D-30）** | design token = 两段式 `uuid:expiresAt`（无签名腿，密钥链已删除）：授权靠**记录全等匹配** + **设计文档集指纹**（续期门控）+ 流程纪律；token/会话状态分文件落盘、回滚独立 |
 
 ## 为什么 advisor 不是又一个 code review
@@ -278,7 +278,7 @@ engCoderEffort 输入。**保存全局默认** → 写 user 层（`config.json`�
 - **effort**：`off|low|medium|high|max`，映射 `reasoningEffort` 透传；非法值忽略并警告（N4），缺省不传（用适配器默认）。
 - **timeoutMs**：单轮评审硬预算（绝对截止，见下）；合法区间 1000~3600000；非法值忽略并警告。
 - **includeProjectGuide**：评审是否注入 `AGENTS.md` 项目记忆（默认 false——评审独立于项目记忆，需求/验收标准请显式传 `documents=[...]`；true 时按 16K 截断注入）。
-- **engCoderMaxTokens / engCoderEffort**：eng_coder 子代理的输出预算与推理档（F9）。**engCoderEffort 缺省 `medium`**——`low` 是**唯一**在一切非退化支持集上都可能被 `nearestEffort` 静默落到 `off` 的程度档（推理全关且无提示），而 `medium` 只在退化集 `{off}` 落 `off`；实现任务仍由 brief 机械执行，普通档足以完成「按文档改文件」，推理档再高只是白白吞噬输出预算。
+- **engCoderMaxTokens / engCoderEffort**：eng_coder 子代理的输出预算与推理档（F9）。**engCoderEffort 缺省 `medium`**——批 19 起 effort 回落只在力度域内进行：`off` 是关闭开关，不参与距离竞争（**任何力度档都不会再被静默换成 `off`**；仅当模型除 `off` 外无任何力度档时退化兜底到 `off` 并专属告警），显式配 `off` 而模型不支持时省略 effort 交还提供方默认并告警。批 14 当时选 `medium` 的「`low` 可能被静默落到 `off`」理由（**as-of 2026-09-16** 的真值）已随批 19 根修成为历史记述，缺省值维持 `medium` 不变；实现任务仍由 brief 机械执行，普通档足以完成「按文档改文件」，推理档再高只是白白吞噬输出预算。
 
 ### 会话级覆盖（advisor_config 工具）
 

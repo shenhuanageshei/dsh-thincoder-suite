@@ -46,7 +46,7 @@
 | **靶子** | `lib/dsh-home.mjs:65-75` 的 `writeFileAtomic`：`mkdir → 写同目录 tmp → renameSync`，**rename 失败直接抛**（仅 best-effort 清 tmp）⇒ **Windows 上目标被杀软/索引器短暂占用 ⇒ `EPERM` ⇒ 无重试** |
 | **影响面** | 被 **4 个 store** 调用（`config-store` 4 · `session-store` 4 · `token-store` 4 · `dsh-home` 自身 2） |
 | **★ 已知 flake 并入** | **`R-13`**：`test/session-state.test.mjs` **T6（TTL 清扫）的既有时序 flake**——**已登记在交接页与台账的「已知 flake 表」**，门的 `G6` 有复跑政策。**父侧压测 12 轮（单档）0 红 · 全量 5 轮 0 红** ⇒ **需全量并发/系统负载才触发**。**⇒ 本批的任务是查明它是否与 writeFileAtomic 的 rename 失败有关**（若有关 ⇒ 一次修两个；若无关 ⇒ 分开登记） |
-| **影响面** | **`lib/**` ⇒ 需重启** |
+| **影响面** | **`lib/**` ⇒ 需重启**。**★ 批 19 期间的只读摸底结论（2026-09-17，本批的第一道门已答）**：**R-13 与 rename 失败同源 ⇒ 一次修两个**。依据是**失败原文**（记在 `docs/2026-09-13-handoff.md`）：`actual ['keep','malformed','stale1','stale2']` vs `expected ['fresh','keep']` —— **`actual` 恰是 `saveSessionState("fresh")` 落地前**的文件内容（写前状态：四个手写条目、无 `fresh`、未清扫）⇒ **该断言与时间无关，「时序 flake」是误诊**；而 `writeFileAtomic` 的任何一步失败都被 `session-store` 的 catch 吞成一句 `console.warn`（`saveSessionState` 返 `false`，**而 T6 断言的是文件内容、不查返回值**）⇒ 静默失真。**⇒ 修法 = 给 `renameSync` 加有界重试 + 让失败可见**；并同批把 **R-13 从「已知 flake 表」移入已根治**（台账 `docs/test-lifecycle.md` §五 + §七）。**★ 批 20 的机制可行性实测（2026-09-17，仓外探针，仓内零残留）**：**①** 目标文件被另一进程持有句柄时 `renameSync` 抛 **`EPERM` / errno `-4048`**（本机 Windows 实证，`errno` 已记）；**②** `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)` 在**本 Node 的主线程**可用（请 25ms 实测 37ms）⇒ **同步有界重试可实现**（不必把三个 store 改成异步）；**③** 锁在重试循环**中途释放** ⇒ **第 6 次成功、总耗 190ms**（MAX 8 × 30ms 退避），而锁持续时 **8 次全败、不假成功**；**④ 第二处同族面**：`lib/config-store.mjs` 的 `clearUserConfig` 有**一处独立的 `renameSync`**（原子删除路径），**不在 `writeFileAtomic` 内** ⇒ 同源暴露，硬化时应一并覆盖。 |
 
 ---
 
@@ -88,7 +88,7 @@
 | **9** | **设计评审结算护栏** | 同一文档集连续 3 次「无可结算」⇒ **零 LLM 拒绝，会话内不可解，只能新开会话** | **每轮都要有实质改动**；**3 轮内必须收敛**；**轮次 3+ 严格只核上表** |
 | **10** | **`docs/README.md` 未登记 ⇒ R-25 红** | 新建档后 `node --test` 红在 T2 | **建档即登记**（与建文档同一次提交） |
 | **11** | **工程模式的写门** | 无 design token 时**非 `.md` 写入被拒**（`denied: engineering mode is ON and no design token`） | **需要改非 `.md` 时走 `eng_coder`**；**父侧只改 `.md`** |
-| **12** | **EOL 逐档不同** | `docs/**` 与 `CHANGELOG.md` 是 **CRLF**；`test/**`、`lib/**` 是 **LF** | **改前测、改后测**；用 node 显式 `utf8` |
+| **12** | **EOL 逐档不同** | `docs/**` 与 `CHANGELOG.md` 是 **CRLF**；`test/**`、`lib/**` 是 **LF** | **改前测、改后测**；用 node 显式 `utf8`。**★ 订正（2026-09-17 批 19 逐档实测）：该行两半都过宽**——`docs/*.md` 实为 **60 LF / 2 CRLF**（CRLF 的只有 `2026-09-05-defect-registry.md` 与 `2026-09-13-handoff.md`，**`docs/README.md` 已是 LF**）· `test/**` **有 4 档是 CRLF**（`codex-runner` · `consult` · `death-provenance` · `preset-static`）· `lib/**` **19 CRLF / 11 LF**（`effort-resolve.mjs` 与 `eng.mjs` 是 LF，而 `index.mjs` / `consult.mjs` / `state.mjs` 等是 CRLF）。**⇒ 正确口径 = 「改前逐档实测，不得按目录假设」**（批 19 写域的逐档表见批 19 设计档 §10.1） |
 
 ---
 
