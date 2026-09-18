@@ -1020,6 +1020,20 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *      与 **R-8**（本行是**纯追加**，不重写整行）。
  *      ★ **这不是「退役该档」**：档仍现役、锁仍活——它锁的是**默认值与回落目标的值**，
  *      本批只把该值从 `low` 翻到 `medium`，**两条断言的形态一字未改**。
+ *   ⑥ `test/advisor-config.test.mjs` · `test/codex-runner.test.mjs` —— **批 21（长任务默认走后台 ·
+ *      dsh 子代理路径的三态语义）**：两档**均已在**本清单内（`advisor-config` 见 ⑤、
+ *      `codex-runner` 见 ②）⇒ **本批既不扩数组、也不重写数组行**（数组行逐字未动），此处只按
+ *      先例补记本次理由。改动 = 两档各新增「默认后台 / 逃生口 / 回落告警随返回可见 / 跨机制护栏」
+ *      的验收腿（设计档 `docs/2026-09-17-jobs-default-design.md` **§5.1 FR-1 · §5.2 FR-2 ·
+ *      §5.3 FR-3** / §10.3 **AC-1…AC-15**）；被锁行为（省略 `background` ⇒ 派后台 job ·
+ *      显式 `false` ⇒ 同步 · `ctx.jobs` 缺失 ⇒ 告警随工具返回）是**对外可感行为**，属 ② 层常驻
+ *      断言，不是批次脚手架。**裁定引用**：需求档
+ *      `docs/2026-09-17-jobs-default-requirements.md` **N-11**（锁面显式声明：两档已在授权面内
+ *      ⇒ 不扩数组，按先例在注释块追加授权理由）+ 用户对该批的三条裁定（范围 = `eng_coder` 与
+ *      `escalate` 的 dsh 子代理路径 · `ctx.jobs` 缺失 ⇒ 告警 + 回落同步 · 保留
+ *      `background: false` 强制同步的逃生口）。
+ *      ★ **这不是「退役该档」**：两档仍现役、锁仍活；`test/session-state.test.mjs` ·
+ *      `test/stages.test.mjs` · `test/preset-static.test.mjs` 等**未授权基线档本批零改动**。
  */
 const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */

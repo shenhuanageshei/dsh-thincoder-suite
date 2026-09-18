@@ -20,6 +20,8 @@ import {
 import { buildAdvisorUserMessage } from "../lib/advisor-msgs.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 import { runEngCoder, buildCoderBrief } from "../lib/eng.mjs"
+// 批 21（FR-2 / AC-7 的 escalate 侧）：跨机制护栏的 escalate 槽位夹具——本档自足，不跨档借夹具。
+import { runEscalate } from "../lib/escalate.mjs"
 import { loadTokenRecord, saveTokenRecord, resolveTokenStorePath } from "../lib/token-store.mjs"
 import { computeDocHash, normalizeDocPath } from "../lib/doc-hash.mjs"
 
@@ -2006,4 +2008,226 @@ test("AC-V22: the revocation path collects removeTokenRecord's boolean and warns
       assert.equal(sessionState(sid2).designToken, null, "内存态仍撤销")
     } finally { dropSession(sid2); rmRoot(tmpCwd) }
   } finally { rmRoot(root) }
+})
+
+// ═════════════ 批 21（长任务默认走后台 · dsh 子代理路径的三态语义） ═════════════
+// 设计档 `docs/2026-09-17-jobs-default-design.md`：**FR-1**（三态 + 四处手术）· **FR-2**（跨机制
+// 护栏）· **FR-3**（回落告警随返回可见）。本区按 §10.3 落 AC-1 / AC-3 / AC-4 / AC-5 / AC-7 /
+// AC-8 / AC-15（锚 A5–A10）。
+// **AC-2（escalate 侧的三态透传）住 `test/codex-runner.test.mjs`**——那条判据的见证点必须先经
+// `lib/index.mjs` 的**真实工具注册入口**（FR-1④ 的透传点只存在于工具入口），本档没有注册表夹具。
+//
+// 判定（`lib/eng.mjs` 的 dsh 分支）：`args?.background !== false` ⇒ 省略 / `true` / **任意非布尔值**
+// 都派后台 job；只有**显式 `false`** 走同步快路径（逃生口）。codex 行的判定（`=== true`）本批
+// **零改动**（AC-6，由 `test/codex-runner.test.mjs` 的既有断言见证）。
+
+/** 批 21 夹具：`start` **只登记不执行** ⇒ job 永不 settle ⇒ 在飞槽位保持占用（AC-7 的护栏夹具）。 */
+function makeHoldJobs(id) {
+  const specs = []
+  return {
+    specs,
+    jobs: { start(spec) { specs.push(spec); return id }, get: () => null, cancel: () => false, list: () => [] },
+  }
+}
+
+/** 批 21 夹具：`start` **真执行** `spec.run()` ⇒ job 可 settle ⇒ 槽位随之清除（AC-8 的对照腿）。 */
+function makeRunJobs(id) {
+  const specs = []
+  return {
+    specs,
+    jobs: {
+      start(spec) { const hooks = spec.run(); specs.push({ spec, hooks }); return id },
+      get: () => null, cancel: () => false, list: () => [],
+    },
+  }
+}
+
+/**
+ * 批 21 eng deps = `makeEngDeps` + `ctx.get("jobs")`（`getJobsService` 的唯一取法）。
+ * 另注入最小 llm 元数据桩：`engCoderEffort` 缺省 "medium" 在该桩上受支持 ⇒ 输出里不会混入
+ * effort 回落 note（断言面只留本批要证的东西）。
+ */
+function engDeps21(sid, config, started, jobs) {
+  const deps = makeEngDeps(sid, config, started)
+  return {
+    ...deps,
+    ctx: {
+      ...deps.ctx,
+      get: (svc) => (svc === "jobs" ? jobs : null),
+      llm: { async resolveModelInfo() { return { reasoning: { efforts: [{ id: "medium" }] } } } },
+    },
+  }
+}
+
+// ————————————— AC-1：eng 的 dsh 路径省略 background ⇒ 派后台 job —————————————
+
+test("批 21 AC-1: eng_coder 的 dsh 路径省略 background ⇒ 派后台 job（不落同步 spawn）", async () => {
+  const sid = "b21-ac1-eng"
+  const st = makeEngRunFixture(sid)
+  const started = []
+  const { jobs, specs } = makeHoldJobs("eng-dsh-hold-1")
+  const out = await runEngCoder(engDeps21(sid, {}, started, jobs), { task: "implement x", designToken: st.designToken })
+  assert.equal(specs.length, 1, "省略 background（新默认）⇒ 必须派后台 job: " + out.slice(0, 200))
+  assert.equal(specs[0].kind, "eng-dsh", "job kind 机制专属（不是 codex 的 eng-codex）")
+  assert.equal(started.length, 0, "后台派发 ⇒ 同步 spawn 不得发生（翻转前此处必为 1）")
+  assert.ok(out.includes("eng-dsh-hold-1"), "工具返回 = job 句柄: " + out.slice(0, 200))
+  assert.ok(out.includes("started as background job"), "句柄文案在位")
+  assert.ok(!out.includes("eng_coder delivery:"), "派发即返回 ⇒ 返回文本不是交付报告")
+  dropSession(sid)
+})
+
+// ————————————— AC-3 / AC-4：显式 false ⇒ 同步；显式 true ≡ 省略 —————————————
+
+test("批 21 AC-3/AC-4: eng_coder dsh——显式 background=false 走同步快路径；显式 true 与省略等价（仍后台）", async () => {
+  // ① 显式 false ⇒ 同步（逃生口：内部截止 budgetCap，结果当场返回）
+  const sidSync = "b21-ac3-eng-sync"
+  const stSync = makeEngRunFixture(sidSync)
+  const startedSync = []
+  const noDispatch = makeHoldJobs("eng-dsh-must-not-dispatch")
+  const outSync = await runEngCoder(engDeps21(sidSync, {}, startedSync, noDispatch.jobs),
+    { task: "implement x", designToken: stSync.designToken, background: false })
+  assert.equal(noDispatch.specs.length, 0, "background=false ⇒ jobs 不得被调用（逃生口不丢）")
+  assert.equal(startedSync.length, 1, "background=false ⇒ 走同步 spawn")
+  assert.ok(outSync.includes("eng_coder delivery:"), "同步路径当场交付: " + outSync.slice(0, 160))
+  dropSession(sidSync)
+
+  // ② 显式 true ⇒ 与省略等价（后台）
+  const sidTrue = "b21-ac4-eng-true"
+  const stTrue = makeEngRunFixture(sidTrue)
+  const startedTrue = []
+  const dispatch = makeHoldJobs("eng-dsh-hold-true")
+  const outTrue = await runEngCoder(engDeps21(sidTrue, {}, startedTrue, dispatch.jobs),
+    { task: "implement x", designToken: stTrue.designToken, background: true })
+  assert.equal(dispatch.specs.length, 1, "background=true ⇒ 后台（与省略等价，AC-4）")
+  assert.equal(startedTrue.length, 0, "后台 ⇒ 无同步 spawn")
+  assert.ok(outTrue.includes("eng-dsh-hold-true"), outTrue.slice(0, 160))
+  dropSession(sidTrue)
+})
+
+// ————————————— AC-15：非布尔的 background 不得被压成 false（fail-safe 方向） —————————————
+
+test("批 21 AC-15: 非布尔的 background（字符串 / 空串 / 数字 / null）⇒ 非 false ⇒ 仍派后台 job", async () => {
+  for (const value of ["yes", "", "false", 0, 1, null]) {
+    const sid = "b21-ac15-" + String(value)
+    const st = makeEngRunFixture(sid)
+    const started = []
+    const { jobs, specs } = makeHoldJobs("eng-dsh-nonbool")
+    const out = await runEngCoder(engDeps21(sid, {}, started, jobs),
+      { task: "implement x", designToken: st.designToken, background: value })
+    assert.equal(specs.length, 1, "background=" + JSON.stringify(value) + " 非 false ⇒ 仍后台（不静默同步）")
+    assert.equal(started.length, 0, "background=" + JSON.stringify(value) + " ⇒ 无同步 spawn")
+    assert.ok(out.includes("eng-dsh-nonbool"), JSON.stringify(value) + " → " + out.slice(0, 160))
+    dropSession(sid)
+  }
+})
+
+// ————————————— AC-5：jobs 缺失 ⇒ 告警随工具返回可见 + 仍回落同步（文案逐字节） —————————————
+
+test("批 21 AC-5: eng_coder 的 ctx.jobs 缺失 ⇒ 告警随工具返回可见（双通道）+ 仍回落同步（文案逐字节）", async () => {
+  // 文案是既有字面（FR-3 硬约束：行为与文案逐字节保持现状，只新增「随工具返回」这条通道）。
+  const NOTE = "[thincoder-suite] ctx.jobs 不可用——eng_coder background=true 回落同步执行（budgetCap 内部截止）"
+  const sid = "b21-ac5-eng"
+  const st = makeEngRunFixture(sid)
+  const started = []
+  const warns = []
+  const origWarn = console.warn
+  let out
+  try {
+    console.warn = (...a) => { warns.push(a.map(String).join(" ")) }
+    out = await runEngCoder(engDeps21(sid, {}, started, null), { task: "implement x", designToken: st.designToken })
+  } finally { console.warn = origWarn }
+  assert.equal(warns.filter((w) => w === NOTE).length, 1, "console 通道：逐字节恰一条: " + JSON.stringify(warns))
+  assert.ok(out.includes(NOTE), "★ 工具返回文本通道（本批新增——此前只 console ⇒ 翻转后即静默失败）: " + out.slice(-300))
+  assert.equal(out.split(NOTE).length - 1, 1, "返回文本里恰一次（不重复注入）")
+  assert.equal(started.length, 1, "行为仍是回落同步（D-32-5 硬约束）：同步 spawn 恰好一次")
+  assert.ok(out.includes("eng_coder delivery:"), "回落同步路径照常交付")
+  dropSession(sid)
+})
+
+// ————————————— AC-7 / AC-8：FR-2 的跨机制护栏（code 型评审 × eng/escalate 在飞） —————————————
+// 判据：**code 型**评审发起时，eng / escalate 任一槽位在飞 ⇒ 拒绝（文本点名 job id）；
+// **design 型不受影响**。槽位是模块内存态（不落盘，重启失忆登记为 R-66）。
+
+test("批 21 AC-7 (eng 侧): eng 槽位在飞 ⇒ code 型评审被跨机制护栏拒绝（文本点名 job id）", async () => {
+  const sid = "b21-ac7-eng"
+  const st = makeEngRunFixture(sid)
+  const hold = makeHoldJobs("eng-dsh-inflight-9")
+  const outJob = await runEngCoder(engDeps21(sid, {}, [], hold.jobs), { task: "implement x", designToken: st.designToken })
+  assert.ok(outJob.includes("eng-dsh-inflight-9"), "前置：eng 后台 job 已派发且在飞（夹具不执行 spec.run）")
+  const agent = { session: { id: sid, header: { cwd: PLUGIN_DIR }, deriveMessages: () => [] }, options: {} }
+  // llm 传空对象：护栏在路由解析**之前**返回 ⇒ 评审根本不跑（零 LLM 成本正是护栏的目的）
+  const out = await runAdvisorReview({ llm: {} }, { agent, config: {}, reviewType: "code", paths: ["package.json"] })
+  assert.ok(out.startsWith("Error:"), "eng 在飞 ⇒ code 评审必须被拒: " + out.slice(0, 200))
+  assert.ok(out.includes("eng-dsh-inflight-9"), "拒绝文本点名在飞 job id: " + out)
+  assert.ok(out.includes("本次请求未派发"), "明确本次未派发")
+  dropSession(sid)
+})
+
+test("批 21 AC-7 (escalate 侧): escalate 槽位在飞 ⇒ code 型评审被跨机制护栏拒绝（同一复合键语义）", async () => {
+  const sid = "b21-ac7-esc"
+  const hold = makeHoldJobs("escalate-dsh-inflight-9")
+  const deps = {
+    ctx: {
+      subagents: { async start() { throw new Error("在飞槽位存在时不得派发第二次") } },
+      get: (svc) => (svc === "jobs" ? hold.jobs : null),
+    },
+    agent: { session: { id: sid, header: { delegationDepth: 0, cwd: PLUGIN_DIR } } },
+    config: { consultModels: [{ provider: "qax", model: "glm-5.3" }] },
+    state: sessionState(sid), signal: undefined,
+  }
+  const outJob = await runEscalate(deps, "fix the bug", undefined) // 省略 background ⇒ 后台（FR-1②）
+  assert.ok(outJob.includes("escalate-dsh-inflight-9"), "前置：escalate 后台 job 已派发: " + outJob.slice(0, 200))
+  assert.equal(hold.specs.length, 1)
+  assert.equal(hold.specs[0].kind, "escalate-dsh", "job kind 机制专属")
+  const agent = { session: { id: sid, header: { cwd: PLUGIN_DIR }, deriveMessages: () => [] }, options: {} }
+  const out = await runAdvisorReview({ llm: {} }, { agent, config: {}, reviewType: "code", paths: ["package.json"] })
+  assert.ok(out.startsWith("Error:"), "escalate 在飞 ⇒ code 评审必须被拒: " + out.slice(0, 200))
+  assert.ok(out.includes("escalate-dsh-inflight-9"), "拒绝文本点名在飞 job id: " + out)
+  dropSession(sid)
+})
+
+test("批 21 AC-8: 槽位不在飞 ⇒ 放行；design 型评审不受跨机制护栏影响；job settle 后槽位清除", async () => {
+  const table = "| # | Issue | Detail |\n|---|---|---|\n| 1 | x | y |"
+  const reviewLlm = () => ({
+    stream: () => (async function* () {
+      yield { type: "block-end", block: { type: "text", text: table } }
+      yield { type: "finish", reason: { kind: "stop" } }
+    })(),
+  })
+  const config = { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } }
+
+  // ① 无在飞槽位 ⇒ code 评审照常跑（护栏不得误伤常规调用）
+  const sidFree = "b21-ac8-free"
+  const agentFree = { session: { id: sidFree, header: { cwd: PLUGIN_DIR }, deriveMessages: () => [] }, options: {} }
+  const outFree = await runAdvisorReview({ llm: reviewLlm() }, { agent: agentFree, config, reviewType: "code", paths: ["package.json"] })
+  assert.ok(!outFree.includes("本次请求未派发"), "无在飞 ⇒ 不得被护栏拦下: " + outFree.slice(0, 200))
+  assert.ok(outFree.includes("| 1 | x | y |"), "评审正文照常交付")
+  dropSession(sidFree)
+
+  // ② eng 槽位在飞 + **design** 型评审 ⇒ 不受影响（FR-2 只覆盖 code 型）
+  const root = makeF10Root()
+  const sidDesign = "b21-ac8-design"
+  try {
+    const stD = makeEngRunFixture(sidDesign)
+    const hold = makeHoldJobs("eng-dsh-design-inflight")
+    await runEngCoder(engDeps21(sidDesign, {}, [], hold.jobs), { task: "implement x", designToken: stD.designToken })
+    assert.equal(hold.specs.length, 1, "前置：eng 槽位在飞")
+    const outDesign = await runDesignReviewWithReply(sidDesign, join(root, "h"), "The design is approved.")
+    assert.ok(!outDesign.startsWith("Error:"), "design 型不得被跨机制护栏拒绝: " + outDesign.slice(0, 200))
+    assert.ok(!outDesign.includes("本次请求未派发"), "design 型不得出现护栏文案: " + outDesign.slice(0, 200))
+    assert.ok(outDesign.includes("The design is approved"), "design 评审正文照常返回")
+  } finally { dropSession(sidDesign); rmRoot(root) }
+
+  // ③ job settle ⇒ 槽位清除 ⇒ code 评审放行（护栏拦的是「通知前的评审」，不是永久封禁）
+  const sidSettled = "b21-ac8-settled"
+  const stS = makeEngRunFixture(sidSettled)
+  const run = makeRunJobs("eng-dsh-settle-1")
+  await runEngCoder(engDeps21(sidSettled, {}, [], run.jobs), { task: "implement x", designToken: stS.designToken })
+  const outcome = await run.specs[0].hooks.done
+  assert.equal(outcome.status, "completed", "job 已 settle（簿记已发生）")
+  const agentSettled = { session: { id: sidSettled, header: { cwd: PLUGIN_DIR }, deriveMessages: () => [] }, options: {} }
+  const outSettled = await runAdvisorReview({ llm: reviewLlm() }, { agent: agentSettled, config, reviewType: "code", paths: ["package.json"] })
+  assert.ok(!outSettled.includes("本次请求未派发"), "settle 后槽位已清 ⇒ 评审放行: " + outSettled.slice(0, 200))
+  assert.ok(outSettled.includes("| 1 | x | y |"), "评审正文照常交付")
+  dropSession(sidSettled)
 })

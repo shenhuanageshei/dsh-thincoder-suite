@@ -4919,3 +4919,143 @@ test("AC-28 (N1): package.json 零新增依赖 —— dependencies 为空或缺�
   assert.ok(pkg.peerDependencies && pkg.peerDependencies.cordis,
     "peerDependencies.cordis 仍在（宿主提供，不计入 N1 的零依赖口径）")
 })
+
+// ═════════════ 批 21（长任务默认走后台）：escalate 工具入口的三态透传（FR-1④） ═════════════
+// 设计档 `docs/2026-09-17-jobs-default-design.md` §5.1 ④：`lib/index.mjs` 的透传点此前是
+// `args?.background === true`——**三态压成二态** ⇒ 省略被压成 `false` ⇒ escalate 的默认翻转
+// **完全静默失效**（会诊 G5④ 抓到的父侧漏洞、父侧漏看的那一面）。本区经**真实工具注册入口**
+// 见证三态（`apply()` → `ctx.tools.register` → `tool.execute`）：省略 ⇒ 派后台 job；显式
+// `false` ⇒ 同步快路径；`ctx.jobs` 缺失 ⇒ 告警随工具返回可见。**把透传改回 `=== true` 必红**
+// （省略那一次会落同步 ⇒ `jobs` 零调用、`subagents` 被调一次）。
+// 另静态锁 **FR-1③**（schema 描述面）：两处 `background` 的 `default: false` 注解已删、描述串
+// 改说「默认后台 / 传 `false` 强制同步」——注解不改变行为，但会让给模型看的 schema 撒谎。
+
+/** 批 21 假 jobs：`start` **只登记不执行** ⇒ job 永不 settle（正控与护栏夹具同形）。 */
+function b21HoldJobs(id) {
+  const specs = []
+  return {
+    specs,
+    jobs: { start(spec) { specs.push(spec); return id }, get: () => null, cancel: () => false, list: () => [] },
+  }
+}
+
+/** 批 21 子代理 spy：**同步快路径**的落点（后台派发时不得被调用）。 */
+function b21Subagents(spawned) {
+  return {
+    async start(_kind, req) {
+      spawned.push(req)
+      return {
+        result: Promise.resolve({ output: [{ type: "text", text: "done the work" }], stopReason: "completed" }),
+        dispose: async () => { },
+      }
+    },
+  }
+}
+
+/** 批 21 工具注册表夹具：跑**真实** `apply()`，按名收集注册的工具（`ctx.get("jobs")` 同缝）。 */
+async function b21ToolRegistry(pluginConfig, { jobs = null, subagents = null } = {}) {
+  const { apply } = await import("../lib/index.mjs")
+  const tools = new Map()
+  const ctx = {
+    on: () => () => { },
+    effect: (fn) => { const d = fn?.(); return () => d?.() },
+    systemPrompt: { section: () => () => { } },
+    tools: { register: (tool) => { tools.set(tool.name, tool); return () => { } } },
+    get: (svc) => (svc === "jobs" ? jobs : null),
+    subagents,
+  }
+  apply(ctx, pluginConfig)
+  return { tools, ctx }
+}
+
+test("批 21 AC-2: escalate 工具入口省略 background ⇒ 派后台 job（三态透传 ④ 的直接见证）", async () => {
+  const sid = "b21-ac2-esc"
+  const hold = b21HoldJobs("escalate-dsh-ac2")
+  const spawned = []
+  const { tools } = await b21ToolRegistry(
+    { consultModels: [{ provider: "qax", model: "glm-5.3" }] },
+    { jobs: hold.jobs, subagents: b21Subagents(spawned) },
+  )
+  const tool = tools.get("escalate")
+  assert.ok(tool, "escalate 工具已注册（consultModels 非空）")
+  const agent = { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } }
+  const out = await tool.execute({ task: "fix the bug" }, { agent })
+  assert.equal(hold.specs.length, 1,
+    "省略 background ⇒ 必须派后台 job（透传改回 `=== true` 时此处为 0）: " + out.slice(0, 200))
+  assert.equal(hold.specs[0].kind, "escalate-dsh", "job kind 机制专属")
+  assert.equal(spawned.length, 0,
+    "后台派发 ⇒ 同步子代理 spawn 不得发生（透传改回 `=== true` 时此处为 1）")
+  assert.ok(out.includes("escalate-dsh-ac2"), "工具返回 = job 句柄: " + out.slice(0, 200))
+  assert.ok(!out.includes("post-op report"), "派发即返回 ⇒ 返回文本不是术后报告")
+  dropSession(sid)
+})
+
+test("批 21 AC-3 (escalate 侧): 显式 background=false ⇒ 同步快路径（逃生口不丢，jobs 零调用）", async () => {
+  const sid = "b21-ac3-esc-sync"
+  const hold = b21HoldJobs("escalate-dsh-must-not-dispatch")
+  const spawned = []
+  const { tools } = await b21ToolRegistry(
+    { consultModels: [{ provider: "qax", model: "glm-5.3" }] },
+    { jobs: hold.jobs, subagents: b21Subagents(spawned) },
+  )
+  const agent = { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } }
+  const out = await tools.get("escalate").execute({ task: "fix the bug", background: false }, { agent })
+  assert.equal(hold.specs.length, 0, "background=false ⇒ jobs 不得被调用（逃生口不丢）")
+  assert.equal(spawned.length, 1, "background=false ⇒ 走同步子代理 spawn")
+  assert.ok(out.includes("post-op report"), "同步路径当场交付术后报告: " + out.slice(0, 160))
+  dropSession(sid)
+})
+
+test("批 21 AC-5 (escalate 侧): ctx.jobs 缺失 ⇒ 告警随工具返回可见（双通道）+ 仍回落同步（文案逐字节）", async () => {
+  // 文案是既有字面（FR-3 硬约束：行为与文案逐字节保持现状，只新增「随工具返回」这条通道）。
+  const NOTE = "[thincoder-suite] escalate background=true 不可用（ctx.jobs 缺失）——回落同步执行（budgetCap 内部截止）"
+  const sid = "b21-ac5-esc"
+  const spawned = []
+  const { tools } = await b21ToolRegistry(
+    { consultModels: [{ provider: "qax", model: "glm-5.3" }] },
+    { jobs: null, subagents: b21Subagents(spawned) },
+  )
+  const agent = { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } }
+  const warns = []
+  const origWarn = console.warn
+  let out
+  try {
+    console.warn = (...a) => { warns.push(a.map(String).join(" ")) }
+    out = await tools.get("escalate").execute({ task: "fix the bug" }, { agent })
+  } finally { console.warn = origWarn }
+  assert.equal(warns.filter((w) => w === NOTE).length, 1, "console 通道：逐字节恰一条: " + JSON.stringify(warns))
+  assert.ok(out.includes(NOTE), "★ 工具返回文本通道（本批新增——此前只 console ⇒ 翻转后即静默失败）: " + out.slice(-300))
+  assert.equal(out.split(NOTE).length - 1, 1, "返回文本里恰一次（不重复注入）")
+  assert.equal(spawned.length, 1, "行为仍是回落同步：同步子代理 spawn 恰好一次")
+  assert.ok(out.includes("post-op report"), "回落同步路径照常交付")
+  dropSession(sid)
+})
+
+test("批 21 A3 (静态锁): 两处 background 的 schema 描述面同批在位、default:false 注解已删（FR-1③）", () => {
+  const src = readFileSync(new URL("../lib/index.mjs", import.meta.url), "utf8")
+  const SCHEMA = 'background: { type: "boolean", description: "dsh 子代理路径默认后台执行'
+  assert.equal(src.split(SCHEMA).length - 1, 2,
+    "eng_coder 与 escalate 两处 schema 都改说「默认后台」（描述面与实现一致）")
+  assert.equal(src.split('background: { type: "boolean", default: false').length - 1, 0,
+    "schema 的 default: false 注解已删——注解不改变行为，但会让给模型看的 schema 撒谎")
+  assert.ok(src.includes("传 false 强制同步"), "描述面写明逃生口语义（传 false 强制同步）")
+  assert.ok(src.includes("args?.background)"),
+    "escalate 的透传点是三态 `args?.background`（A3 的调用点面；`=== true` 形态零残留）")
+})
+
+test("批 21 AC-6 / A4 (静态锁): codex 路径的判定仍是 `=== true`（两机制三处）而 dsh 路径是三态（A1/A2）", () => {
+  // AC-6 的层标是 **T2（静态谓词 / 逐字可查）**——本批唯一的静止面断言。判据 = 「codex 路径零漂移」：
+  // 本批只动 dsh 路径，codex 的 `=== true` 必须逐字仍在（否则 `background` 省略会把**按预算判定**
+  // 的 codex 路径也一并翻转 ⇒ 与 P-2 的既有现实脱钩）。
+  const engSrc = readFileSync(new URL("../lib/eng.mjs", import.meta.url), "utf8")
+  const escSrc = readFileSync(new URL("../lib/escalate.mjs", import.meta.url), "utf8")
+  assert.equal(engSrc.split("|| args?.background === true) {").length - 1, 1,
+    "eng 的 codex 派发判定未被翻转（A4：仍是 `=== true`）")
+  assert.equal(escSrc.split("const background = p.background === true").length - 1, 1,
+    "escalate 的 codex 判定未被翻转（A4）")
+  assert.equal(escSrc.split("background: background === true,").length - 1, 2,
+    "两处 codex 透传（首次 + followup）都未被翻转（A4）")
+  // 对照（同一条锁的另一半，防「两处一起改了就都看不出」）：dsh 路径必须是三态形态
+  assert.equal(engSrc.split("if (args?.background !== false) {").length - 1, 1, "eng 的 dsh 判定是三态（A1）")
+  assert.equal(escSrc.split("if (background !== false) {").length - 1, 1, "escalate 的 dsh 判定是三态（A2）")
+})
