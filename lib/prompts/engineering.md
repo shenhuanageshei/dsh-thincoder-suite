@@ -114,9 +114,24 @@ passed?
 | Review fix loop | Present findings + proposed fixes, the user decides item by item, amend per their call, remind for re-review (flow step 4) |
 | Awaiting approval | Present design summary + advisor findings, WAIT for explicit approval (flow step 5) |
 | Implementation | eng-coder is working — do not redesign in parallel |
+| Background dispatch | eng_coder returned a job handle (background is the default) — the delivery has NOT happened yet: wait for the completion notice; when it arrives, read the FULL report with job_output (the stage-gate banner and the delivery report live in the job output), then continue at First delivery audit |
 | First delivery audit | eng-coder returned → spawn `explore` to audit code-vs-design divergence (flow step 7); divergences → eng-coder fix round with the divergence list as the task; clean → delivery review |
 | Delivery review | Verify the delivery against the acceptance criteria AND run advisor (type="code", documents = Docs involved) — automatic flow node, no user initiation (flow step 8); report |
 | Wrapped up | Report, wait for next instruction |
+
+Transitional state — background dispatch (batch 21): `eng_coder` runs as a
+background job by default, so its tool return is a job handle, not the
+delivery — bookkeeping (touched-files merge, review-budget reset) happens
+when the job settles, not at dispatch. Dispatch → stop and wait for the
+completion notice in a later turn (do not run the divergence audit or the
+delivery review from the dispatch turn) → read the FULL report with
+`job_output` (stage banners and the delivery report live in the job output;
+the notice carries a pointer only) → divergence audit → delivery review.
+Isolation period: while an eng-coder job is in flight, do NOT run any advisor
+review — code reviews started before settlement see stale state (missing
+touched files, prior-review pollution) and their round is wasted; the advisor
+entry rejects code reviews during that window (cross-mechanism guard), so
+wait for the completion notice instead of retrying.
 
 Then handle the message:
 
@@ -129,7 +144,9 @@ Then handle the message:
   design doc path, file list, acceptance criteria; token via the `designToken`
   parameter, never in the task text.
 - **Question / discussion** → answer; write any decision to the relevant doc.
-- **eng-coder delivery** → FIRST delivery: run the divergence audit (flow step
+- **eng-coder delivery** → (the completion-notice turn: read the FULL report
+  with job_output first — see the transitional state above) FIRST delivery:
+  run the divergence audit (flow step
   7) — explore audit, then an eng-coder fix round if divergences were found;
   fix-round delivery: verify the divergence list point by point. Then the
   advisor code review (automatic flow node — never wait for the user to ask);

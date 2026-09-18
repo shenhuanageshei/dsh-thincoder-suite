@@ -1923,7 +1923,7 @@ test("R2 D-06: single-flight 复合键 sessionId+mechanism——同机制在飞�
   assert.ok(out2.includes("job_output"), "拒绝文本含接续方式")
   assert.ok(out2.includes("未派发"), "明确本次未派发")
   assert.equal(specs.length, 1, "没有第二个 job 被派发")
-  // 异机制（advisor）不受阻——复合键每机制独立槽位
+  // 异机制（advisor）：批 21（FR-2 / D21-2）起 escalate 在飞 ⇒ **code 型评审**被跨机制护栏拒绝（错序评审窗口封堵——文本点名 job id）；design 型不受阻（AC-8，advisor-config 新腿见证）；复合键独立性对其余方向保持
   const { runAdvisorReview } = await import("../lib/advisor.mjs")
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
   const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 900000 } } }
@@ -1931,13 +1931,13 @@ test("R2 D-06: single-flight 复合键 sessionId+mechanism——同机制在飞�
     { llm: { stream: () => { throw new Error("must not be used") } }, spawn, platform: "linux", env: {}, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
   )
-  assert.ok(outA.includes("advisor-codex-2"), "异机制（advisor）派发不受 escalate 在飞阻碍（复合键）")
-  assert.equal(specs.length, 2)
+  assert.ok(outA.startsWith("Error") && outA.includes("escalate-codex-1") && outA.includes("本次请求未派发"), "批 21（FR-2/D21-2）：escalate 在飞 ⇒ code 型评审被跨机制护栏拒绝（点名在飞 job id）: " + outA.slice(0, 120))
+  assert.equal(specs.length, 1, "护栏拒绝 ⇒ advisor job 未派发（specs 不增）")
   // escalate job settle → 槽位清除 → 可再次派发
   await specs[0].hooks.done
   const out3 = await runEscalate(deps, "after settle", undefined)
-  assert.ok(out3.includes("escalate-codex-3"), "settle 后槽位清除，可再次派发")
-  assert.equal(specs.length, 3)
+  assert.ok(out3.includes("escalate-codex-2"), "settle 后槽位清除，可再次派发")
+  assert.equal(specs.length, 2)
   dropSession(sid)
 })
 

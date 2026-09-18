@@ -329,6 +329,13 @@ B/C 漂移而续期仍放行，削弱 US-3。**绝不使用 `eng_coder` 的 `arg
 dsh 子代理走后台时受 `dshBackgroundTimeoutMs`（默认 30min）兜底。
 **纪律：预计 >9 分钟的 eng_coder 派发一律带 `background: true`。**
 
+> **批 21（2026-09-17）翻正标注**：上文为**当时**的事实与纪律，自此退役——dsh 子代理路径的
+> `background` 已改三态（省略 ⇒ 后台，**默认翻转**；`false` ⇒ 强制同步；见
+> `docs/2026-09-17-jobs-default-design.md` §5.1）。「一律带 `background: true`」的纪律不再
+> 需要（省略即后台）；`budgetCapMs` 缺省 540s 不动（职责收窄：强制同步 / jobs 缺失回落
+> 同步的内部截止 + codex 派发阈值）。jobs 插件缺失时仍回落同步并告警（批 21 FR-3：告警
+> 随工具返回文本可见）。
+
 ---
 
 ## §6 关键决策记录（含被否决备选）
