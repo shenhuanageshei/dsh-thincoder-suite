@@ -531,7 +531,10 @@ test("T18d: FR-4 三处第一字面含 codexCli. 前缀 + 第二字面仍 2 次 
     "第二字面（被引偏的机理**不在**这里）须一字不动、仍 2 次——`doc-hygiene.test.mjs:317` 期望 2")
   assert.equal(engSrc.split("failStop(").length - 1, 18, "前置告警不得引入 failStop 调用（锁面恒 18）")
 
-  // —— ② 前置告警：仅 dsh 同步路径（默认 background=false），spawn 前恰一条 ——
+  // —— ② 前置告警：仅 dsh 同步路径，spawn 前恰一条 ——
+// 批 21 订正（交付代码评审 🟡#1）：本腿的探针 deps **无 jobs** ⇒ 经「jobs 缺失 ⇒ 回落同步」
+// 到达同步段。批 21 起**同步路径只剩两种到达方式**：显式 `background: false`，或 jobs
+// 缺失/派发失败回落。原注释「默认 background=false」在翻转后已失真。
   const sidA = "t18d-sync"
   const stA = makeEngRunFixture(sidA)
   const startedA = []
