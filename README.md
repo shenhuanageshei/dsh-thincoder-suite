@@ -245,7 +245,7 @@ host API 前缀 `/thincoder-suite/api`（GET/PUT/DELETE `/config`、GET/DELETE `
         # codex-cli runner 全局节（可选；配了任何 codex 行/后端才需要）
         codexCli:
           executable: codex            # 可执行名或完整路径（缺省 PATH 上的 codex）
-          model: gpt-5.6-sol           # codex 默认模型（可选）
+          model: codex-model-a           # codex 默认模型（可选）
           engCoderRunner: codex-cli    # eng_coder 走 codex 后端（可选；缺省 dsh 子代理）
           defaultTimeoutMs: 600000     # codex 任务默认预算（缺省 600s）
           budgetCapMs: 540000          # 同步执行预算上限——超过则派后台 job（缺省 540s，须低于平台 maxWallMs）

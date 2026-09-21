@@ -61,7 +61,7 @@ const fenceCtx = (rejection = undefined) => ({
 test("U2a: saveUserConfig writes versioned file; loadUserConfig roundtrips", () => {
   const home = mkHome()
   try {
-    const cfg = { advisor: { round1: { provider: "qax", model: "glm-5.3" } }, consultModels: [{ provider: "qax", model: "glm-5.3" }] }
+    const cfg = { advisor: { round1: { provider: "acme", model: "model-a" } }, consultModels: [{ provider: "acme", model: "model-a" }] }
     assert.equal(saveUserConfig(cfg, home), true)
     const path = resolveConfigStorePath(home)
     assert.ok(path && existsSync(path))
@@ -273,7 +273,7 @@ test("U3a: validateGlobalUserConfig rejects invalid values with field errors", (
 
 test("U3b: provider existence checked when registry is available; skipped with a note when not", () => {
   const cfg = { advisor: { round1: { provider: "nope-provider", model: "m" } } }
-  const withRegistry = validateGlobalUserConfig(cfg, ["qax", "zai-coding-cn"])
+  const withRegistry = validateGlobalUserConfig(cfg, ["acme", "beta-labs"])
   assert.equal(withRegistry.ok, false)
   assert.ok(withRegistry.errors.some((e) => e.includes("not in the configured provider registry")))
   const withoutRegistry = validateGlobalUserConfig(cfg, undefined)
@@ -281,8 +281,8 @@ test("U3b: provider existence checked when registry is available; skipped with a
   assert.ok(withoutRegistry.notes.some((e) => e.includes("provider registry unavailable")))
   // 注册表命中 → 无 provider 错误
   const hit = validateGlobalUserConfig(
-    { advisor: { round1: { provider: "qax", model: "glm-5.3" } }, consultModels: [{ provider: "qax", model: "glm-5.3" }] },
-    ["qax"],
+    { advisor: { round1: { provider: "acme", model: "model-a" } }, consultModels: [{ provider: "acme", model: "model-a" }] },
+    ["acme"],
   )
   assert.equal(hit.ok, true)
   assert.equal(hit.errors.length, 0)
@@ -296,14 +296,14 @@ test("U3c: valid payload validates ok and returns sanitized whitelist payload；
   //   本档是**基线档**（受 T-AP9 保护）⇒ 改动经 `AP_TEST_AUTHORIZED` 显式授权通道（见其注释）。
   const v = validateGlobalUserConfig({
     advisor: {
-      round1: { provider: "qax", model: "glm-5.3", effort: "medium", timeoutMs: 900000 },
+      round1: { provider: "acme", model: "model-a", effort: "medium", timeoutMs: 900000 },
       includeProjectGuide: false,
     },
-    consultModels: [{ provider: "qax", model: "glm-5.3", effort: "high" }],
+    consultModels: [{ provider: "acme", model: "model-a", effort: "high" }],
     engCoderMaxTokens: 65536,
     engCoderEffort: "low",
     engineering: true, // 白名单外顶层键 ⇒ **errors**（不再是 note）
-  }, ["qax"])
+  }, ["acme"])
   assert.equal(v.ok, false, "未知顶层键 ⇒ ok:false（D-31 新契约：报错，不再静默丢弃）")
   assert.ok(v.errors.some((e) => e.includes("engineering") && e.includes("not a supported top-level field")),
     "400 的 errors 必须**点名**未知键 + 白名单提示（镜像嵌套分支的既有形态）：" + JSON.stringify(v.errors))
@@ -312,20 +312,20 @@ test("U3c: valid payload validates ok and returns sanitized whitelist payload；
     "旧形态的 note 必须消失（否则同一事实两处口径）：" + JSON.stringify(v.notes))
   // 合法键照常净化（同一请求里的合法部分不受影响——报错面只针对未知键）
   assert.deepEqual(v.sanitized.advisor, {
-    round1: { provider: "qax", model: "glm-5.3", effort: "medium", timeoutMs: 900000 }, includeProjectGuide: false,
+    round1: { provider: "acme", model: "model-a", effort: "medium", timeoutMs: 900000 }, includeProjectGuide: false,
   })
-  assert.deepEqual(v.sanitized.consultModels, [{ provider: "qax", model: "glm-5.3", effort: "high" }])
+  assert.deepEqual(v.sanitized.consultModels, [{ provider: "acme", model: "model-a", effort: "high" }])
   // 全已知键 ⇒ 行为逐字不变（零回归面）
   const ok = validateGlobalUserConfig({
-    advisor: { round1: { provider: "qax", model: "glm-5.3", effort: "medium", timeoutMs: 900000 }, includeProjectGuide: false },
-    consultModels: [{ provider: "qax", model: "glm-5.3", effort: "high" }],
+    advisor: { round1: { provider: "acme", model: "model-a", effort: "medium", timeoutMs: 900000 }, includeProjectGuide: false },
+    consultModels: [{ provider: "acme", model: "model-a", effort: "high" }],
     engCoderMaxTokens: 65536,
     engCoderEffort: "low",
-  }, ["qax"])
+  }, ["acme"])
   assert.equal(ok.ok, true)
   assert.deepEqual(ok.sanitized, {
-    advisor: { round1: { provider: "qax", model: "glm-5.3", effort: "medium", timeoutMs: 900000 }, includeProjectGuide: false },
-    consultModels: [{ provider: "qax", model: "glm-5.3", effort: "high" }],
+    advisor: { round1: { provider: "acme", model: "model-a", effort: "medium", timeoutMs: 900000 }, includeProjectGuide: false },
+    consultModels: [{ provider: "acme", model: "model-a", effort: "high" }],
     engCoderMaxTokens: 65536,
     engCoderEffort: "low",
   })
@@ -601,22 +601,22 @@ test("U3c2b (批 14 / FR-2 / 锚 A3+A4): 白名单散文面与权威面三轴一
 test("U7a: apply-session with a valid sessionId writes the advisor override subset", () => {
   const stubs = sessionStubs(["s1"])
   const r = applySessionOverride(stubs, "s1", {
-    round1: { provider: "qax", model: "glm-5.3", effort: "low", timeoutMs: 500000 },
-    convergence: { provider: "qax", model: "glm-5.3-flash" },
+    round1: { provider: "acme", model: "model-a", effort: "low", timeoutMs: 500000 },
+    convergence: { provider: "acme", model: "model-a-flash" },
     includeProjectGuide: true,
   })
   assert.equal(r.ok, true)
   const state = stubs.getState("s1")
   assert.deepEqual(state.advisorOverride, {
-    round1: { provider: "qax", model: "glm-5.3", effort: "low", timeoutMs: 500000 },
-    convergence: { provider: "qax", model: "glm-5.3-flash" },
+    round1: { provider: "acme", model: "model-a", effort: "low", timeoutMs: 500000 },
+    convergence: { provider: "acme", model: "model-a-flash" },
     includeProjectGuide: true,
   })
 })
 
 test("U7b: apply-session invalid sessionId → {ok:false, reason:'no-session'}, nothing written, no crash", () => {
   const stubs = sessionStubs([])
-  const r = applySessionOverride(stubs, "ghost-session", { round1: { provider: "qax", model: "glm-5.3" } })
+  const r = applySessionOverride(stubs, "ghost-session", { round1: { provider: "acme", model: "model-a" } })
   assert.deepEqual(r, { ok: false, reason: "no-session" })
   assert.equal(stubs.stateOfCalls.length, 0, "stateOf never invoked for an invalid session (no state entry created)")
   // 空/缺失 id 同样 no-session，且不触碰 state
@@ -630,11 +630,11 @@ test("U7c: apply-session rejects invalid advisor values (validation errors) and 
   const stubs = sessionStubs(["s2"])
   stubs.stateOf("s2").advisorOverride = { round1: { provider: "keep" } }
   const cases = [
-    { round1: { provider: "qax", model: "m", effort: "turbo" } },
+    { round1: { provider: "acme", model: "m", effort: "turbo" } },
     { round1: { provider: "", model: "m" } },
-    { convergence: { provider: "qax", model: "m", timeoutMs: 50 } },
+    { convergence: { provider: "acme", model: "m", timeoutMs: 50 } },
     { includeProjectGuide: "yes" },
-    { consultModels: [{ provider: "qax", model: "m" }] }, // 非 advisor 白名单 → 拒绝
+    { consultModels: [{ provider: "acme", model: "m" }] }, // 非 advisor 白名单 → 拒绝
   ]
   for (const advisor of cases) {
     const r = applySessionOverride(stubs, "s2", advisor)
@@ -646,7 +646,7 @@ test("U7c: apply-session rejects invalid advisor values (validation errors) and 
 
 test("U7d: reset-session clears the override for valid sessions; invalid → no-session", () => {
   const stubs = sessionStubs(["s3"])
-  stubs.stateOf("s3").advisorOverride = { round1: { provider: "qax" } }
+  stubs.stateOf("s3").advisorOverride = { round1: { provider: "acme" } }
   const r = resetSessionOverride(stubs, "s3")
   assert.deepEqual(r, { ok: true })
   assert.equal(stubs.getState("s3").advisorOverride, null)
@@ -662,10 +662,10 @@ test("U7e: sanitizeSessionAdvisor drops unknown keys, rejects empty-string field
   const v = sanitizeSessionAdvisor({ round1: {}, convergence: {} })
   assert.equal(v.ok, true)
   assert.equal(v.advisor, null, "fully empty group payload → no override")
-  const v2 = sanitizeSessionAdvisor({ round1: { provider: "qax", model: "glm-5.3", timeoutMs: 0 } })
+  const v2 = sanitizeSessionAdvisor({ round1: { provider: "acme", model: "model-a", timeoutMs: 0 } })
   assert.equal(v2.ok, false, "timeoutMs 0 out of range")
-  const v3 = sanitizeSessionAdvisor({ round1: { provider: "qax", model: "glm-5.3", timeoutMs: 300000 } })
-  assert.deepEqual(v3.advisor, { round1: { provider: "qax", model: "glm-5.3", timeoutMs: 300000 } })
+  const v3 = sanitizeSessionAdvisor({ round1: { provider: "acme", model: "model-a", timeoutMs: 300000 } })
+  assert.deepEqual(v3.advisor, { round1: { provider: "acme", model: "model-a", timeoutMs: 300000 } })
   const v4 = sanitizeSessionAdvisor({})
   assert.equal(v4.advisor, null)
 })
@@ -876,7 +876,7 @@ test("U3d: advisor exported validators are reused by index validation (single so
   assert.equal(isValidTimeoutMs(0), false)
   assert.equal(isValidTimeoutMs(9999999999), false)
   assert.equal(isValidTimeoutMs("300000"), false)
-  assert.equal(isModelField("qax"), true)
+  assert.equal(isModelField("acme"), true)
   assert.equal(isModelField(""), false)
   assert.equal(isModelField(42), false)
   assert.equal(isValidEngCoderMaxTokens(65536), true)
@@ -897,7 +897,7 @@ test("T-D31 (AC-D1/AC-D2/AC-D3 / 锚 M7+M8): 含未知顶层键的 PUT ⇒ 400 +
   // **独立回归锚**：判据 = HTTP 状态 + errors 点名 + **磁盘字节前后快照比对**。
   const home = mkHome()
   try {
-    const seeded = { advisor: { round1: { provider: "qax", model: "glm-5.3" } }, engCoderMaxTokens: 65536 }
+    const seeded = { advisor: { round1: { provider: "acme", model: "model-a" } }, engCoderMaxTokens: 65536 }
     assert.equal(saveUserConfig(seeded, home), true)
     const storePath = resolveConfigStorePath(home)
     const before = readFileSync(storePath, "utf8")
@@ -987,7 +987,7 @@ test("review#1: handler-level integration — production-shaped opts (stateOf wi
   // 生产形状：与 lib/index.mjs apply() 注册处一致的依赖形状（stateOf 绑 sessionState；sessionExists 认已知集）
   const known = new Set([sid])
   const opts = {
-    baseConfig: { advisor: { round1: { provider: "qax", model: "glm-5.3" } } },
+    baseConfig: { advisor: { round1: { provider: "acme", model: "model-a" } } },
     sessionExists: (id) => known.has(String(id)),
     agentOptionsOf: () => ({}),
     stateOf: (id) => sessionState(String(id)),
@@ -1017,15 +1017,15 @@ test("review#1: handler-level integration — production-shaped opts (stateOf wi
   }
   try {
     // 生产形状下 POST /apply-session 成功（stateOf 未接线会在 500 兜底暴露）
-    const r = await call("POST", "/thincoder-suite/api/apply-session", { sessionId: sid, advisor: { round1: { provider: "qax", model: "glm-5.3" } } })
+    const r = await call("POST", "/thincoder-suite/api/apply-session", { sessionId: sid, advisor: { round1: { provider: "acme", model: "model-a" } } })
     assert.equal(r.status, 200, JSON.stringify(r.payload))
     assert.equal(r.payload.ok, true)
-    assert.deepEqual(sessionState(sid).advisorOverride, { round1: { provider: "qax", model: "glm-5.3" } })
+    assert.deepEqual(sessionState(sid).advisorOverride, { round1: { provider: "acme", model: "model-a" } })
     // GET /session 摘要（describe 经同一 stateOf）
     const g = await call("GET", "/thincoder-suite/api/session?sessionId=" + encodeURIComponent(sid))
     assert.equal(g.status, 200)
     assert.equal(g.payload.ok, true)
-    assert.deepEqual(g.payload.override, { round1: { provider: "qax", model: "glm-5.3" } })
+    assert.deepEqual(g.payload.override, { round1: { provider: "acme", model: "model-a" } })
     // 无效 sessionId → no-session 404
     const bad = await call("POST", "/thincoder-suite/api/apply-session", { sessionId: "ghost", advisor: {} })
     assert.equal(bad.status, 404)

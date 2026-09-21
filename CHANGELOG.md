@@ -2,6 +2,18 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.29.2] — 2026-09-21
+
+> **一句话**：把代码与测试里**作者私有的 provider / 模型标识**换成中性示例值，并给 npm 打包加白名单——此前 `npm pack` 会把 `docs/` 与 `test/` 一起打进去。**零行为改动。**
+
+**批 23（隐私面收口 · npm 打包面 · 零行为改动）**
+
+- **【计数行】**：`node --test` **516/516**（**基线 516 + 本批 0**）。本来就没有新增/删除用例——本批只改夹具的**取值**与两处注释，台账 §三 逐档用例数**零变动**。
+- **立项形态**：代码与测试里长期带着**作者本机配置的真实 provider 与模型标识**（作为夹具示例值）。这类值会随任何分发面外流，而 npm 打包面尤其宽——实测 `npm pack --dry-run` **会打 140 个文件 / 4.9 MB**，其中 **78 个来自 `docs/`、23 个来自 `test/`**。
+- **两处处置（都零行为）**：**① 夹具与注释脱敏**——`lib/client.js` · `lib/effort-resolve.mjs` · `lib/eng.mjs` 三处**注释/占位文案**，以及 `test/{advisor-config,config-api,codex-runner,session-state}.test.mjs` 四档里的示例取值，统一换成中性值（`provider → acme / beta-labs`、`model → model-a / model-a-flash / codex-model-a`）。**夹具语义不变**（它们本就是任意示例值），故 516 条断言一条不动、全部照旧通过。**② `package.json` 加 `files` 白名单**（`lib/` + `cordis.patch.yml`）——把 `docs/` 与 `test/` 挡在 tarball 之外。
+- **★ 范围如实声明**：本批**只动代码与测试 + README 的一行配置示例**；`docs/**`（含历史设计档与会诊纪要）**按「历史不重写」惯例保持原样**——它们仍含同类标识。**★ 并且：工作树脱敏 ≠ 抹掉历史**——这些值在**已公开的 git 历史**里仍然可见（`git log -p` 可查）。要真正移除需重写历史 + force-push，那是破坏性动作，本批**不做**，留作独立决定。
+- **★ 本轮推送受阻的如实登记**：`git push` 连 `github.com:443` 反复被重置（`Recv failure` / `Could not connect`），而 `gh`（走 `api.github.com`）全程正常 ⇒ 本轮的 fork 提交改由 **GitHub API** 完成（建 `refs/heads/...` + contents PUT），绕开 git 传输层。
+- **★ 本批不改 `lib/**` 的行为**：三处改动全在注释/占位字符串；`lib/index.mjs` 与 `lib/advisor.mjs` 等**零字节改动** ⇒ **无需重启**即生效面仅限「下次任何 build/安装读到的文件」。
 ## [0.29.1] — 2026-09-21
 
 > **一句话**：设置页的配置 API 补上了一道**一直缺的门**——它此前**谁都能进**（实测：无 token `GET /config` ⇒ 200 并回吐完整配置与本地绝对路径，`Host: evil.example` 也 ⇒ 200），现在跟 DSH 其它路由一样，先过宿主的 Host/Origin 栅栏与浏览器会话鉴权。 **本版改 `lib/**` ⇒ 重启 DSH 后生效。**

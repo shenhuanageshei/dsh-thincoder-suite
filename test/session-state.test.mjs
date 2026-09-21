@@ -331,7 +331,7 @@ test("T4: advisorOverride/touchedFiles/mutatedThisRun restored; touchedFiles ded
     advisorRound: 1, lastAdvisorOutput: "p", mutatedThisRun: true,
     touchedFiles: touched,
     advisorOverride: {
-      round1: { provider: "qax", model: "glm-5.3", bogus: 1 },
+      round1: { provider: "acme", model: "model-a", bogus: 1 },
       convergence: "not-an-object",
       includeProjectGuide: true, junk: "dropped",
     },
@@ -340,7 +340,7 @@ test("T4: advisorOverride/touchedFiles/mutatedThisRun restored; touchedFiles ded
   assert.equal(v.touchedFiles.length, TOUCHED_FILES_CAP)
   assert.equal(new Set(v.touchedFiles).size, TOUCHED_FILES_CAP, "deduped")
   assert.equal(v.touchedFiles.filter(f => f === "dup.mjs").length, 1)
-  assert.deepEqual(v.advisorOverride, { round1: { provider: "qax", model: "glm-5.3" }, includeProjectGuide: true })
+  assert.deepEqual(v.advisorOverride, { round1: { provider: "acme", model: "model-a" }, includeProjectGuide: true })
   // 走完整 restore 路径（灌入内存）
   const sid = "f12-t4-" + randomUUID()
   try {
@@ -349,7 +349,7 @@ test("T4: advisorOverride/touchedFiles/mutatedThisRun restored; touchedFiles ded
     const state = sessionState(sid)
     assert.equal(state.mutatedThisRun, true)
     assert.equal(state.touchedFiles.length, TOUCHED_FILES_CAP)
-    assert.deepEqual(state.advisorOverride, { round1: { provider: "qax", model: "glm-5.3" }, includeProjectGuide: true })
+    assert.deepEqual(state.advisorOverride, { round1: { provider: "acme", model: "model-a" }, includeProjectGuide: true })
   } finally { dropSession(sid) }
   // mutatedThisRun 非真值 → false；engineering tri-state 原样
   const v2 = normalizeRestored({ advisorRound: 0, engineering: false, mutatedThisRun: "yes" })

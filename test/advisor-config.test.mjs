@@ -2175,7 +2175,7 @@ test("批 21 AC-7 (escalate 侧): escalate 槽位在飞 ⇒ code 型评审被跨
       get: (svc) => (svc === "jobs" ? hold.jobs : null),
     },
     agent: { session: { id: sid, header: { delegationDepth: 0, cwd: PLUGIN_DIR } } },
-    config: { consultModels: [{ provider: "qax", model: "glm-5.3" }] },
+    config: { consultModels: [{ provider: "acme", model: "model-a" }] },
     state: sessionState(sid), signal: undefined,
   }
   const outJob = await runEscalate(deps, "fix the bug", undefined) // 省略 background ⇒ 后台（FR-1②）

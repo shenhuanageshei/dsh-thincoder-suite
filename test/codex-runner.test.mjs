@@ -121,7 +121,7 @@ test("runner: 字符串简写两种 + B2 未知 kind fail-closed", () => {
 })
 
 test("runner: B4 dsh 行带 codex 专属字段 → 忽略 + warn", () => {
-  const r = normalizeRunnerValue({ kind: "dsh", model: "gpt-5.6-sol" })
+  const r = normalizeRunnerValue({ kind: "dsh", model: "codex-model-a" })
   assert.equal(r.ok, true)
   assert.equal(r.runner.kind, "dsh")
   assert.equal(r.runner.model, undefined)
@@ -138,7 +138,7 @@ test("runner: B12 字段级错误（timeoutMs 越界 / sandbox 非法 / executab
 })
 
 test("runner: effort 透传不查枚举（C11），model 合法保留", () => {
-  const r = normalizeRunnerValue({ kind: "codex-cli", model: "gpt-5.6-sol", effort: "ultra" })
+  const r = normalizeRunnerValue({ kind: "codex-cli", model: "codex-model-a", effort: "ultra" })
   assert.equal(r.ok, true)
   assert.equal(r.runner.effort, "ultra")
 })
@@ -164,10 +164,10 @@ test("codexCli: proxyMode=url 缺 proxyUrl → 回落 inherit + warn", () => {
 // ————————————— argv 构造（B6/B7/C11） —————————————
 
 test("buildCodexArgs: 模型/effort TOML 形态/AGENTS 禁用/stdin 尾参", () => {
-  const args = buildCodexArgs({ cwd: "C:/w", sandbox: "read-only", model: "gpt-5.6-sol", effort: "xhigh", agentsMd: "disable", tmpOut: "o.txt" })
+  const args = buildCodexArgs({ cwd: "C:/w", sandbox: "read-only", model: "codex-model-a", effort: "xhigh", agentsMd: "disable", tmpOut: "o.txt" })
   assert.deepEqual(args, [
     "exec", "-C", "C:/w", "--skip-git-repo-check", "-s", "read-only",
-    "-m", "gpt-5.6-sol",
+    "-m", "codex-model-a",
     "-c", 'model_reasoning_effort="xhigh"',
     "-c", "project_doc_max_bytes=0",
     "--json", "-o", "o.txt", "-",
@@ -181,7 +181,7 @@ test("resolveExecutableFile: B6 元字符拒绝 + 不存在路径 null", () => {
 
 // ————————————— runCodexTask 错误码（注入法，FR-4/FR-5） —————————————
 
-const RUNNER = { kind: "codex-cli", model: "gpt-5.6-sol" }
+const RUNNER = { kind: "codex-cli", model: "codex-model-a" }
 const GLOBALS = { executable: process.execPath, proxyMode: "inherit", proxyUrl: null, agentsMdPolicy: "disable", model: null, defaultTimeoutMs: 600000 }
 
 test("runCodexTask: 成功 → OK envelope（exit 0 + 输出文件 + threadId + usage）", async () => {
@@ -253,7 +253,7 @@ test("runCodexTask: abort → ABORTED", async () => {
 
 test("discoverCodexModels: debug models JSON 解析 + efforts 归一", async () => {
   const catalog = JSON.stringify({ models: [
-    { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", default_reasoning_level: "low", visibility: "list", context_window: 272000,
+    { slug: "codex-model-a", display_name: "GPT-5.6 Sol", default_reasoning_level: "low", visibility: "list", context_window: 272000,
       supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }, { effort: "max" }, { effort: "ultra" }] },
     { display_name: "no slug here" },
   ] })
@@ -279,7 +279,7 @@ test("discoverCodexModels: spawn 失败 → CODEX_HOME 缓存兜底", async () =
 })
 
 test("codexRowLabel: 有 model 用 model，否则回落全局/默认", () => {
-  assert.equal(codexRowLabel({ kind: "codex-cli", model: "gpt-5.6-sol" }), "codex-cli:gpt-5.6-sol")
+  assert.equal(codexRowLabel({ kind: "codex-cli", model: "codex-model-a" }), "codex-cli:codex-model-a")
   assert.equal(codexRowLabel({ kind: "codex-cli" }, { model: "gpt-5.6-terra" }), "codex-cli:gpt-5.6-terra")
   assert.equal(codexRowLabel({ kind: "codex-cli" }), "codex-cli:default")
 })
@@ -288,12 +288,12 @@ test("codexRowLabel: 有 model 用 model，否则回落全局/默认", () => {
 
 test("advisor 路由: codex 行免 provider/model，model 回落 runner.model", () => {
   const r = resolveAdvisorRoute({
-    config: { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" } } } },
+    config: { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" } } } },
     override: null, agentOpts: {}, advisorRound: 0,
   })
   assert.equal(r.ok, true)
   assert.equal(r.provider, "codex-cli")
-  assert.equal(r.model, "gpt-5.6-sol")
+  assert.equal(r.model, "codex-model-a")
   assert.equal(r.runner.kind, "codex-cli")
   assert.equal(r.timeoutSource, "default")
 })
@@ -323,14 +323,14 @@ test("advisor 路由: runner=dsh → 回落既有解析链（零变化，B1）",
 test("mergeGlobalConfig: codexCli 字段级合并 + consultModels runner 行保留", () => {
   const merged = mergeGlobalConfig(
     { codexCli: { executable: "codex", proxyMode: "inherit" }, consultModels: [{ provider: "deepseek", model: "d1" }] },
-    { codexCli: { proxyMode: "url", proxyUrl: "http://127.0.0.1:7897" }, consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol" } }] },
+    { codexCli: { proxyMode: "url", proxyUrl: "http://127.0.0.1:7897" }, consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a" } }] },
   )
   assert.deepEqual(merged.codexCli, { executable: "codex", proxyMode: "url", proxyUrl: "http://127.0.0.1:7897" })
   assert.equal(merged.consultModels[0].runner.kind, "codex-cli")
 })
 
 test("validateGlobalUserConfig: codex 行免 provider/model 合法；codexCli 非法值报错（B12）", () => {
-  const v = validateGlobalUserConfig({ codexCli: { executable: "codex", agentsMdPolicy: "disable" }, consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol" } }] }, [])
+  const v = validateGlobalUserConfig({ codexCli: { executable: "codex", agentsMdPolicy: "disable" }, consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a" } }] }, [])
   assert.equal(v.ok, true)
   assert.equal(v.sanitized.codexCli.agentsMdPolicy, "disable")
   assert.equal(v.sanitized.consultModels[0].runner.kind, "codex-cli")
@@ -359,7 +359,7 @@ test("runAdvisorReview: codex runner → 走 adapter 返回评本文（llm 不�
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
   const out = await runAdvisorReview(
     { llm: { stream: () => { throw new Error("LLM must not be used for codex runner") } }, spawn, platform: "linux", env: {} },
-    { agent, config: { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" } } } }, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+    { agent, config: { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" } } } }, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
   )
   assert.ok(!out.startsWith("Advisor:"), "completed review should not carry error prefix")
   assert.ok(out.includes("Issue"), "review table text should flow through")
@@ -433,7 +433,7 @@ function fakeJobsFactory() {
 }
 
 const ESC_CONFIG = {
-  consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol" } }],
+  consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a" } }],
   codexCli: { executable: process.execPath, agentsMdPolicy: "disable" },
 }
 
@@ -537,7 +537,7 @@ test("T2.2 eng_coder codex 后端：workspace-write + AGENTS 禁用 + 交付状�
   st.engineering = true
   const token = makeEngToken(st)
   const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: {} }
-  const config = { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", agentsMdPolicy: "disable" } }
+  const config = { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", agentsMdPolicy: "disable" } }
   const out = await runEngCoder(
     { ctx: { subagents: { start: () => { throw new Error("dsh spawn must not run for codex backend") } } }, agent, config, signal: undefined, configDefaultEngineering: false, spawn, platform: "linux", env: {} },
     { task: "implement x", designToken: token, docs: [], stages: undefined },
@@ -546,7 +546,7 @@ test("T2.2 eng_coder codex 后端：workspace-write + AGENTS 禁用 + 交付状�
   assert.ok(out.includes("implemented"))
   assert.ok(seenArgs.includes("-s") && seenArgs.includes("workspace-write"), "B5：eng_coder 固定写沙箱")
   assert.ok(seenArgs.includes("project_doc_max_bytes=0"), "AGENTS 策略默认 disable")
-  assert.ok(seenArgs.includes("-m") && seenArgs.includes("gpt-5.6-sol"))
+  assert.ok(seenArgs.includes("-m") && seenArgs.includes("codex-model-a"))
   const st2 = sessionState(sid)
   assert.ok(st2.touchedFiles.includes("src/x.ts"))
   assert.equal(st2.advisorRound, 0)
@@ -625,14 +625,14 @@ test("评审#5: followup 使用交付时保存的 runner（池首行不同也不
   const cfg = {
     consultModels: [
       { provider: "dsh-p", model: "dsh-m" },
-      { runner: { kind: "codex-cli", model: "gpt-5.6-sol" } },
+      { runner: { kind: "codex-cli", model: "codex-model-a" } },
     ],
     codexCli: { executable: process.execPath },
   }
   const sid = "esc-mismatch-p2"
-  await runEscalate(makeEscDeps(sid, spawn, cfg), "first via row B", "codex-cli:gpt-5.6-sol")
+  await runEscalate(makeEscDeps(sid, spawn, cfg), "first via row B", "codex-cli:codex-model-a")
   await runEscalate(makeEscDeps(sid, spawn, cfg), "followup tweak", undefined, true)
-  assert.ok(seenArgs.includes("-m") && seenArgs.includes("gpt-5.6-sol"), "followup 用保存行的 model（非 pool[0]）")
+  assert.ok(seenArgs.includes("-m") && seenArgs.includes("codex-model-a"), "followup 用保存行的 model（非 pool[0]）")
   assert.ok(seenArgs.includes("resume") && seenArgs.includes("esc-tid-B"))
   dropSession(sid)
 })
@@ -660,7 +660,7 @@ test("jobs 派发: 预算超 cap 且 ctx.jobs 可用 → 派后台任务（owner
   }
   const sid = "jobs-dispatch-p2"
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 900000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, timeoutMs: 900000 } } }
   const out = await runAdvisorReview(
     { llm: { stream: () => { throw new Error("must not be used") } }, spawn, platform: "linux", env: {}, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -673,7 +673,7 @@ test("jobs 派发: 预算超 cap 且 ctx.jobs 可用 → 派后台任务（owner
   assert.ok(!out.includes("完成时会话内自动收到通知"), "旧虚假承诺文案整体移除")
   assert.equal(startPayload.kind, "advisor-codex")
   assert.equal(startPayload.owner, agent, "owner 绑定发起会话的 agent")
-  assert.ok(startPayload.label.includes("gpt-5.6-sol"))
+  assert.ok(startPayload.label.includes("codex-model-a"))
   // done settle → finalize 恰好一次：轮次推进 + 评审全文进 job output
   const outcome = await hooks.done
   assert.equal(outcome.status, "completed")
@@ -691,7 +691,7 @@ test("jobs 派发降级: ctx.jobs 缺失 → 同步截断执行 + 响亮告警�
   })
   const sid = "jobs-missing-p2"
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 900000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, timeoutMs: 900000 } } }
   const out = await runAdvisorReview(
     { llm: { stream: () => { throw new Error("must not be used") } }, spawn, platform: "linux", env: {} },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -704,20 +704,20 @@ test("jobs 派发降级: ctx.jobs 缺失 → 同步截断执行 + 响亮告警�
 // ————————————— 智能回落 + 平台墙钟预算截断（另一会话 6 连超时反馈） —————————————
 
 test("advisor 路由: ignoreRunner=true 跳过 codex 分支回落 dsh 链", () => {
-  const cfg = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3" } } }
+  const cfg = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a" } } }
   const r = resolveAdvisorRoute({ config: cfg, override: null, agentOpts: {}, advisorRound: 0, ignoreRunner: true })
   assert.equal(r.ok, true)
-  assert.equal(r.provider, "qax")
-  assert.equal(r.model, "glm-5.3")
+  assert.equal(r.provider, "acme")
+  assert.equal(r.model, "model-a")
   assert.equal(r.runner, undefined)
 })
 
 test("advisor 路由: runner=codex-cli 生效且组内显式 provider/model → 告警（UX 陷阱可见）", () => {
-  const cfg = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3" } } }
+  const cfg = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a" } } }
   const r = resolveAdvisorRoute({ config: cfg, override: null, agentOpts: {}, advisorRound: 0 })
   assert.equal(r.ok, true)
   assert.equal(r.provider, "codex-cli")
-  assert.ok(r.warnings.some((w) => w.includes("被忽略") && w.includes("qax:glm-5.3")))
+  assert.ok(r.warnings.some((w) => w.includes("被忽略") && w.includes("acme:model-a")))
 })
 
 test("智能回落: codex 连续 2 次失败 → 第 3 轮自动走 dsh 路由（llm 被调用）+ 响亮告警", async () => {
@@ -740,7 +740,7 @@ test("智能回落: codex 连续 2 次失败 → 第 3 轮自动走 dsh 路由�
   })
   const sid = "smart-fallback-p2"
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3" } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a" } } }
   const run = () => runAdvisorReview(
     { llm, spawn, platform: "linux", env: {} },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -766,7 +766,7 @@ test("预算截断告警: round1.timeoutMs=900000 + codex runner → 成功结�
   })
   const sid = "cap-note-p2"
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 900000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, timeoutMs: 900000 } } }
   const out = await runAdvisorReview(
     { llm: { stream: () => { throw new Error("must not be used") } }, spawn, platform: "linux", env: {} },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -783,22 +783,22 @@ test("GET /catalog: ctx.llm 运行时注册表 → 全部 provider（含内置 D
   const llm = {
     listProviders: async () => [
       { id: "deepseek-official", name: "DeepSeek" },
-      { id: "qax", name: "Qax" },
-      { id: "zai-coding-cn", name: "ZAI" },
+      { id: "acme", name: "Acme" },
+      { id: "beta-labs", name: "Beta" },
     ],
     listModels: async (provider) => provider === "deepseek-official"
       ? [{ provider, id: "deepseek-chat", name: "DeepSeek Chat" }]
-      : [{ provider, id: "glm-5.3", name: "GLM-5.3" }, { provider, id: "glm-5.3-flash", name: "Flash" }, { broken: 1 }],
+      : [{ provider, id: "model-a", name: "Model A" }, { provider, id: "model-a-flash", name: "Flash" }, { broken: 1 }],
   }
   const handler = makeApiHandler(fenceCtx(), {
     baseConfig: {},
     llm,
     settingsGet: (ns) => ns === "llm-pi-ai" ? {
       providers: {
-        "zai-coding-cn": {
+        "beta-labs": {
           models: [
-            { id: "glm-5.3", reasoningEfforts: { off: null, low: "low", medium: "medium", high: "high" } },
-            { id: "glm-5.3-flash", reasoningEfforts: { off: null, high: "high" } },
+            { id: "model-a", reasoningEfforts: { off: null, low: "low", medium: "medium", high: "high" } },
+            { id: "model-a-flash", reasoningEfforts: { off: null, high: "high" } },
           ],
         },
       },
@@ -815,8 +815,8 @@ test("GET /catalog: ctx.llm 运行时注册表 → 全部 provider（含内置 D
   assert.equal(ds.displayName, "DeepSeek")
   assert.equal(ds.models.length, 1)
   assert.equal(ds.models[0].id, "deepseek-chat")
-  const zai = body.providers.filter((p) => p.id === "zai-coding-cn")[0]
-  const glm = zai.models.filter((m) => m.id === "glm-5.3")[0]
+  const zai = body.providers.filter((p) => p.id === "beta-labs")[0]
+  const glm = zai.models.filter((m) => m.id === "model-a")[0]
   assert.deepEqual(glm.efforts, ["low", "medium", "high"], "settings reasoningEfforts 富化（null 档剔除）")
 })
 
@@ -834,21 +834,21 @@ test("GET /catalog: llm runtime 缺失 → 502 + 明确错误（不再静默降�
 test("PUT /config: provider 存在性 = 运行时注册表 ∪ settings（deepseek-official 假阳性修复）", async () => {
   const { makeApiHandler } = await import("../lib/index.mjs")
   const llm = {
-    listProviders: async () => [{ id: "deepseek-official", name: "DeepSeek" }, { id: "qax", name: "Qax" }],
+    listProviders: async () => [{ id: "deepseek-official", name: "DeepSeek" }, { id: "acme", name: "Acme" }],
     listConfigurableProviders: async () => [{ provider: "deepseek-official", displayName: "DeepSeek", settingsNs: "llm-deepseek", settingsPath: [] }],
   }
   const handler = makeApiHandler(fenceCtx(), {
     baseConfig: {},
     llm,
     dshHomeOverride: mkdtempSync(join(tmpdir(), "provider-registry-")),
-    settingsGet: (ns) => ns === "llm-pi-ai" ? { providers: { "zai-coding-cn": { models: [] } } } : null,
+    settingsGet: (ns) => ns === "llm-pi-ai" ? { providers: { "beta-labs": { models: [] } } } : null,
   })
   const payload = JSON.stringify({
     config: {
       advisor: { convergence: { provider: "deepseek-official", model: "deepseek-chat" } },
       consultModels: [
         { provider: "deepseek-official", model: "deepseek-chat" },
-        { provider: "qax", model: "glm-5.3" },
+        { provider: "acme", model: "model-a" },
       ],
     },
   })
@@ -903,13 +903,13 @@ function catalogSpawn(catalogModels, taskSpec) {
 }
 
 test("R1 effort(dsh): 受支持档保持原样（无 note 无告警）", async () => {
-  const r = await resolveSupportedEffort(ladderLlm(["off", "high", "max"]), "qax", "glm-5.3-flash", "high")
+  const r = await resolveSupportedEffort(ladderLlm(["off", "high", "max"]), "acme", "model-a-flash", "high")
   assert.equal(r.effort, "high")
   assert.equal(r.note, null)
 })
 
 test("R1 effort(dsh): 非法档 → 最近支持档 + note（DP-2：medium 缺失且 low/high 皆支持 → 取 high）", async () => {
-  const r = await resolveSupportedEffort(ladderLlm(["low", "high"]), "qax", "m1", "medium")
+  const r = await resolveSupportedEffort(ladderLlm(["low", "high"]), "acme", "m1", "medium")
   assert.equal(r.effort, "high", "等距 tie-break 向上取（DP-2 终裁：保推理质量）")
   assert.ok(r.note.includes("falling back to nearest supported effort"))
   assert.ok(r.note.includes('"high"'))
@@ -919,9 +919,9 @@ test("R1 effort(dsh): 非法档 → 最近支持档 + note（DP-2：medium 缺�
 test("R1 effort(dsh): 非等距取序距离最近（high 对 [off,low] → low；历史事故形状 low 对 [off,high,max] 批 19 起回落 high）", async () => {
   const a = await resolveSupportedEffort(ladderLlm(["off", "low"]), "p", "m", "high")
   assert.equal(a.effort, "low")
-  // 2026-09-04 生产事故形状：glm-5.3-flash efforts 仅 off/high/max，engCoderEffort "low" 曾被
+  // 2026-09-04 生产事故形状：model-a-flash efforts 仅 off/high/max，engCoderEffort "low" 曾被
   // 静默回落到 off（推理全关）——批 19（D19-1）起 off 退出距离竞争，回落力度域最近档 high
-  const b = await resolveSupportedEffort(ladderLlm(["off", "high", "max"]), "p", "glm-5.3-flash", "low")
+  const b = await resolveSupportedEffort(ladderLlm(["off", "high", "max"]), "p", "model-a-flash", "low")
   assert.equal(b.effort, "high", "low 对 [off,high,max] 回落力度域最近档 high（off 是开关不参与距离，批 19 D19-1；绝不秒死不变）")
   assert.ok(b.note.includes("falling back"))
 })
@@ -1036,15 +1036,15 @@ test("R1 批19 A9/A10 接线 consult dsh 行: 显式 off 关不掉 ⇒ agentOpti
   const state = sessionState(sid)
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
   const r = await startConsultSession(
-    { ctx, agent, config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "off" }] }, state, dshHome: mkdtempSync(join(tmpdir(), "b15-home-")) },
+    { ctx, agent, config: { consultModels: [{ provider: "acme", model: "model-a", effort: "off" }] }, state, dshHome: mkdtempSync(join(tmpdir(), "b15-home-")) },
     "problem brief", undefined,
   )
   const digest = await consultDigestOf(state, r.id)
   assert.equal(started.length, 1)
   const ao = started[0].agentOptions
   assert.ok(!("reasoningEffort" in ao), "null ⇒ 键缺席（键在值错正是病灶形态——必须钉键而非钉值）: " + JSON.stringify(ao))
-  assert.equal(ao.provider, "qax", "provider 仍传")
-  assert.equal(ao.model, "glm-5.3", "model 仍传")
+  assert.equal(ao.provider, "acme", "provider 仍传")
+  assert.equal(ao.model, "model-a", "model 仍传")
   assert.ok(digest.includes("second opinion"))
   assert.ok(digest.includes("未能关闭推理"), "专属 note 入 digest 尾部（主 agent 可见）")
   dropSession(sid)
@@ -1065,7 +1065,7 @@ test("R1 批19 A9/A10 接线 escalate dsh 行: 显式 off 关不掉 ⇒ agentOpt
   const deps = {
     ctx,
     agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
-    config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "off" }] },
+    config: { consultModels: [{ provider: "acme", model: "model-a", effort: "off" }] },
     state: sessionState(sid), signal: undefined,
     spawn: () => { throw new Error("codex must not spawn for a dsh row") }, platform: "linux", env: {},
   }
@@ -1073,8 +1073,8 @@ test("R1 批19 A9/A10 接线 escalate dsh 行: 显式 off 关不掉 ⇒ agentOpt
   assert.ok(out.includes("post-op report"))
   const ao = started[0].agentOptions
   assert.ok(!("reasoningEffort" in ao), "null ⇒ 键缺席: " + JSON.stringify(ao))
-  assert.equal(ao.provider, "qax")
-  assert.equal(ao.model, "glm-5.3")
+  assert.equal(ao.provider, "acme")
+  assert.equal(ao.model, "model-a")
   assert.ok(out.includes("未能关闭推理"), "专属 note 入术后报告尾部")
   dropSession(sid)
 })
@@ -1091,7 +1091,7 @@ test("R1 批19 A9/A10 接线 eng dsh 分支: 显式 off 关不掉 ⇒ agentOptio
   const st = sessionState(sid)
   st.engineering = true
   const token = makeEngToken(st)
-  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "glm-5.3" } }
+  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "acme", model: "model-a" } }
   const out = await runEngCoder(
     { ctx: { subagents, llm: ladderLlm(["low", "high"]) }, agent, config: { engCoderEffort: "off" }, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
     { task: "implement z", designToken: token, docs: [] },
@@ -1099,8 +1099,8 @@ test("R1 批19 A9/A10 接线 eng dsh 分支: 显式 off 关不掉 ⇒ agentOptio
   assert.ok(out.includes("eng_coder delivery:"))
   const ao = started[0].agentOptions
   assert.ok(!("reasoningEffort" in ao), "null ⇒ 键缺席（eng 的 !== null 判空——R-59 已登记）: " + JSON.stringify(ao))
-  assert.equal(ao.provider, "qax")
-  assert.equal(ao.model, "glm-5.3")
+  assert.equal(ao.provider, "acme")
+  assert.equal(ao.model, "model-a")
   assert.ok(out.includes("未能关闭推理"), "专属 note 经 warn 通道随工具返回可见")
   dropSession(sid)
 })
@@ -1122,13 +1122,13 @@ test("R1 批19 A9/A10 接线 advisor dsh 主路径: 显式 off 关不掉 ⇒ str
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
   const out = await runAdvisorReview(
     { llm },
-    { agent, config: { advisor: { round1: { provider: "qax", model: "glm-5.3", effort: "off", timeoutMs: 300000 } } }, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+    { agent, config: { advisor: { round1: { provider: "acme", model: "model-a", effort: "off", timeoutMs: 300000 } } }, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
   )
   assert.equal(streamOptsSeen.length, 1)
   const so = streamOptsSeen[0]
   assert.ok(!("reasoningEffort" in so), "null ⇒ 键缺席: " + JSON.stringify(Object.keys(so)))
-  assert.equal(so.provider, "qax")
-  assert.equal(so.model, "glm-5.3")
+  assert.equal(so.provider, "acme")
+  assert.equal(so.model, "model-a")
   assert.ok(out.includes("| 1 | a | b |"), "评审正文照常交付")
   assert.ok(out.includes("未能关闭推理"), "专属 note 入结果尾部（finalize 之后，不破坏 completed 判定）")
   dropSession(sid)
@@ -1151,7 +1151,7 @@ test("R1 批19 A9/A10 接线 advisor 智能回落轮: 显式 off 关不掉 ⇒ s
   const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args) : { events: [], exitCode: 1 })
   const sid = "r1-adv-fb-off"
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", effort: "off" } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", effort: "off" } } }
   const run = () => runAdvisorReview(
     { llm, spawn, platform: "linux", env: { CODEX_HOME: emptyHome } },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -1163,8 +1163,8 @@ test("R1 批19 A9/A10 接线 advisor 智能回落轮: 显式 off 关不掉 ⇒ s
   assert.ok(r3.includes("FB REVIEW OUTPUT"))
   const so = streamOptsSeen[0]
   assert.ok(!("reasoningEffort" in so), "null ⇒ 键缺席: " + JSON.stringify(Object.keys(so)))
-  assert.equal(so.provider, "qax")
-  assert.equal(so.model, "glm-5.3")
+  assert.equal(so.provider, "acme")
+  assert.equal(so.model, "model-a")
   assert.ok(r3.includes("未能关闭推理"), "专属 note 入回落轮结果尾部")
   dropSession(sid)
 })
@@ -1227,7 +1227,7 @@ test("R1 接线 consult dsh 行：effort 按行 provider/model 解析（agentOpt
   const state = sessionState(sid)
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
   const r = await startConsultSession(
-    { ctx, agent, config: { consultModels: [{ provider: "qax", model: "glm-5.3-flash", effort: "low" }] }, state, dshHome: mkdtempSync(join(tmpdir(), "b15-home-")) },
+    { ctx, agent, config: { consultModels: [{ provider: "acme", model: "model-a-flash", effort: "low" }] }, state, dshHome: mkdtempSync(join(tmpdir(), "b15-home-")) },
     "problem brief", undefined,
   )
   const digest = await consultDigestOf(state, r.id)
@@ -1274,7 +1274,7 @@ test("R1 接线 escalate dsh 行：effort 按行 provider/model 解析（agentOp
   const deps = {
     ctx,
     agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
-    config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "medium" }] },
+    config: { consultModels: [{ provider: "acme", model: "model-a", effort: "medium" }] },
     state: sessionState(sid), signal: undefined,
     spawn: () => { throw new Error("codex must not spawn for a dsh row") }, platform: "linux", env: {},
   }
@@ -1311,7 +1311,7 @@ test("R1 接线 eng codex 分支：effort 走 codex resolver（argv 最近档）
   const st = sessionState(sid)
   st.engineering = true
   const token = makeEngToken(st)
-  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "parent-model" } }
+  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "acme", model: "parent-model" } }
   const config = { engCoderEffort: "medium", codexCli: { engCoderRunner: "codex-cli", model: "m-eng", executable: "t-eng-1" } }
   const out = await runEngCoder(
     {
@@ -1343,14 +1343,14 @@ test("R1 接线 eng dsh 分支：effort 按父代理路由模型解析（agentOp
   const st = sessionState(sid)
   st.engineering = true
   const token = makeEngToken(st)
-  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "glm-5.3-flash" } }
+  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "acme", model: "model-a-flash" } }
   const out = await runEngCoder(
     { ctx: { subagents, llm: ladderLlm(["off", "high", "max"]) }, agent, config: { engCoderEffort: "low" }, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
     { task: "implement y", designToken: token, docs: [] },
   )
   assert.ok(out.includes("eng_coder delivery:"))
   assert.equal(started[0].agentOptions.reasoningEffort, "high", "low 对 [off,high,max] 回落 high（off 不参与距离竞争，批 19）")
-  assert.ok(out.includes("is not supported by model glm-5.3-flash"), "note 经 warn 通道随工具返回可见")
+  assert.ok(out.includes("is not supported by model model-a-flash"), "note 经 warn 通道随工具返回可见")
   dropSession(sid)
 })
 
@@ -1403,7 +1403,7 @@ test("R1 接线 advisor dsh 主路径：effort 按路由模型解析（stream re
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
   const out = await runAdvisorReview(
     { llm },
-    { agent, config: { advisor: { round1: { provider: "qax", model: "glm-5.3-flash", effort: "low", timeoutMs: 300000 } } }, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+    { agent, config: { advisor: { round1: { provider: "acme", model: "model-a-flash", effort: "low", timeoutMs: 300000 } } }, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
   )
   assert.equal(streamOptsSeen[0].reasoningEffort, "high", "low 对 [off,high,max] 回落 high（off 不参与距离竞争，批 19）")
   assert.ok(out.includes("falling back to nearest supported effort"))
@@ -1427,7 +1427,7 @@ test("R1 接线 advisor 回落轮：回落模型 effort 按其实际档位解析
   const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args) : { events: [], exitCode: 1 })
   const sid = "r1-adv-fb"
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", effort: "medium" } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", effort: "medium" } } }
   const run = () => runAdvisorReview(
     { llm, spawn, platform: "linux", env: { CODEX_HOME: emptyHome } },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -1541,7 +1541,7 @@ test("R1 D-17: advisor 回落轮预算钳制（fbRoute.timeoutMs > budgetCap →
   const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args) : { events: [], exitCode: 1 })
   const sid = "r1-fb-clamp"
   const llm = { stream: () => (async function* () { await new Promise(() => { }) })() }
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "p", model: "m", timeoutMs: 900000 } }, codexCli: { budgetCapMs: 400 } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "p", model: "m", timeoutMs: 900000 } }, codexCli: { budgetCapMs: 400 } }
   const deps = { llm, spawn, platform: "linux", env: { CODEX_HOME: emptyHome } }
   await runDshReview(sid, llm, config, deps) // codex 失败 ×1
   await runDshReview(sid, llm, config, deps) // codex 失败 ×2
@@ -1665,7 +1665,7 @@ test("R2 escalate codex jobs: 预算>cap 且 jobs 可用 → 派发 + 句柄/UI-
     return { events: [{ data: JSON.stringify({ type: "thread.started", thread_id: "esc-job-t1" }) + "\n" }], exitCode: 0, outText: "did the work in background\n\nTouched files: lib/j.mjs" }
   })
   const { jobs, specs } = fakeJobsFactory()
-  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
   const sid = "esc-jobs-r2"
   const deps = makeEscDeps(sid, spawn, cfg)
   deps.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
@@ -1700,7 +1700,7 @@ test("R2 escalate codex jobs: 失败交付 → done failed 分支不簿记（D-2
     return { events: [], exitCode: 1, outText: "half-written report\nTouched files: lib/half.mjs" }
   })
   const { jobs, specs } = fakeJobsFactory()
-  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
   const sid = "esc-jobs-fail-r2"
   const deps = makeEscDeps(sid, spawn, cfg)
   deps.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
@@ -1721,7 +1721,7 @@ test("R2 escalate codex: jobs 缺失 → 同步钳制（900000 → budgetCap 540
     if (args.includes("--version")) return probeScript(args)
     return { events: [], exitCode: 0, outText: "sync did the work\n\nTouched files: none" }
   })
-  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
   const sid = "esc-jobs-missing-r2"
   const deps = makeEscDeps(sid, spawn, cfg) // ctx: {} → jobs 缺失
   const r = await captureWarn(() => runEscalate(deps, "x", undefined))
@@ -1738,7 +1738,7 @@ test("R2 D-04: followup 预算与首次同链——jobs 可用 → 全预算派�
     return { events: [{ data: JSON.stringify({ type: "thread.started", thread_id: "esc-d4-tid" }) + "\n" }], exitCode: 0, outText: "done\n\nTouched files: none" }
   })
   const { jobs, specs } = fakeJobsFactory()
-  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
   const sid = "esc-d4-r2"
   const deps = makeEscDeps(sid, spawn, cfg)
   deps.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
@@ -1812,7 +1812,7 @@ test("R2 eng_coder codex jobs: 预算>cap 且 jobs 可用 → 派发 + 句柄文
   const st = sessionState(sid)
   st.advisorRound = 2 // 有前置轮次 → 验证 done 内重置恰好一次
   st.lastAdvisorOutput = "prior review"
-  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath } })
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath } })
   const out = await runEngCoder(deps, { task: "implement x", designToken: token, docs: [] })
   assert.ok(out.includes("eng-codex-1"), "返回 branded string job 句柄: " + out.slice(0, 140))
   assert.ok(out.includes("等待完成通知后再继续"), "UI-2：等待完成通知的接续指令")
@@ -1847,7 +1847,7 @@ test("R2 eng_coder codex jobs D-20: 失败交付 → 不重置轮次/不置 muta
   st.advisorRound = 3
   st.lastAdvisorOutput = "prior review round 3"
   st.touchedFiles = ["src/existing.ts"]
-  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath } })
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath } })
   await runEngCoder(deps, { task: "implement y", designToken: token, docs: [] })
   const outcome = await specs[0].hooks.done
   assert.equal(outcome.status, "failed")
@@ -1871,7 +1871,7 @@ test("R2 eng_coder codex 同步降级 D-20: jobs 缺失 → 钳制同步执行�
   const st = sessionState(sid)
   st.advisorRound = 1
   st.lastAdvisorOutput = "prior"
-  const { deps, token } = makeEngDepsR2(sid, null, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath } })
+  const { deps, token } = makeEngDepsR2(sid, null, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath } })
   const r = await captureWarn(() => runEngCoder(deps, { task: "implement z", designToken: token, docs: [] }))
   assert.ok(r.value.includes("eng_coder ended: codex-cli NO_OUTPUT"), "同步降级路径失败诊断")
   assert.ok(r.value.includes("budgetCapMs=540000ms"), "钳制告警可见（1800000 → 540000）")
@@ -1919,7 +1919,7 @@ test("R2 D-06: single-flight 复合键 sessionId+mechanism——同机制在飞�
     return { events: [], exitCode: 0, outText: "ok\n\nTouched files: none" }
   })
   const { jobs, specs } = fakeJobsFactory()
-  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
   const sid = "sf-r2"
   const deps = makeEscDeps(sid, spawn, cfg)
   deps.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
@@ -1935,7 +1935,7 @@ test("R2 D-06: single-flight 复合键 sessionId+mechanism——同机制在飞�
   // 异机制（advisor）：批 21（FR-2 / D21-2）起 escalate 在飞 ⇒ **code 型评审**被跨机制护栏拒绝（错序评审窗口封堵——文本点名 job id）；design 型不受阻（AC-8，advisor-config 新腿见证）；复合键独立性对其余方向保持
   const { runAdvisorReview } = await import("../lib/advisor.mjs")
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 900000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, timeoutMs: 900000 } } }
   const outA = await runAdvisorReview(
     { llm: { stream: () => { throw new Error("must not be used") } }, spawn, platform: "linux", env: {}, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -1957,7 +1957,7 @@ test("R2 D-06: eng 机制槽位——eng 在飞时二次 eng_coder 被拒", asyn
   })
   const { jobs, specs } = fakeJobsFactory()
   const sid = "sf-eng-r2"
-  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath } })
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath } })
   const out1 = await runEngCoder(deps, { task: "implement a", designToken: token, docs: [] })
   assert.ok(out1.includes("eng-codex-1"))
   const out2 = await runEngCoder(deps, { task: "implement b while in flight", designToken: token, docs: [] })
@@ -1977,7 +1977,7 @@ test("R2 D-10: advisor jobs 派发后代际变更（eng 交付重置同款 bump�
   const { jobs, specs } = fakeJobsFactory()
   const sid = "adv-gen-r2"
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 900000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, timeoutMs: 900000 } } }
   const out = await runAdvisorReview(
     { llm: { stream: () => { throw new Error("must not be used") } }, spawn, platform: "linux", env: {}, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -2016,14 +2016,14 @@ test("R2 D-10: eng 交付簿记 bump 代际（真实链路：advisor 在飞 → 
   const sid = "gen-eng-chain-r2"
   // advisor 派发（在飞）
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-  const advConfig = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 900000 } } }
+  const advConfig = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, timeoutMs: 900000 } } }
   await runAdvisorReview(
     { llm: { stream: () => { throw new Error("must not be used") } }, spawn, platform: "linux", env: {}, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
     { agent, config: advConfig, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
   )
   const gen0 = advisorGenerationOf(sessionState(sid))
   // eng_coder codex 交付（同 jobs 设施，任务快退）→ deliverBookkeeping 内 bumpAdvisorGeneration
-  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath } })
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath } })
   await runEngCoder(deps, { task: "implement x", designToken: token, docs: [] })
   const engOutcome = await specs[1].hooks.done
   assert.equal(engOutcome.status, "completed")
@@ -2133,7 +2133,7 @@ test("R2 D-16: 派发时 budgetCapMs ≥ 600000 → 句柄文本附不变式提�
     return { events: [], exitCode: 0, outText: "ok\n\nTouched files: none" }
   })
   const { jobs, specs } = fakeJobsFactory()
-  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath, budgetCapMs: 700000 } }
+  const cfg = { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }], codexCli: { executable: process.execPath, budgetCapMs: 700000 } }
   const sid = "d16-r2"
   const deps = makeEscDeps(sid, spawn, cfg)
   deps.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
@@ -2148,7 +2148,7 @@ test("R2 D-16: 派发时 budgetCapMs ≥ 600000 → 句柄文本附不变式提�
   // 对照：默认 budgetCap 540000 < 600000 → 无提醒
   const { jobs: jobs2, specs: specs2 } = fakeJobsFactory()
   const sid2 = "d16-none-r2"
-  const deps2 = makeEscDeps(sid2, spawn, { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } })
+  const deps2 = makeEscDeps(sid2, spawn, { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } })
   deps2.ctx = { get: (svc) => (svc === "jobs" ? jobs2 : null) }
   const out2 = await runEscalate(deps2, "x", undefined)
   assert.ok(out2.includes("escalate-codex-1"))
@@ -2224,7 +2224,7 @@ test("R2 D-22: consult 子代理 run 补 dispose（回复 settle 后释放，不
   const state = sessionState(sid)
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] } }
   const r = await startConsultSession(
-    { ctx, agent, config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "low" }] }, state, dshHome: mkdtempSync(join(tmpdir(), "b15-home-")) },
+    { ctx, agent, config: { consultModels: [{ provider: "acme", model: "model-a", effort: "low" }] }, state, dshHome: mkdtempSync(join(tmpdir(), "b15-home-")) },
     "problem brief", undefined,
   )
   const digest = await consultDigestOf(state, r.id)
@@ -2255,7 +2255,7 @@ test("R2 D-22: codexFailureCount 会话销毁清理（session/disposed 清理组
     const llm = { stream: () => (async function* () { yield { type: "block-end", block: { type: "text", text: "DSH REVIEW" } }; yield { type: "finish", reason: { kind: "stop" } } })() }
     const sid = "d22-fc-r2"
     const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-    const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "p", model: "m" } } }
+    const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "p", model: "m" } } }
     const run = () => runAdvisorReview({ llm, spawn, platform: "linux", env: {} }, { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
     await run() // codex 失败 ×1 → codexFailureCount=1
     await run() // codex 失败 ×2 → codexFailureCount=2（回落阈值）
@@ -2313,7 +2313,7 @@ test("R2 DP-1 方案 A: escalate dsh 子代理路径内部截止——run.result
     llm: ladderLlm(["low"]),
     subagents: hangingRunSpy(started),
   }
-  const cfg = { consultModels: [{ provider: "qax", model: "glm-5.3" }], codexCli: { budgetCapMs: 250 } }
+  const cfg = { consultModels: [{ provider: "acme", model: "model-a" }], codexCli: { budgetCapMs: 250 } }
   const sid = "dp1-esc-r2"
   const deps = {
     ctx, agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
@@ -2341,7 +2341,7 @@ test("R2 DP-1 方案 A: eng_coder dsh 子代理路径内部截止——run.resul
   st.advisorRound = 2
   st.lastAdvisorOutput = "prior review"
   const token = makeEngToken(st)
-  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "glm-5.3" } }
+  const agent = { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "acme", model: "model-a" } }
   const out = await runEngCoder(
     {
       ctx: { subagents: hangingRunSpy(started), llm: ladderLlm(["low"]) },
@@ -2375,7 +2375,7 @@ test("R2 R1折入: escalate effort-note 前缀统一 \\n\\n[thincoder-suite]（�
   const deps = {
     ctx,
     agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
-    config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "medium" }] },
+    config: { consultModels: [{ provider: "acme", model: "model-a", effort: "medium" }] },
     state: sessionState(sid), signal: undefined,
     spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {},
   }
@@ -2394,7 +2394,7 @@ test("R2 R1折入: escalate effort-note 前缀统一 \\n\\n[thincoder-suite]（�
 
 test("R2 R1折入: advisor codex 行 resolveCodexCliGlobals warnings 并入 route.warnings（非法 codexCi 值运行时响亮告警）", () => {
   const cfg = {
-    advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" } } },
+    advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" } } },
     codexCli: { proxyMode: "sideway", defaultTimeoutMs: 1, model: "  " },
   }
   const r = resolveAdvisorRoute({ config: cfg, override: null, agentOpts: {}, advisorRound: 0 })
@@ -2491,7 +2491,7 @@ test("R2 §4.7-8 US-3: job_output 保尾截断（头部丢弃 + [output truncate
   const { jobs, specs } = fakeJobsFactory()
   const sid = "us3-token-r2"
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 900000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, timeoutMs: 900000 } } }
   const out = await runAdvisorReview(
     { llm: { stream: () => { throw new Error("must not be used") } }, spawn, platform: "linux", env: {}, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
     { agent, config, reviewType: "design", documents: ["docs/2026-09-05-defect-remediation-design.md"], signal: undefined, configDefaultEngineering: false },
@@ -2552,7 +2552,7 @@ test("R3 D-07 活锁封顶: codex 败×2 → 回落败×2 → 硬停（双路由
   }
   const sid = "r3-d07-livelock"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", timeoutMs: 300000 } } }
   const run = (cfg) => runAdvisorReview(
     { llm, spawn, platform: "linux", env: {} },
     { agent, config: cfg ?? config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -2576,9 +2576,9 @@ test("R3 D-07 活锁封顶: codex 败×2 → 回落败×2 → 硬停（双路由
   assert.ok(r4.startsWith("Advisor: 回落硬停"), "连续 2 次回落失败 → 硬停文本（不经 finalize——无 warnPrefix）")
   assert.ok(r4.includes("双路由皆不可用"), "硬停声明：双路由皆不可用")
   assert.ok(r4.includes("不再交替重试"), "D-裁决-3：终止自愈循环")
-  assert.ok(r4.includes("codex 路由: runner=codex-cli model=gpt-5.6-sol"), "codex 路由诊断（配置状态）")
+  assert.ok(r4.includes("codex 路由: runner=codex-cli model=codex-model-a"), "codex 路由诊断（配置状态）")
   assert.ok(r4.includes("最近失败码: PROCESS_ERROR"), "codex 最近失败码")
-  assert.ok(r4.includes("dsh 回落路由: qax:glm-5.3"), "dsh 回落路由诊断（配置状态）")
+  assert.ok(r4.includes("dsh 回落路由: acme:model-a"), "dsh 回落路由诊断（配置状态）")
   assert.ok(r4.includes("fb route down"), "dsh 回落最近失败原因可见")
   assert.ok(r4.includes("网络/代理"), "修正指引：网络/代理")
   assert.ok(r4.includes("runner 切换"), "修正指引：runner 切换")
@@ -2596,7 +2596,7 @@ test("R3 D-07 硬停持续: armed 后同会话后续调用持续返回硬停指�
   const llm = { stream() { llmCalls.n++; return (async function* () { throw new Error("fb route down") })() } }
   const sid = "r3-d07-held"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", timeoutMs: 300000 } } }
   const run = (cfg) => runAdvisorReview(
     { llm, spawn, platform: "linux", env: {} },
     { agent, config: cfg ?? config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -2612,7 +2612,7 @@ test("R3 D-07 硬停持续: armed 后同会话后续调用持续返回硬停指�
   assert.equal(sessionState(sid).advisorRound, 0, "held 不烧轮次")
 
   // 配置变更（round1.provider 变化 → 路由指纹失配）→ 硬停自动解除 → 常规执行恢复
-  const cfg2 = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax-fixed", model: "glm-5.3", timeoutMs: 300000 } } }
+  const cfg2 = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme-fixed", model: "model-a", timeoutMs: 300000 } } }
   const r6 = await run(cfg2)
   assert.ok(!r6.includes("回落硬停"), "配置变更 → 硬停解除")
   assert.ok(r6.includes("codex-cli PROCESS_ERROR"), "恢复常规执行（codex 重试——计数已随解除清零）")
@@ -2626,7 +2626,7 @@ test("R3 D-07 硬停解除（会话重置）: clearCodexFailureCount 清双计�
   const llm = { stream() { return (async function* () { throw new Error("fb route down") })() } }
   const sid = "r3-d07-reset"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", timeoutMs: 300000 } } }
   const run = () => runAdvisorReview(
     { llm, spawn, platform: "linux", env: {} },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -2657,7 +2657,7 @@ test("R3 D-07 delete-after-result 顺序（正向）: 回落成功 → 结果产
   }
   const sid = "r3-d07-reset-pos"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", timeoutMs: 300000 } } }
   const run = () => runAdvisorReview(
     { llm, spawn, platform: "linux", env: {} },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -2679,7 +2679,7 @@ test("R3 D-07 回落路由不可达组合: codex 败×2 + 回落不可达×2 →
   const { spawn, execCalls } = r3FailingCodexSpawn()
   const sid = "r3-d07-noroute"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" } } } } // 无 dsh 回落路由
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" } } } } // 无 dsh 回落路由
   const run = () => runAdvisorReview(
     { llm: { stream: () => { throw new Error("llm must not be called") } }, spawn, platform: "linux", env: {} },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -2784,7 +2784,7 @@ test("R3 D-01×D-07 交互: 回落轮空响应（重试后仍空）= 回落失�
   }
   const sid = "r3-d01x07"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", timeoutMs: 300000 } } }
   const run = () => runAdvisorReview(
     { llm, spawn, platform: "linux", env: {} },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -2820,7 +2820,7 @@ test("R3 D-19 prior 纯净化: 回落成功轮 lastAdvisorOutput 只存评审正
   }
   const sid = "r3-d19-prior"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", effort: "medium" } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", effort: "medium" } } }
   const run = () => runAdvisorReview(
     { llm, spawn, platform: "linux", env: { CODEX_HOME: emptyHome } },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -2853,7 +2853,7 @@ test("R3 D-19 prior 纯净化（dsh 主路径）: effort note 后缀不进 lastA
       })()
     },
   }
-  const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "qax", model: "glm-5.3", effort: "medium", timeoutMs: 300000 } } })
+  const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "acme", model: "model-a", effort: "medium", timeoutMs: 300000 } } })
   assert.ok(out.includes("falling back to nearest supported effort"), "返回文本仍含 effort note 后缀")
   assert.ok(out.includes("| 1 | a | b |"), "正文交付")
   const prior = sessionState(sid).lastAdvisorOutput
@@ -2912,7 +2912,7 @@ test("R3 D-19 looksLikeReview 阈值修正: 短正文 + 长机制后缀 → prio
   }
   const sid = "r3-d19-threshold"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3" } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a" } } }
   const run = () => runAdvisorReview(
     { llm, spawn, platform: "linux", env: { CODEX_HOME: emptyHome } },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -2945,7 +2945,7 @@ test("R3 D-07 正向清零（验收⑥）: 回落成功后双计数器归零—�
   }
   const sid = "r3-d07-reset-six"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", timeoutMs: 300000 } } }
   const run = () => runAdvisorReview(
     { llm, spawn, platform: "linux", env: {} },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -2973,7 +2973,7 @@ test("R3 D-06 同步路径单飞（验收⑦）: advisor >cap job 在飞期间 �
   const { jobs, specs } = fakeJobsFactory()
   const sid = "r3-d06-sync"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 900000 } } } // >cap → jobs 派发
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, timeoutMs: 900000 } } } // >cap → jobs 派发
   const deps = {
     llm: { stream: () => { throw new Error("must not be used") } },
     spawn, platform: "linux", env: {},
@@ -2987,8 +2987,8 @@ test("R3 D-06 同步路径单飞（验收⑦）: advisor >cap job 在飞期间 �
   //（组配 round1+convergence 同形：首个 jobs 评审 completed 烧轮后路由键转 convergence 组）
   const configSync = {
     advisor: {
-      round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 300000 },
-      convergence: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, timeoutMs: 300000 },
+      round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, timeoutMs: 300000 },
+      convergence: { runner: { kind: "codex-cli", model: "codex-model-a" }, timeoutMs: 300000 },
     },
   }
   const r2 = await runAdvisorReview(deps, { agent, config: configSync, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
@@ -2999,7 +2999,7 @@ test("R3 D-06 同步路径单飞（验收⑦）: advisor >cap job 在飞期间 �
   assert.equal(specs.length, 1, "无第二个 job 派发")
 
   // 在飞期间：dsh 主路径调用同样被拒（同机制任意路由——无入口例外；若未拒会调用 llm 抛错）
-  const configDsh = { advisor: { round1: { provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const configDsh = { advisor: { round1: { provider: "acme", model: "model-a", timeoutMs: 300000 } } }
   const rDsh = await runAdvisorReview(deps, { agent, config: configDsh, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false })
   assert.ok(rDsh.startsWith("Error"), "dsh 主路径调用在飞期间同样被拒（机制级单飞）")
   assert.ok(rDsh.includes("advisor-codex-1"), "拒绝文本含在飞 job id")
@@ -3028,14 +3028,14 @@ test("R3 D-06 补丁轮 escalate: >cap job 在飞期间 ≤cap codex 同步调�
   const { jobs, specs } = fakeJobsFactory()
   const sid = "r3-d06-esc-sync"
   // 首次：>cap 预算（900000 > 默认 budgetCap 540000）→ jobs 后台派发并占位 escalate 槽位
-  const cfgOver = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const cfgOver = { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
   const deps1 = makeEscDeps(sid, spawn, cfgOver)
   deps1.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
   const out1 = await runEscalate(deps1, "first long task", undefined)
   assert.ok(out1.includes("escalate-codex-1"), ">cap 首次派发后台 job（占位 escalate 槽位）")
   assert.equal(specs.length, 1)
   // 在飞期间：≤cap 同步预算调用（codex 行 300000 ≤ cap）被拒——R2 只覆盖派发入口，补丁轮提前到机制入口
-  const cfgSync = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 300000 } }], codexCli: { executable: process.execPath } }
+  const cfgSync = { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 300000 } }], codexCli: { executable: process.execPath } }
   const deps2 = makeEscDeps(sid, spawn, cfgSync)
   deps2.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
   const out2 = await runEscalate(deps2, "short task while in flight", undefined)
@@ -3066,14 +3066,14 @@ test("R3 D-06 补丁轮 escalate: >cap job 在飞期间 dsh 子代理路径调�
   })
   const { jobs, specs } = fakeJobsFactory()
   const sid = "r3-d06-esc-dsh"
-  const cfgOver = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const cfgOver = { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
   const deps1 = makeEscDeps(sid, spawn, cfgOver)
   deps1.ctx = { get: (svc) => (svc === "jobs" ? jobs : null) }
   const out1 = await runEscalate(deps1, "first long task", undefined)
   assert.ok(out1.includes("escalate-codex-1"), ">cap 首次派发后台 job（占位 escalate 槽位）")
   // 在飞期间：dsh 行（非 codex runner）调用同样被拒——若未拒将走 dsh 分支触碰 llm/subagents
   let dshTouched = false
-  const cfgDsh = { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "medium" }] }
+  const cfgDsh = { consultModels: [{ provider: "acme", model: "model-a", effort: "medium" }] }
   const deps2 = makeEscDeps(sid, spawn, cfgDsh)
   deps2.ctx = {
     get: (svc) => (svc === "jobs" ? jobs : null),
@@ -3100,12 +3100,12 @@ test("R3 D-06 补丁轮 eng: >cap job 在飞期间 ≤cap codex 同步调用被�
   const { jobs, specs } = fakeJobsFactory()
   const sid = "r3-d06-eng-sync"
   // 首次：默认 30min 预算（1800000 > 默认 budgetCap 540000）→ jobs 后台派发并占位 eng 槽位
-  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath }, engCoderEffort: "off" })
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath }, engCoderEffort: "off" })
   const out1 = await runEngCoder(deps, { task: "implement a (long)", designToken: token, docs: [] })
   assert.ok(out1.includes("eng-codex-1"), ">cap 首次派发后台 job（占位 eng 槽位）")
   assert.equal(specs.length, 1)
   // 在飞期间：≤cap 同步预算（defaultTimeoutMs=300000 ≤ cap）调用被拒——入口即拒，runCodexTask 未被触碰
-  const { deps: deps2, token: token2 } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath, defaultTimeoutMs: 300000 }, engCoderEffort: "off" })
+  const { deps: deps2, token: token2 } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath, defaultTimeoutMs: 300000 }, engCoderEffort: "off" })
   const out2 = await runEngCoder(deps2, { task: "implement b (short) while in flight", designToken: token2, docs: [] })
   assert.ok(out2.startsWith("Error"), "≤cap 同步调用在飞期间被拒（D-06 扩展：eng 全入口单飞）")
   assert.ok(out2.includes("eng-codex-1"), "拒绝文本含在飞 job id")
@@ -3131,7 +3131,7 @@ test("R3 D-06 补丁轮 eng: >cap job 在飞期间 dsh 子代理路径调用被�
   })
   const { jobs, specs } = fakeJobsFactory()
   const sid = "r3-d06-eng-dsh"
-  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath }, engCoderEffort: "off" })
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath }, engCoderEffort: "off" })
   const out1 = await runEngCoder(deps, { task: "implement a (long)", designToken: token, docs: [] })
   assert.ok(out1.includes("eng-codex-1"), ">cap 首次派发后台 job（占位 eng 槽位）")
   // 在飞期间：dsh 后端（engCoderRunner 未配）调用同样被拒——若未拒将走 dsh 分支触碰 subagents
@@ -3186,7 +3186,7 @@ test("R4 R3收尾②: escalate dsh 超时竞态分支补 codexFailureAdvisory—
   const sid = "r4-esc-race"
   const deps = {
     ctx, agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
-    config: { consultModels: [{ provider: "qax", model: "glm-5.3" }], codexCli: { budgetCapMs: 250 } },
+    config: { consultModels: [{ provider: "acme", model: "model-a" }], codexCli: { budgetCapMs: 250 } },
     state: sessionState(sid), signal: undefined,
     spawn: () => { throw new Error("codex must not spawn for a dsh row") }, platform: "linux", env: {},
   }
@@ -3209,7 +3209,7 @@ test("R4 R3收尾③: clearCodexFailureCount 更名 clearAdvisorRouteFailureStat
   const llm = { stream() { return (async function* () { throw new Error("fb route down") })() } }
   const sid = "r4-rename-alias"
   const agent = r3Agent(sid)
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 300000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", timeoutMs: 300000 } } }
   const run = () => runAdvisorReview(
     { llm, spawn, platform: "linux", env: {} },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -3240,17 +3240,17 @@ test("R4 D-13: advisor_config set/reset runner——白名单接受（normalizeR
   assert.ok(out.startsWith("advisor_config: set round1.runner"), "runner 进入可设路径: " + out)
   assert.deepEqual(state.advisorOverride.round1.runner, { kind: "codex-cli" }, "字符串简写 → 归一化结构")
   // 对象形态（model/effort 字段级校验 + 透传）
-  out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":{"kind":"codex-cli","model":"gpt-5.6-sol","effort":"high"}}', deps)
+  out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":{"kind":"codex-cli","model":"codex-model-a","effort":"high"}}', deps)
   assert.ok(out.startsWith("advisor_config: set round1.runner"))
-  assert.deepEqual(state.advisorOverride.round1.runner, { kind: "codex-cli", model: "gpt-5.6-sol", effort: "high" })
+  assert.deepEqual(state.advisorOverride.round1.runner, { kind: "codex-cli", model: "codex-model-a", effort: "high" })
   // 字符串 "dsh" → 显式切回 dsh（回落硬停修正指引 2 的通道）
   out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":"dsh"}', deps)
   assert.deepEqual(state.advisorOverride.round1.runner, { kind: "dsh" }, "dsh 显式回切（非 codex 分支，回落既有链）")
   // 面三（resolve 链消费）：override runner=codex-cli → codex 路由生效
-  state.advisorOverride.round1.runner = { kind: "codex-cli", model: "gpt-5.6-sol" }
+  state.advisorOverride.round1.runner = { kind: "codex-cli", model: "codex-model-a" }
   const route = resolveAdvisorRoute({ config: deps.config, override: state.advisorOverride, agentOpts: {}, advisorRound: 0 })
   assert.equal(route.provider, "codex-cli", "会话覆盖 runner 真正生效（codex 分支——一期已支持，工具面今通）")
-  assert.equal(route.model, "gpt-5.6-sol")
+  assert.equal(route.model, "codex-model-a")
   // reset 清除
   out = runAdvisorConfigTool('{"action":"reset","path":"round1"}', deps)
   assert.ok(out.startsWith("advisor_config: reset round1"))
@@ -3276,21 +3276,21 @@ test("R4 D-13: runner 会话覆盖持久化往返——set runner → 落盘 →
     const state = sessionState(sid)
     const deps = { config: {}, agentOpts: {}, state, sessionId: sid }
     // 面 1：advisor_config 工具 set（归一化结构入 override）
-    const out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":{"kind":"codex-cli","model":"gpt-5.6-sol"}}', deps)
+    const out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":{"kind":"codex-cli","model":"codex-model-a"}}', deps)
     assert.ok(out.startsWith("advisor_config: set round1.runner"), "set 成功: " + out)
     // 面 2：落盘（index.mjs advisor_config set 写点的同一视图链路：sessionStateViewWithGeneration）
     assert.ok(saveSessionState(sid, sessionStateViewWithGeneration(state), home), "落盘成功")
     const entry = JSON.parse(readFileSync(resolveSessionStorePath(home), "utf8")).sessions[sid]
-    assert.deepEqual(entry.advisorOverride.round1.runner, { kind: "codex-cli", model: "gpt-5.6-sol" },
+    assert.deepEqual(entry.advisorOverride.round1.runner, { kind: "codex-cli", model: "codex-model-a" },
       "持久化白名单保留 runner（D-13：此前 sanitizeAdvisorOverride 丢弃——重启即失）")
     // 模拟重启：loadSessionState（normalizeRestored）→ runner 仍在
     const snap = loadSessionState(sid, home)
-    assert.deepEqual(snap.advisorOverride.round1.runner, { kind: "codex-cli", model: "gpt-5.6-sol" }, "恢复侧 runner 保留")
+    assert.deepEqual(snap.advisorOverride.round1.runner, { kind: "codex-cli", model: "codex-model-a" }, "恢复侧 runner 保留")
     // 面 3：恢复的 override 继续被解析链消费（往返闭合）
     const route = resolveAdvisorRoute({ config: {}, override: snap.advisorOverride, agentOpts: {}, advisorRound: 0 })
     assert.equal(route.ok, true)
     assert.equal(route.provider, "codex-cli", "恢复的 runner 继续生效（codex 路由）")
-    assert.equal(route.model, "gpt-5.6-sol")
+    assert.equal(route.model, "codex-model-a")
     dropSession(sid)
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -3317,7 +3317,7 @@ test("R4 R1审计🔵①: 接线级 fail-open — escalate dsh 行元数据不�
   const sid = "r4-failopen-esc"
   const deps = {
     ctx, agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
-    config: { consultModels: [{ provider: "qax", model: "glm-5.3", effort: "high" }] },
+    config: { consultModels: [{ provider: "acme", model: "model-a", effort: "high" }] },
     state: sessionState(sid), signal: undefined,
     spawn: () => { throw new Error("codex must not spawn for a dsh row") }, platform: "linux", env: {},
   }
@@ -3342,7 +3342,7 @@ test("R4 R1审计🔵①: 接线级 fail-open — advisor dsh 主路径元数据
     },
   }
   const r = await captureWarn(() => runDshReview(sid, llm, {
-    advisor: { round1: { provider: "qax", model: "glm-5.3", effort: "high", timeoutMs: 300000 } },
+    advisor: { round1: { provider: "acme", model: "model-a", effort: "high", timeoutMs: 300000 } },
   }))
   assert.equal(streamOptsSeen[0].reasoningEffort, "high", "接线级：effort 原样透传进 stream opts（元数据缺失不拦截）")
   assert.ok(r.value.includes("passed through unverified"), "透传 note 入结果尾部")
@@ -3398,7 +3398,7 @@ test("R4 收尾 #4: advisor jobs 派发路径 warnPrefix 并入派发文本—�
   const sid = "jobs-warnprefix-r4"
   const agent = { session: { id: sid, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
   // 组内 runner + 显式 provider/model 并存 → route.warnings 非空（「被忽略」告警）；timeoutMs > budgetCap → jobs 派发
-  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "gpt-5.6-sol" }, provider: "qax", model: "glm-5.3", timeoutMs: 900000 } } }
+  const config = { advisor: { round1: { runner: { kind: "codex-cli", model: "codex-model-a" }, provider: "acme", model: "model-a", timeoutMs: 900000 } } }
   const out = await runAdvisorReview(
     { llm: { stream: () => { throw new Error("must not be used") } }, spawn, platform: "linux", env: {}, ctx: { get: (svc) => (svc === "jobs" ? jobs : null) } },
     { agent, config, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
@@ -4077,7 +4077,7 @@ test("R6 ③⑤(D-26): eng 单飞拒绝返回带 warnPrefix 前缀 + F10 盘回�
   const spawn = fakeSpawnFactory((args) => args.includes("--version") ? probeScript(args) : { events: [], exitCode: 0, outText: "implemented\n\nTouched files: none" })
   const { jobs, specs } = fakeJobsFactory()
   const sid = "r6-eng-sf-prefix"
-  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath }, engCoderEffort: "off" })
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath }, engCoderEffort: "off" })
   const out1 = await runEngCoder(deps, { task: "implement a (long)", designToken: token, docs: [] })
   assert.ok(out1.includes("eng-codex-1"), ">cap 首次派发（占位 eng 槽位）")
   const out2 = await runEngCoder(deps, { task: "tweak stage 2 logic while in flight", designToken: token, docs: [] })
@@ -4142,7 +4142,7 @@ test("R6 ④⑥⑦(D-26): 空输出归类统一（交付行共用 (empty report)
   const gen0 = advisorGenerationOf(st)
   const token = makeEngToken(st)
   const out = await runEngCoder(
-    { ctx: { subagents: subOf([{ type: "text", text: "implemented\n\nTouched files: src/r6.ts" }]) }, agent: { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "glm-5.3" } }, config: {}, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
+    { ctx: { subagents: subOf([{ type: "text", text: "implemented\n\nTouched files: src/r6.ts" }]) }, agent: { session: { id: sid, header: { cwd: tmpdir() } }, options: { provider: "acme", model: "model-a" } }, config: {}, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
     { task: "implement x", designToken: token, docs: [] },
   )
   assert.ok(out.includes("eng_coder delivery:") && out.includes("implemented"), "dsh 同步交付")
@@ -4161,7 +4161,7 @@ test("R6 ④⑥⑦(D-26): 空输出归类统一（交付行共用 (empty report)
   st3.advisorRound = 1
   const token2 = makeEngToken(st3)
   const out2 = await runEngCoder(
-    { ctx: { subagents: subOf([]) }, agent: { session: { id: sid2, header: { cwd: tmpdir() } }, options: { provider: "qax", model: "glm-5.3" } }, config: {}, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
+    { ctx: { subagents: subOf([]) }, agent: { session: { id: sid2, header: { cwd: tmpdir() } }, options: { provider: "acme", model: "model-a" } }, config: {}, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
     { task: "implement y (empty delivery)", designToken: token2, docs: [] },
   )
   assert.ok(out2.includes("eng_coder delivery:"), "空输出仍按交付归类（不翻转为失败类别）")
@@ -4237,7 +4237,7 @@ test("R6 ⑧⑨⑩(D-26): dsh 后台兜底超时信封 ABORTED 触发回滚指�
     if (args.includes("--version")) return probeScript(args)
     return { events: [{ data: JSON.stringify({ type: "thread.started", thread_id: "r6-esc-tid" }) + "\n" }], exitCode: 0, outText: "first delivery\n\nTouched files: none" }
   })
-  const cfg9 = { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
+  const cfg9 = { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }], codexCli: { executable: process.execPath } }
   const sid9 = "r6-esc-reject-cleanup"
   const { jobs: jobs9, specs: specs9 } = fakeJobsFactory()
   const deps9 = makeEscDeps(sid9, spawn9, cfg9)
@@ -4248,7 +4248,7 @@ test("R6 ⑧⑨⑩(D-26): dsh 后台兜底超时信封 ABORTED 触发回滚指�
   assert.equal(oc9a.status, "completed", "首次交付成功 → codexThreads.set(threadId)")
   let mcAccess = 0
   const poisoned = {
-    consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol", timeoutMs: 900000 } }],
+    consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }],
     codexCli: {
       executable: process.execPath,
       get maxConcurrent() { if (++mcAccess >= 2) throw new Error("boom-r6"); return undefined },
@@ -4316,7 +4316,7 @@ test("R6 微修③: eng/escalate codex jobs 派发返回并入配置告警（war
   })
   const { jobs, specs } = fakeJobsFactory()
   const sid = "eng-dispatch-warn-r6"
-  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "gpt-5.6-sol", executable: process.execPath, defaultTimeoutMs: "bad" } })
+  const { deps, token } = makeEngDepsR2(sid, jobs, spawn, { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath, defaultTimeoutMs: "bad" } })
   const out = await runEngCoder(deps, { task: "implement x", designToken: token, docs: [] })
   assert.ok(out.includes("eng-codex-1"), "派发正常（非法 defaultTimeoutMs 回落 1800000ms > cap）")
   assert.ok(out.includes("[thincoder-suite] warning: codexCli.defaultTimeoutMs 非法，回落 1800000ms"), "③：配置告警并入派发文本")
@@ -4331,7 +4331,7 @@ test("R6 微修③: eng/escalate codex jobs 派发返回并入配置告警（war
   })
   const { jobs: jobs2, specs: specs2 } = fakeJobsFactory()
   const sid2 = "esc-dispatch-warn-r6"
-  const deps2 = makeEscDeps(sid2, spawn2, { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-5.6-sol" } }], codexCli: { executable: process.execPath, defaultTimeoutMs: "bad" } })
+  const deps2 = makeEscDeps(sid2, spawn2, { consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a" } }], codexCli: { executable: process.execPath, defaultTimeoutMs: "bad" } })
   deps2.ctx = { get: (svc) => (svc === "jobs" ? jobs2 : null) }
   const out2 = await runEscalate(deps2, "fix the bug", undefined)
   assert.ok(out2.includes("escalate-codex-1"), "派发正常（非法 defaultTimeoutMs 回落 600000ms > cap）")
@@ -4982,7 +4982,7 @@ test("批 21 AC-2: escalate 工具入口省略 background ⇒ 派后台 job（�
   const hold = b21HoldJobs("escalate-dsh-ac2")
   const spawned = []
   const { tools } = await b21ToolRegistry(
-    { consultModels: [{ provider: "qax", model: "glm-5.3" }] },
+    { consultModels: [{ provider: "acme", model: "model-a" }] },
     { jobs: hold.jobs, subagents: b21Subagents(spawned) },
   )
   const tool = tools.get("escalate")
@@ -5004,7 +5004,7 @@ test("批 21 AC-3 (escalate 侧): 显式 background=false ⇒ 同步快路径（
   const hold = b21HoldJobs("escalate-dsh-must-not-dispatch")
   const spawned = []
   const { tools } = await b21ToolRegistry(
-    { consultModels: [{ provider: "qax", model: "glm-5.3" }] },
+    { consultModels: [{ provider: "acme", model: "model-a" }] },
     { jobs: hold.jobs, subagents: b21Subagents(spawned) },
   )
   const agent = { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } }
@@ -5021,7 +5021,7 @@ test("批 21 AC-5 (escalate 侧): ctx.jobs 缺失 ⇒ 告警随工具返回可�
   const sid = "b21-ac5-esc"
   const spawned = []
   const { tools } = await b21ToolRegistry(
-    { consultModels: [{ provider: "qax", model: "glm-5.3" }] },
+    { consultModels: [{ provider: "acme", model: "model-a" }] },
     { jobs: null, subagents: b21Subagents(spawned) },
   )
   const agent = { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } }
