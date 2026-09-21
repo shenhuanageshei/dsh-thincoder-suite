@@ -83,7 +83,7 @@
 - `DELETE /thincoder-suite/api/config` → 清 user 层（恢复 base）。
 - `POST /thincoder-suite/api/apply-session` → body `{ sessionId, advisor }`——**只写 advisor 子集**（round1/convergence/includeProjectGuide，§3.1 白名单；consultModels/engCoder 字段仅全局层，不写会话——评审 #4）；sessionId 无对应会话 → `{ ok:false, reason:'no-session' }`（纳入验收 U8）。
 - `DELETE /thincoder-suite/api/session`（query `sessionId`）→ 删该会话 `advisorOverride`（恢复会话默认，与 apply-session 对称）。
-- handler 鉴权：loopback 信任模型（与 super-injector api 同款，本机 GUI）——记录于风险。
+- handler 鉴权：**宿主信任栅栏**（`ctx.get("connection").requestRejection(req)`：Host/Origin 栅栏 ⇒ 403、浏览器会话鉴权 ⇒ 401；服务不可核验 ⇒ **503 fail-closed** + warn-once，绝不放行）。〔2026-09-21 批 22 订正：原写「loopback 信任模型（与 super-injector api 同款，本机 GUI）」——该前提**实测证伪**：loopback 挡不住浏览器（rebinding 后同源 ⇒ 响应可读），见本文 §6 风险条。〕
 
 ### 3.3 client：lib/client.js（新，手写 CJS，零构建）
 
@@ -158,6 +158,6 @@
 ## 6. 风险与回滚
 
 - **user 层与 entry base 分叉**：base 是启动快照——保存 user 层后，改 cordis.patch.yml 需重启（现状不变）；两层关系 README 说明。
-- **webServer 路由无鉴权**：loopback 信任模型（同 super-injector 既有 api）；如远程暴露需加鉴权（记录）。
+- **webServer 路由鉴权（2026-09-21 批 22 订正，原为「无鉴权 / loopback 信任模型」）**：`/thincoder-suite/api/*` 的全部端点先过宿主 `connection.requestRejection`——Host/Origin 栅栏（403，挡 DNS rebinding 与跨站）⊕ 浏览器会话鉴权（401）；`connection` 取不到 ⇒ **503 fail-closed**，绝不放行。原前提「绑 loopback 即安全、只有远程暴露才需鉴权」**实测证伪**：loopback 挡不住浏览器（rebinding 后同源 ⇒ 响应可读）；被援引的先例 `dsh-super-injector` 的 prefix 路由（真路由 = `lib/index.js:9633-9635` 的 `/super-injector/api`）是**同款缺陷**，不是安全范本——但该插件在本部署**未装配**（活体探测 ⇒ 404）⇒ **零实况暴露**。该插件**非本仓所有且已不启用**（用户 2026-09-21 裁定）⇒ **不在本仓跟踪范围**，本档只登记事实、不承担前置义务。
 - **client 手写 CJS 与宿主契约漂移**：dsh-client-modules 升级可能改 wrapper 契约——实施确认项 3 实证 + 冒烟兜底。
 - **回滚**：config.json 删除即回纯 base 行为；client 代码 git 回退。

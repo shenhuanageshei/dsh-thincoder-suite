@@ -2,6 +2,25 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.29.1] — 2026-09-21
+
+> **一句话**：设置页的配置 API 补上了一道**一直缺的门**——它此前**谁都能进**（实测：无 token `GET /config` ⇒ 200 并回吐完整配置与本地绝对路径，`Host: evil.example` 也 ⇒ 200），现在跟 DSH 其它路由一样，先过宿主的 Host/Origin 栅栏与浏览器会话鉴权。 **本版改 `lib/**` ⇒ 重启 DSH 后生效。**
+
+**批 22（D-39：webServer 路由接入宿主信任栅栏 · 安全修复）**
+
+- **【计数行】**：`node --test` **516/516**（**基线 509 + 本批 7**）。⇒ 台账 §三：`config-api.test.mjs` **26 → 33**（新增 **7** 条栅栏回归腿；档数 21 不变）。
+- **立项形态（父侧 2026-09-21 实测，全部只读探针）**：`GET /thincoder-suite/api/config` **无 token ⇒ 200**（回吐完整配置，含 `advisor.standardsDoc` / `documentMapDoc` 等**本地绝对路径**）· `GET /catalog` ⇒ 200（provider/model 表）· `Host: evil.example` 仍 ⇒ **200**；写路径同样无门（`PUT` 非法 JSON ⇒ **400 而非 401** = 请求已进 handler）。**对照**：同一 webServer、同一进程上的核心路由 ⇒ 401、内置插件路由 `/open-in-app/apps` ⇒ **401 / 403** ⇒ 不是平台能力缺失，是路由所有者漏做一步。**「绑 loopback 所以安全」这个前提是错的**：loopback 挡不住浏览器（缺 Host 栅栏时恶意页可用 DNS rebinding 同源化 ⇒ 响应可读）。
+- **修法（一处：handler 的第一件事）**：handler 闭包首部先取宿主 `connection.requestRejection(req)`——403（Host/Origin 栅栏，挡 DNS rebinding 与跨站）/ 401（浏览器会话鉴权）**原样透传**，**undefined 才进既有业务逻辑**；服务取不到 ⇒ **503 fail-closed + warn-once**，**绝不放行**。平台契约逐字：`dsh-host-webserver/README.md:113`「route owners such as dsh-client-connection enforce their own request policy」；同栈母本 = `dsh-client-connection` 自己的 `/api` 路由与 `dsh-host-open-in-app` 的 `rejected()`。
+- **两个刻意的取舍**：① 取服务用 `ctx.get("connection")` 而**不是** `ctx.connection`——后者在本插件（`inject` 不含 connection）**会抛** `cannot get property "connection" without inject`（cordis:675）；② `connection` **刻意不进** `inject` 列表——required 语义会让无该服务的 profile **整个插件拒起**，四个 host 工具为 web 附属面陪葬（U8 同款纪律）。
+- **回归面 7 条腿**（判据 = 证明门在**业务逻辑之前**，不只是「返回了个错误码」）：D-39a/b 401/403 下 `PUT` **盘字节快照比对不变** + 读端点不回吐 base/effective · D-39c 空 ctx ⇒ 503 + warn **恰好一次** · D-39d 服务形态异构（无 `requestRejection`）⇒ 503 · D-39e 栅栏抛错 ⇒ 503 · D-39f 放行 ⇒ 原行为零回归 + 栅栏收到**原始 req 同一引用** · D-39g **8 端点**矩阵全过门。
+- **锁面变更（显式声明）**：`AP_TEST_AUTHORIZED` **新增两项**——`test/context-budget.test.mjs` · `test/session-state.test.mjs`；**12 处**直调夹具（11 处 `makeApiHandler({}, …)` + `design-review-guard.test.mjs` 的 apply 捕获路径）改用显式 `fenceCtx()` ⇒ **放行从此是白纸黑字，不再靠门缺席**。理由逐条住 `test/death-provenance.test.mjs` 注释块 **⑦**。
+- **同批改判的描述面**：设计档 §3.2「loopback 信任模型」与 §6 风险条「webServer 路由无鉴权」**同批改写为栅栏语义**（原前提已证伪——留着会让下一个人照错理由改回去）· `README.md:210` 端点清单补鉴权口径 · `makeApiHandler` 的 JSDoc（`ctx` 参数此前**从未被使用**，如今才真正承担栅栏）。
+- **会诊（consult #63，4/4 交付）**：四席在**结论层完全收敛**（fail-closed + 不进 inject + 文档同批），分歧只在**门的位置**与**测试缝**；父侧逐条处置 **31** 条主张（原始层 + 裁定层见 `docs/consult-minutes/2026-09-21-consult-63-minutes.md`）。**否决的两个形态**：[1] 的 `opts.requestRejection` 钩子（handler 侧无钩子即跳过 = **fail-open 默认**）与 [3] 的双层 `ctx.inject` 门控注册（边际收益只是 404 与 503 之差，代价是六处并发改动）。**会诊抓出的一个真缺陷**：[3] 在创建处写 `ctx.connection` 属性读——在 cordis 下会抛。**★ 计数纪律**：四席自报夹具数 10 / 11 / 12 / 13，父侧实测 **12**（四家无一对上）。
+- **★ 一条自查纠错（据实登记——用户 2026-09-21 指出）**：先前在此写「`dsh-super-injector` 同款缺陷 ⇒ 另行报障」，**两处都不准**。① **引错行**：`lib/index.js:7020` 是它的**脚手架模板**（`path: '/${pkgName}/api'`），**不是**它的实际路由——真路由在 **`lib/index.js:9633-9635`**（`/super-injector/api`，同样**没有**栅栏）。② **没有核装配就断言暴露**：该插件在本部署**未装配**——不在 web profile 的 `dsh.profile.bundles`、不在其 `node_modules`、活体探测 `/super-injector/api` ⇒ **404**（对照 `/open-in-app/apps` ⇒ 401）⇒ **实况暴露为零，无需报障**。**★ 用户 2026-09-21 裁定（范围收口）**：`dsh-super-injector` **非本仓所有的第三方插件，且已不启用** ⇒ **不在本仓跟踪范围**。本档只登记「**代码形态与本缺陷同形**」这一事实（真路由 `lib/index.js:9633-9635`），**不承担**任何前置校验、报障或清单义务——将来若有人自行启用它，那是启用者的事。（可复用的栅栏形态见本版 `lib/index.mjs` 的 `rejectionOf`，仅供需要时参考。）
+- **★ 兄弟路由的范围**：`dsh-team-link` 的导出路由由**另一会话**处理，不在本批。
+- **★ 回归过程如实登记（套件级颜色不美化）**：全量 `node --test` 共跑 **8** 轮——**第 1、2 轮红**（失败项**全部**是本批自身的**元锁在途修复**：台账用例数等值锁 `T-LC2` · 基线测试档授权锚 `T-AP9` · 批 17 事实标记对等值 · `T-LC4` 自证样例；逐条见台账 §七 批 22 行），**第 3 轮红 1 项**（**时序 flake** `death-provenance.test.mjs :: T-AP4b`），**第 4–8 轮 516/516 全绿**；另有本档隔离复跑 **19/19 绿**。**该 flake 的唯一登记点 = 台账 §五「已知 flake 表」**（`G6` 复跑豁免口径与 `R-13` 同）——此处**只留指针、不重述细节**（D3 单点登记）。**全程没有为消红放宽任何断言**。
+- **★ 真机验证（2026-09-21，用户重启后实测——全项通过）**：① **新 `lib/**` 已加载**；② **活体矩阵**（改前 ⇒ 改后）：无证件 `GET /config` · `/catalog` · `/session` · `/codex/models` **200 ⇒ 401** · 无证件 `PUT /config`（非法 JSON）**400 ⇒ 401** · 无证件 `POST /apply-session` · `DELETE /session` **404 ⇒ 401** · `Host: evil.example` 的 `GET /config` · `/catalog` **200 ⇒ 403** · 对照组 `/` 与 `/open-in-app/apps` 仍 **401（零回归）**；③ 拒绝体 = `{"ok":false,"error":"unauthorized"}`（JSON 契约成立）；④ **真实设置页加载 · 保存 · 恢复默认全链路正常**（同源带 cookie，无感）⇒ **发版门槛通过**。**★ 顺带结清**：读数是 401 而**非** 503 ⇒ **运行时确实解析到了宿主的 `connection` 服务**——会诊纪要 §5-1 列为本批最大残留不确定的那一项由此结清。加门**前**的矩阵另见「立项形态」。
+
 ## [0.29.0] — 2026-09-18
 
 > **一句话**：不传 `background` 现在也走后台——长任务不再被插件自己的 540 秒内部截止掐掉、也不再撞平台 600 秒墙钟连报告一起丢；短任务可用 `background: false` 强制同步。**本版改 `lib/**` ⇒ 重启 DSH 后生效。**

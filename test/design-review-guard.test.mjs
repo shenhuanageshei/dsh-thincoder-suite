@@ -121,7 +121,9 @@ function makeFakeCtx() {
     effect: (fn) => { const d = fn?.(); return () => d?.() },
     systemPrompt: { section: () => () => {} },
     tools: { register: (t) => { registeredTools.push(t); return () => {} } },
-    get: () => null,
+    // 批 22 / D-39：handler 现在无条件过宿主信任栅栏（`ctx.get("connection")`）；
+    // fake ctx 显式给出「放行」的栅栏桩——与实际装配形态一致（缺它 ⇒ API 面用例全 503）。
+    get: (name) => (name === "connection" ? { requestRejection: () => undefined } : null),
   }
 }
 

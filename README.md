@@ -207,7 +207,7 @@ pnpm add link:<克隆路径>/dsh-thincoder-suite
 - **全局默认**：评审两组卡片（首轮 / 收敛轮：provider、model、effort、超时）· 评审是否注入项目记忆 · 会诊/飞刀共用模型池 · eng_coder 的输出预算与推理档。**保存**写 user 层；**恢复默认**清 user 层回落到 base。
 - **当前会话视图**：显示生效摘要与覆盖来源，可「应用到当前会话」（优先级高于全局）或「恢复会话默认」。
 
-host API 前缀 `/thincoder-suite/api`（GET/PUT/DELETE `/config`、GET/DELETE `/session`、POST `/apply-session`）。
+host API 前缀 `/thincoder-suite/api`（GET/PUT/DELETE `/config`、GET/DELETE `/session`、POST `/apply-session`）。**全部端点先过宿主信任栅栏**（`connection.requestRejection`：跨站 / 非受信 Host ⇒ 403，无浏览器会话 cookie ⇒ 401；栅栏不可核验 ⇒ 503 fail-closed，绝不静默放行）。
 
 ### base 配置示例（`cordis.patch.yml`）
 

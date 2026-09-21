@@ -32,6 +32,15 @@ import { validateGlobalUserConfig } from "../lib/index.mjs"
 import { buildAdvisorUserMessage } from "../lib/advisor-msgs.mjs"
 import { dropSession } from "../lib/state.mjs"
 
+// ————————————— 批 22 / D-39：信任栅栏的测试缝 —————————————
+// `makeApiHandler` 的 handler 现在**无条件**先问宿主 `ctx.get("connection")` 要拒绝码
+// （服务取不到 = 503 fail-closed ⇒ 空 ctx 直调会全变 503）。直调用例必须**显式**声明
+// 「本请求被放行」——放行是白纸黑字，不是靠门缺席。这正是本批的纪律：安全默认不迁就夹具。
+/** 放行 / 拒绝两态 stub：`undefined` = 放行；401 / 403 = 宿主拒绝码。 */
+const fenceCtx = (rejection = undefined) => ({
+  get: (name) => (name === "connection" ? { requestRejection: () => rejection } : undefined),
+})
+
 process.env.DSH_HOME = ""
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -549,7 +558,7 @@ test("T-CB6: PUT — 合法值落盘；越界/非整数报错且不入 sanitized
       await handler(req, res)
       return res
     }
-    const handler = makeApiHandler({}, { baseConfig: {}, dshHomeOverride: home })
+    const handler = makeApiHandler(fenceCtx(), { baseConfig: {}, dshHomeOverride: home })
     const r1 = await put(handler, { advisor: { contextTokens: 200000 } })
     assert.equal(r1.statusCode, 200, "合法值 PUT 接受: " + r1.body)
     assert.equal(JSON.parse(r1.body).user.advisor.contextTokens, 200000, "sanitized 保留")

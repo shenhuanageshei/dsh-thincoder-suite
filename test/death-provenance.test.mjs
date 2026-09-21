@@ -1034,8 +1034,21 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *      `background: false` 强制同步的逃生口）。
  *      ★ **这不是「退役该档」**：两档仍现役、锁仍活；`test/session-state.test.mjs` ·
  *      `test/stages.test.mjs` · `test/preset-static.test.mjs` 等**未授权基线档本批零改动**。
+ *   ⑦ `test/context-budget.test.mjs` · `test/session-state.test.mjs` —— **批 22（D-39：webServer 路由
+ *      接入宿主信任栅栏）**：两档在基线 `9282882` 时点**已存在**且此前不在本清单内 ⇒ 本批**必须扩数组**
+ *      （与 ⑥ 的「已在清单内、故只补记理由」形态不同——本行是**新增两项**）。改动 = 两档各有一处
+ *      `makeApiHandler({}, …)` 直调夹具改为显式 `fenceCtx()`：D-39 之后 handler **无条件**先问宿主
+ *      `ctx.get("connection")` 要拒绝码（取不到 ⇒ 503 fail-closed），**空 ctx 直调会全变 503** ⇒ 那两处
+ *      业务断言（context-budget 的 PUT 接受/拒绝语义、session-state 的 apply/reset-session 端点）必须
+ *      显式声明「本请求被放行」。**放行从此是白纸黑字，不再靠门缺席**——这正是本批的纪律：安全默认
+ *      不迁就夹具。**裁定引用**：用户 2026-09-21 的三项拍板（缺服务 ⇒ 503 · 拒绝体 ⇒ JSON · 版本 ⇒
+ *      `0.29.1`）· `docs/consult-minutes/2026-09-21-consult-63-minutes.md` §3 **D-1**（门放 handler 内、
+ *      无条件）与 **D-3**（测试缝 = 显式 stub ctx）· 缺陷登记表 **D-39**。
+ *      ★ **这不是「退役该档」**：两档仍现役、锁仍活——断言形态一字未改，只换了夹具的注入形态。
+ *      ★ 与 ⑥ 末句「`test/session-state.test.mjs` …**本批零改动**」**不矛盾**：那句的「本批」= **批 21**
+ *        （历史记述，其时为真）；批 22 首次授权改动该档，故在此显式登记。
  */
-const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs"]
+const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs", "test/context-budget.test.mjs", "test/session-state.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */
 const AP_BASELINE_SHA = "9282882"
 

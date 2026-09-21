@@ -32,6 +32,15 @@ import { saveSessionState, loadSessionState, normalizeRestored, resolveSessionSt
 import { saveTokenRecord, resolveTokenStorePath } from "../lib/token-store.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 
+// ————————————— 批 22 / D-39：信任栅栏的测试缝 —————————————
+// `makeApiHandler` 的 handler 现在**无条件**先问宿主 `ctx.get("connection")` 要拒绝码
+// （服务取不到 = 503 fail-closed ⇒ 空 ctx 直调会全变 503）。直调用例必须**显式**声明
+// 「本请求被放行」——放行是白纸黑字，不是靠门缺席。这正是本批的纪律：安全默认不迁就夹具。
+/** 放行 / 拒绝两态 stub：`undefined` = 放行；401 / 403 = 宿主拒绝码。 */
+const fenceCtx = (rejection = undefined) => ({
+  get: (name) => (name === "connection" ? { requestRejection: () => rejection } : undefined),
+})
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // ————————————— 批 15（FR-1/FR-2）：consult 的派发与消费面 —————————————
@@ -781,7 +790,7 @@ test("GET /catalog: ctx.llm 运行时注册表 → 全部 provider（含内置 D
       ? [{ provider, id: "deepseek-chat", name: "DeepSeek Chat" }]
       : [{ provider, id: "glm-5.3", name: "GLM-5.3" }, { provider, id: "glm-5.3-flash", name: "Flash" }, { broken: 1 }],
   }
-  const handler = makeApiHandler({}, {
+  const handler = makeApiHandler(fenceCtx(), {
     baseConfig: {},
     llm,
     settingsGet: (ns) => ns === "llm-pi-ai" ? {
@@ -813,7 +822,7 @@ test("GET /catalog: ctx.llm 运行时注册表 → 全部 provider（含内置 D
 
 test("GET /catalog: llm runtime 缺失 → 502 + 明确错误（不再静默降级手填）", async () => {
   const { makeApiHandler } = await import("../lib/index.mjs")
-  const handler = makeApiHandler({}, { baseConfig: {}, settingsGet: () => null })
+  const handler = makeApiHandler(fenceCtx(), { baseConfig: {}, settingsGet: () => null })
   const res = { statusCode: 0, body: "", writeHead(code) { this.statusCode = code }, end(b) { this.body = b } }
   await handler({ method: "GET", url: "/thincoder-suite/api/catalog" }, res)
   assert.equal(res.statusCode, 502)
@@ -828,7 +837,7 @@ test("PUT /config: provider 存在性 = 运行时注册表 ∪ settings（deepse
     listProviders: async () => [{ id: "deepseek-official", name: "DeepSeek" }, { id: "qax", name: "Qax" }],
     listConfigurableProviders: async () => [{ provider: "deepseek-official", displayName: "DeepSeek", settingsNs: "llm-deepseek", settingsPath: [] }],
   }
-  const handler = makeApiHandler({}, {
+  const handler = makeApiHandler(fenceCtx(), {
     baseConfig: {},
     llm,
     dshHomeOverride: mkdtempSync(join(tmpdir(), "provider-registry-")),
@@ -1590,7 +1599,7 @@ test("R1 D-18: codex PROCESS_ERROR 诊断含 usage + stderr 保尾", async () =>
 test("R1 maxOutputTokens 三面同步: PUT 接受合法值 ⊕ merge 保留 ⊕ 运行时生效", async () => {
   // 面 1：PUT 校验（index.mjs validateGlobalUserConfig 经 makeApiHandler 真实 PUT 路径）
   const { makeApiHandler } = await import("../lib/index.mjs")
-  const handler = makeApiHandler({}, { baseConfig: {}, dshHomeOverride: mkdtempSync(join(tmpdir(), "maxout-")) })
+  const handler = makeApiHandler(fenceCtx(), { baseConfig: {}, dshHomeOverride: mkdtempSync(join(tmpdir(), "maxout-")) })
   const req = { method: "PUT", url: "/thincoder-suite/api/config", [Symbol.asyncIterator]: function* () { yield Buffer.from(JSON.stringify({ config: { advisor: { maxOutputTokens: 8192 } } })) } }
   const res = { statusCode: 0, body: "", writeHead(code) { this.statusCode = code }, end(b) { this.body = b } }
   await handler(req, res)
@@ -3408,7 +3417,7 @@ test("R4 收尾 #4: advisor jobs 派发路径 warnPrefix 并入派发文本—�
 
 test("R5 dshBackgroundTimeoutMs 三面同步: PUT 接受合法值 ⊕ merge 保留 ⊕ 运行时解析生效", async () => {  // 面 1：PUT 校验（index.mjs validateGlobalUserConfig 经 makeApiHandler 真实 PUT 路径）
   const { makeApiHandler } = await import("../lib/index.mjs")
-  const handler = makeApiHandler({}, { baseConfig: {}, dshHomeOverride: mkdtempSync(join(tmpdir(), "dshbg-")) })
+  const handler = makeApiHandler(fenceCtx(), { baseConfig: {}, dshHomeOverride: mkdtempSync(join(tmpdir(), "dshbg-")) })
   const req = { method: "PUT", url: "/thincoder-suite/api/config", [Symbol.asyncIterator]: function* () { yield Buffer.from(JSON.stringify({ config: { dshBackgroundTimeoutMs: 720000 } })) } }
   const res = { statusCode: 0, body: "", writeHead(code) { this.statusCode = code }, end(b) { this.body = b } }
   await handler(req, res)
@@ -3457,7 +3466,7 @@ test("R5 dshBackgroundTimeoutMs: 运行时非法值（手编 config）→ 回落
 
 test("D-29 consultTimeoutMs/engTokenTtlMs: PUT 接受合法值 ⊕ 不再告警 unknown ⊕ merge 保留", async () => {
   const { makeApiHandler } = await import("../lib/index.mjs")
-  const handler = makeApiHandler({}, { baseConfig: {}, dshHomeOverride: mkdtempSync(join(tmpdir(), "d29-")) })
+  const handler = makeApiHandler(fenceCtx(), { baseConfig: {}, dshHomeOverride: mkdtempSync(join(tmpdir(), "d29-")) })
   const req = {
     method: "PUT", url: "/thincoder-suite/api/config",
     [Symbol.asyncIterator]: function* () {

@@ -27,6 +27,15 @@ import { saveTokenRecord, loadTokenRecord, resolveTokenStorePath } from "../lib/
 import { ENG_TOKEN_TTL_MAX_MS } from "../lib/config-store.mjs"
 import { computeDocHash } from "../lib/doc-hash.mjs"
 
+// ————————————— 批 22 / D-39：信任栅栏的测试缝 —————————————
+// `makeApiHandler` 的 handler 现在**无条件**先问宿主 `ctx.get("connection")` 要拒绝码
+// （服务取不到 = 503 fail-closed ⇒ 空 ctx 直调会全变 503）。直调用例必须**显式**声明
+// 「本请求被放行」——放行是白纸黑字，不是靠门缺席。这正是本批的纪律：安全默认不迁就夹具。
+/** 放行 / 拒绝两态 stub：`undefined` = 放行；401 / 403 = 宿主拒绝码。 */
+const fenceCtx = (rejection = undefined) => ({
+  get: (name) => (name === "connection" ? { requestRejection: () => rejection } : undefined),
+})
+
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
 // 屏蔽宿主 DSH_HOME（本机指向真实 profile）：本文件除 apply() 接线用例（用例内显式设置并
@@ -789,7 +798,7 @@ test("writepoint config API handler: POST /apply-session and DELETE /session flo
     persistSession: (id) => persisted.push(String(id)),
     settingsGet: () => null,
   }
-  const handler = makeApiHandler({}, opts)
+  const handler = makeApiHandler(fenceCtx(), opts)
   const call = async (method, path, body) => {
     let status = 0, payload = ""
     const res = { writeHead: (code) => { status = code }, end: (text) => { payload = String(text) } }

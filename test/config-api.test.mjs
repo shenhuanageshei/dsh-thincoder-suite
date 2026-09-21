@@ -47,6 +47,15 @@ function sessionStubs(knownIds) {
   return stubs
 }
 
+// ————————————— 批 22 / D-39：信任栅栏的测试缝 —————————————
+// `makeApiHandler` 的 handler 现在**无条件**先问宿主 `ctx.get("connection")` 要拒绝码
+// （服务取不到 = 503 fail-closed ⇒ 空 ctx 直调会全变 503）。直调用例必须**显式**声明
+// 「本请求被放行」——放行是白纸黑字，不是靠门缺席。这正是本批的纪律：安全默认不迁就夹具。
+/** 放行 / 拒绝两态 stub：`undefined` = 放行；401 / 403 = 宿主拒绝码。 */
+const fenceCtx = (rejection = undefined) => ({
+  get: (name) => (name === "connection" ? { requestRejection: () => rejection } : undefined),
+})
+
 // ————————————— U2/U6：config-store save/clear/merge/损坏容错 —————————————
 
 test("U2a: saveUserConfig writes versioned file; loadUserConfig roundtrips", () => {
@@ -728,6 +737,135 @@ test("U8b: registerConfigApi with webServer registers the prefix route and retur
   assert.equal(typeof registered.handler, "function")
 })
 
+// ————————————— 批 22 / D-39：宿主信任栅栏（handler 的第一件事） —————————————
+//
+// 立项形态（2026-09-21 父侧实测）：加门前 `GET /thincoder-suite/api/config` **无 token 返 200**、
+// `Host: evil.example` 也返 200；而同一 webServer 上核心路由返 401、内置插件路由返 401/403
+// ⇒ 差别只在路由所有者做没做这一步（`dsh-host-open-in-app` 的 `rejected()` 就是那一行）。
+// 本区块是那道门的**独立回归锚**：判据 = HTTP 状态 + **业务面未被触碰**（PUT 后盘字节不变），
+// 后者才真正证明门在业务逻辑**之前**，而不只是「返回了个错误码」。
+
+/** D-39：发一次假请求（JSON 往返）；返回状态、解析后的载荷、以及**原始 req 引用**。 */
+async function hit(handler, method, path, body) {
+  let status = 0, payload = ""
+  const res = { writeHead: (c) => { status = c }, end: (t) => { payload = String(t) } }
+  const text = body === undefined ? "" : JSON.stringify(body)
+  const req = {
+    url: "http://localhost" + path, method,
+    [Symbol.asyncIterator]: async function* () { if (text) yield text },
+  }
+  await handler(req, res)
+  return { status, payload: payload ? JSON.parse(payload) : null, req }
+}
+
+/** D-39：一个「业务面完全可用」的 opts（栅栏放行时零回归判据用）。 */
+const fenceOpts = (home) => ({
+  baseConfig: {}, sessionExists: () => false, agentOptionsOf: () => ({}),
+  stateOf: () => ({}), settingsGet: () => null, cwdHint: undefined, dshHomeOverride: home,
+})
+
+test("D-39a: 栅栏先于业务逻辑——401/403 下 PUT 不得落盘（盘字节快照 + 载荷形态）", async () => {
+  const home = mkHome()
+  try {
+    const seeded = { engCoderMaxTokens: 65536 }
+    assert.equal(saveUserConfig(seeded, home), true)
+    const storePath = resolveConfigStorePath(home)
+    const before = readFileSync(storePath, "utf8")
+
+    for (const code of [401, 403]) {
+      const handler = makeApiHandler(fenceCtx(code), fenceOpts(home))
+      const r = await hit(handler, "PUT", CONFIG_API_PREFIX + "/config", { config: { engCoderMaxTokens: 1024 } })
+      assert.equal(r.status, code, "宿主拒绝码必须原样透传（实测 " + r.status + "）")
+      assert.equal(r.payload.ok, false, "拒绝体必须是本插件 JSON 契约——client.js 的 fetchJson 无条件 r.json()")
+      assert.equal(readFileSync(storePath, "utf8"), before, "被拒请求**不得触碰盘**——门在业务逻辑之前")
+    }
+    assert.deepEqual(loadUserConfig(home), seeded, "既有配置原样保留")
+  } finally { rmHome(home) }
+})
+
+test("D-39b: 栅栏先于业务逻辑——403 下读端点不吐任何配置（base / effective 均不出现）", async () => {
+  const handler = makeApiHandler(fenceCtx(403), { baseConfig: { advisor: { round1: { provider: "leak-p", model: "leak-m" } } } })
+  const r = await hit(handler, "GET", CONFIG_API_PREFIX + "/config")
+  assert.equal(r.status, 403)
+  assert.equal(r.payload.base, undefined, "被拒时**不得**回吐 base 配置")
+  assert.equal(r.payload.effective, undefined, "被拒时**不得**回吐 effective 配置")
+})
+
+test("D-39c: connection 不可核验 ⇒ 503 fail-closed + warn 恰好一次（绝不静默放行）", async () => {
+  const warns = []
+  const orig = console.warn
+  console.warn = (m) => warns.push(String(m))
+  try {
+    // ① 完全没有 connection 服务（空 ctx——连 get 都没有）
+    const bare = makeApiHandler({}, { baseConfig: { advisor: { round1: { provider: "leak-p" } } } })
+    const r1 = await hit(bare, "GET", CONFIG_API_PREFIX + "/config")
+    assert.equal(r1.status, 503, "取不到栅栏 ⇒ 503（不是 200，更不是放行）")
+    assert.equal(r1.payload.ok, false)
+    assert.equal(r1.payload.base, undefined, "fail-closed 下同样不得回吐配置")
+    // ② 同一 handler 的第二次请求：**不再重复告警**（warn-once），但依旧 503
+    const r2 = await hit(bare, "GET", CONFIG_API_PREFIX + "/config")
+    assert.equal(r2.status, 503, "持续 fail-closed")
+    assert.equal(warns.length, 1, "warn 必须恰好一次（实测 " + warns.length + "）：" + JSON.stringify(warns))
+    assert.ok(warns[0].includes("connection trust fence unavailable"), "告警必须点名根因：" + warns[0])
+  } finally { console.warn = orig }
+})
+
+test("D-39d: 栅栏不可用 / 回话不合契约 ⇒ 一律 503（不放行，也不让 writeHead 抛在 try 之外）", async () => {
+  // 评审 #2：宿主契约只有 403 | 401 | undefined 三态。任何**契约外形态**若原样喂给
+  // `res.writeHead`，会在 handler 的 `try` **之外**抛 TypeError ⇒ 连 503 都拿不到，
+  // 而 fail-closed 的可观测性正是本批的验收面 ⇒ 统一收口为 503。
+  const warns = []
+  const orig = console.warn
+  console.warn = (m) => warns.push(String(m))
+  try {
+    const cases = [
+      ["服务存在但无 requestRejection", {}],
+      ["回话 true（布尔）", { requestRejection: () => true }],
+      ["回话字符串 \"403\"", { requestRejection: () => "403" }],
+      ["回话 0", { requestRejection: () => 0 }],
+      ["回话超范围码 1e9", { requestRejection: () => 1e9 }],
+      ["回话 200（契约外的「放行」码）", { requestRejection: () => 200 }],
+    ]
+    for (const [label, connection] of cases) {
+      const handler = makeApiHandler({ get: (n) => (n === "connection" ? connection : undefined) }, { baseConfig: {} })
+      const r = await hit(handler, "GET", CONFIG_API_PREFIX + "/config")
+      assert.equal(r.status, 503, label + " ⇒ 必须 503（实测 " + r.status + "）")
+      assert.equal(r.payload?.ok, false, label + " ⇒ 拒绝体必须仍是本插件 JSON 契约")
+    }
+    assert.equal(warns.length, cases.length,
+      "每个 handler 实例各 warn 恰好一次（实测 " + warns.length + "）：" + JSON.stringify(warns))
+  } finally { console.warn = orig }
+})
+
+test("D-39e: 栅栏自身抛错 ⇒ 503（fail-closed 不依赖栅栏的健康）", async () => {
+  const handler = makeApiHandler({ get: () => ({ requestRejection: () => { throw new Error("boom") } }) }, { baseConfig: {} })
+  const r = await hit(handler, "GET", CONFIG_API_PREFIX + "/config")
+  assert.equal(r.status, 503, "栅栏抛错不得变成 200 或未捕获异常")
+})
+
+test("D-39f: 放行 ⇒ 原行为零回归；且栅栏收到的是**原始 req 同一引用**", async () => {
+  let seen = null
+  const handler = makeApiHandler({ get: (n) => (n === "connection" ? { requestRejection: (req) => { seen = req; return undefined } } : undefined) }, { baseConfig: {} })
+  const r = await hit(handler, "GET", CONFIG_API_PREFIX + "/config")
+  assert.equal(r.status, 200, "放行路径零回归：" + JSON.stringify(r.payload))
+  assert.equal(r.payload.ok, true)
+  assert.equal(seen, r.req, "栅栏必须拿到原始 Node req（Host/Origin/Cookie 头直达栅栏，零转译）")
+})
+
+test("D-39g: 全部 8 个端点同此一门（方法 × 路径矩阵，拒绝码一律透传）", async () => {
+  const handler = makeApiHandler(fenceCtx(401), { baseConfig: {}, sessionExists: () => false, stateOf: () => ({}) })
+  const matrix = [
+    ["GET", "/config"], ["GET", "/session"], ["GET", "/codex/models"], ["GET", "/catalog"],
+    ["PUT", "/config"], ["DELETE", "/config"], ["POST", "/apply-session"], ["DELETE", "/session"],
+  ]
+  const leaks = []
+  for (const [method, path] of matrix) {
+    const body = method === "PUT" || method === "POST" ? {} : undefined
+    const r = await hit(handler, method, CONFIG_API_PREFIX + path, body)
+    if (r.status !== 401) leaks.push(method + " " + path + " ⇒ " + r.status)
+  }
+  assert.deepEqual(leaks, [], "下列端点未过栅栏（应为 401）：" + JSON.stringify(leaks))
+})
 // ————————————— 校验 helper 单测（与一期同源导出，U3 侧面） —————————————
 
 test("U3d: advisor exported validators are reused by index validation (single source, review #5)", async () => {  // 通过 index 校验路径间接触发 advisor.mjs 的导出（同一函数引用），此处再直测导出：
@@ -764,7 +902,7 @@ test("T-D31 (AC-D1/AC-D2/AC-D3 / 锚 M7+M8): 含未知顶层键的 PUT ⇒ 400 +
     const storePath = resolveConfigStorePath(home)
     const before = readFileSync(storePath, "utf8")
 
-    const handler = makeApiHandler({}, {
+    const handler = makeApiHandler(fenceCtx(), {
       baseConfig: {}, sessionExists: () => false, agentOptionsOf: () => ({}),
       stateOf: () => ({}), settingsGet: () => null, cwdHint: undefined, dshHomeOverride: home,
     })
@@ -820,7 +958,7 @@ test("A12 (批 20 修复轮 / AC-8 / US-8): DELETE /config 清除失败 ⇒ ok:f
     const unreachable = join(root, "no", "profile", "here")
     assert.equal(resolveConfigStorePath(undefined, unreachable), null,
       "前置自证：注入的清除失败必须真的成立（路径不可解析 ⇒ clearUserConfig 必返回 false）")
-    const handler = makeApiHandler({}, {
+    const handler = makeApiHandler(fenceCtx(), {
       baseConfig: {}, sessionExists: () => false, agentOptionsOf: () => ({}),
       stateOf: () => ({}), settingsGet: () => null,
       cwdHint: () => unreachable, dshHomeOverride: undefined,
@@ -857,7 +995,7 @@ test("review#1: handler-level integration — production-shaped opts (stateOf wi
     cwdHint: undefined,
     dshHomeOverride: undefined,
   }
-  const handler = makeApiHandler({}, opts)
+  const handler = makeApiHandler(fenceCtx(), opts)
   const call = async (method, path, body) => {
     let status = 0, payload = ""
     const res = {
