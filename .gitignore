@@ -5,3 +5,7 @@ node_modules/
 .thincoder/
 .tmp-*
 test-output.txt
+
+# 工具产物与本地导出（含会话日志，绝不入库——隐私面）
+.dsh-vision-toolkit/
+.dsh-exports/
