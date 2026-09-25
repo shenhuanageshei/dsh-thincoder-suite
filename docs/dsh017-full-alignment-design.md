@@ -73,7 +73,7 @@ acs: 验收标准
 | `lib/escalate.mjs` | 2 处（同上） |
 | `lib/doc-hash.mjs` | `normalizeDocPath` / `computeDocHash` 增显式基座 |
 | `lib/advisor.mjs` · `lib/eng.mjs` | 传给 `computeDocHash` 的基座改为会话 cwd |
-| `test/dsh017-compat.test.mjs` | 新增本批锚腿（D46a/D46b/D44a/D44b） |
+| `test/dsh017-compat.test.mjs` | 新增本批锚腿 **5 条**：D46a · D46b · D44a · D44b ⊕ **D-46-static**（锚 A5 / AC-4 的全量静态锁：`run: (handle)` 计数 === `jobs.start({` 计数、四档合计 7、零处无参 `run: ()`） |
 | `docs/dsh017-full-alignment-design.md` | 本档（含 §6 锚表） |
 | `docs/2026-09-05-defect-registry.md` · `docs/test-lifecycle.md` · `CHANGELOG.md` · `package.json` | 登记级联与版本 |
 
