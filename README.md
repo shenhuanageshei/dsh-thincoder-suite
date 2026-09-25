@@ -374,7 +374,7 @@ flowchart TD
 | **一个极少见的测试偶发** | 全量测试连跑 80 轮里有 1 轮红、**具体是哪一条还没抓到**（当时的脚本只记了数量没记名字）。已保留它为「未关闭」，并保留发布门对它的复跑兜底；复现手段已就位 |
 | **codex-cli 会诊席经常缺席** | 该模型的子进程偶发非零退出，会诊通常按 3/4 交付（不影响结论，digest 会如实标出失败数） |
 | **长任务的两个截止键容易配错** | 见上文「最容易被配错的一件事」——文档已写明，但**配置本身没有护栏**（配错只是慢，不会坏） |
-| **`job_output` 读不回后台作业全文（**平台侧**，不是本插件）** | 2026-09-25 在 DSH 0.1.7 桌面版实测两次：作业**能派发、能跑完、完成通知也到**，但读全文的 `job_output` 抛 `Cannot read properties of undefined (reading 'output')`。插件自己留了兜底（评审正文进 `$DSH_HOME/.thincoder/session-state.json`；会诊纪要落 `docs/consult-minutes/`），所以**结果不会丢**，只是那条「完成通知 + 全文另读」的提示语在当前平台上是死的 |
+| **`job_output` 读不回后台作业全文（**平台侧**，不是本插件）** | 2026-09-25 在 DSH 0.1.7 桌面版实测两次：作业**能派发、能跑完、完成通知也到**，但读全文的 `job_output` 抛 `Cannot read properties of undefined (reading 'output')`。插件自己留了兜底（评审正文进 `$DSH_HOME/.thincoder/session-state.json`；会诊纪要落 `docs/consult-minutes/`），所以**结果不会丢**，只是那条「完成通知 + 全文另读」的提示语在当前平台上是死的。**逐机制的绕行方式、以及 `eng_coder` 交付报告没有落盘这个缺口，见 [`docs/job-output-fallback.md`](./docs/job-output-fallback.md)**（常设说明，可直接照用） |
 | **平台触点还没有系统扫** | DSH 0.1.7 已知的三处断裂（工具结果的消息形状 · 后台派发的 owner 参数 · `settings.yaml` 改名打断 home 兜底探测）**都是人工撞出来的**。建议单列一批：把插件的全部平台触点对着新旧两版 DSH 包做一次 diff——第四处迟早会来 |
 
 更细的技术台账（内部批号、逐条残差、发布门判据）见 [`CHANGELOG.md`](./CHANGELOG.md) 与 [`docs/`](./docs/)、[`METHODOLOGY.md`](./METHODOLOGY.md)。

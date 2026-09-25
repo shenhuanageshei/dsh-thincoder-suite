@@ -20,6 +20,8 @@
 
 | [2026-09-25-dsh017-compat-design.md](2026-09-25-dsh017-compat-design.md) | 2026-09-25 | **批 24 设计（DSH 0.1.7 平台契约兼容修复）**：D-41 消息模型（工具结果从 `user + tool-result` 块 → 独立 `tool` 角色消息）+ D-42 jobs owner（Agent 对象 → `agent/session id`）+ D-40 home 探测同版发布。根因含 **0.1.6 与 0.1.7 两份平台源码逐字对照**；方案含压缩配对守卫的退化边界；验收锚 D41a/D41b/D42a/D42b；决策 D24-1…D24-5 |
 
+| [job-output-fallback.md](job-output-fallback.md) | 2026-09-25 | **常设运维说明（非批次档）**：平台侧 `job_output` 读不回后台作业全文的现象、逐机制绕行方式（advisor → session-state · consult → 纪要文件 · eng/escalate → 同步派发）、以及 eng/escalate 交付报告未落盘这个缺口与三条应急 |
+
 ## 吸收面
 
 | 文档 | 日期 | 主题 |
