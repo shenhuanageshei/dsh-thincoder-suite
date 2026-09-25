@@ -1048,7 +1048,13 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *      ★ 与 ⑥ 末句「`test/session-state.test.mjs` …**本批零改动**」**不矛盾**：那句的「本批」= **批 21**
  *        （历史记述，其时为真）；批 22 首次授权改动该档，故在此显式登记。
  */
-const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs", "test/context-budget.test.mjs", "test/session-state.test.mjs"]
+/** 批 24（D-41）追加 `test/truncation.test.mjs`：D-41 换的是**消息形状契约**（工具结果从
+ *  user+tool-result 块改成独立 tool 角色消息），而该档的 `toolResultMsg` 夹具与 T13-boundary 的
+ *  期望值**逐字编码**了旧形状 ⇒ 期望值必须翻转——这正是 T-AP9 存在的意义（不是障碍）。
+ *  ★ 同批把 T13-boundary 拆成正反两条腿：a) 回退把配对 assistant 收进窗口（配对完整）；
+ *  b) 全 tool 中段且配对前驱不在数组里 ⇒ 孤儿整体丢弃（新契约下的协议要求）。
+ *  授权通道 = docs/test-lifecycle.md §二（本条是**修改**授权，非退役）。 */
+const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs", "test/context-budget.test.mjs", "test/session-state.test.mjs", "test/truncation.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */
 const AP_BASELINE_SHA = "9282882"
 

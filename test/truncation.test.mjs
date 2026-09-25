@@ -24,14 +24,17 @@ function textMsg(text) {
   return { id: "t" + Math.random(), role: "user", content: [{ type: "text", text }], source: { kind: "user" } }
 }
 
+// D-41：夹具同步 0.1.7 的形状——工具结果是**独立 tool 角色消息**（结果块直接是 content，
+// toolCallId/isError 在消息级）。旧夹具（user + tool-result 块）是 0.1.6 的正典，留着会把
+// 已失效的旧契约继续固化在测试里（这正是本缺陷此前一直满绿的原因之一）。
 function toolResultMsg(text) {
+  const callId = "c" + Math.random()
   return {
-    id: "m" + Math.random(), role: "user",
-    content: [{
-      type: "tool-result", toolCallId: "c" + Math.random(),
-      content: [{ type: "text", text }], isError: false,
-    }],
-    source: { kind: "tool", callId: "c" },
+    id: "m" + Math.random(), role: "tool",
+    toolCallId: callId,
+    content: [{ type: "text", text }],
+    isError: false,
+    source: { kind: "tool", callId },
   }
 }
 
@@ -81,17 +84,44 @@ test("T13: compactMessages — ≤20 messages is a no-op; keyFiles deduped and c
   assert.equal(new Set(listed2).size, 6)
 })
 
-test("T13-boundary: window start on a tool-result backs off (orphan-pair guard) — compaction keeps protocol pairing", () => {
-  // 全 tool-result 的中段：起点回退到 start=1（唯一非 tool-result 边界），old 段为空 → 无 keyFiles
+test("T13-boundary-a: 回退把配对的 assistant 收进窗口（配对完整优先于窗口宽度）", () => {
+  // 构造：首条 user + k 组 [assistant(tool-call), tool] + 19 条尾文本 ⇒ 窗口起点恰好落在
+  // 一个 tool 上（start = 2k，偶数位 = tool）。回退停在前一位的 assistant ⇒ 配对在窗口内。
+  const k = 3
+  const msgs = [textMsg("first")]
+  for (let i = 0; i < k; i++) {
+    const callId = "call-" + i
+    msgs.push({ id: "a" + i, role: "assistant", content: [{ type: "tool-call", id: callId, name: "read", arguments: "{}" }], source: { kind: "model", provider: "p", model: "m" } })
+    msgs.push({ id: "t" + i, role: "tool", toolCallId: callId, content: [{ type: "text", text: "f" + i + ".mjs\nout" }], isError: false, source: { kind: "tool", callId } })
+  }
+  for (let i = 0; i < 19; i++) msgs.push(textMsg("tail " + i))
+  assert.equal(msgs.length, 1 + 2 * k + 19)
+  assert.equal(msgs[msgs.length - 20].role, "tool", "夹具自证：窗口起点确实落在 tool 上（否则本用例不成立）")
+
+  compactMessages(msgs)
+  const summary = msgs[1].content[0].text
+  assert.ok(summary.includes("[Context compacted]"))
+  // 回退后的起点 = 配对 assistant（不是被丢弃）
+  assert.equal(msgs[2].role, "assistant", "窗口起点回退到了 tool 的配对 assistant")
+  const call = msgs[2].content.find((b) => b.type === "tool-call")
+  assert.ok(call, "回退进来的 assistant 带 tool-call")
+  assert.equal(msgs[3].role, "tool")
+  assert.equal(msgs[3].toolCallId, call.id, "配对 id 一致——协议配对完整")
+})
+
+test("T13-boundary-b: 全 tool 中段且配对前驱本就不在数组里 ⇒ 孤儿整体丢弃，绝不产出孤儿窗口", () => {
+  // 45 条 tool 紧跟在首条 user 之后（无任何 assistant）——畸形/伪造输入；这些 tool 的配对前驱
+  // 根本不存在，保留任何一条都会让窗口以孤儿 tool 开头（deepseek 侧抛 tool result has no
+  // matching call）。正确行为 = 全部丢弃 + 中段进摘要。
   const msgs = [textMsg("first")]
   for (let i = 0; i < 45; i++) msgs.push(toolResultMsg("z" + i + ".mjs\nout"))
   compactMessages(msgs)
   const summary = msgs[1].content[0].text
   assert.ok(summary.includes("[Context compacted]"))
-  assert.ok(!summary.includes("Key files examined:"), "no orphan tool-result at the window start (backoff)")
-  // 首条 + 摘要 + 回退后的 recent（slice(1) = 45 条全部保留——配对安全优先于窗口宽度）
-  assert.equal(msgs.length, 47)
-  assert.equal(msgs[2].content[0].type, "tool-result")
+  assert.ok(summary.includes("Earlier exploration: 45 tool calls completed."), "中段进摘要: " + summary.slice(0, 120))
+  assert.ok(summary.includes("Key files examined:"), "被丢弃的中段仍产 keyFiles 线索")
+  assert.equal(msgs.length, 2, "首条 + 摘要（孤儿 tool 全部丢弃）")
+  assert.ok(msgs.every((m) => m.role !== "tool"), "保留段内零 tool 消息 ⇒ 零孤儿")
 })
 
 // ————————————— T17：截断阈值 + 续读指针回归锁（readonly-tools 不改） —————————————

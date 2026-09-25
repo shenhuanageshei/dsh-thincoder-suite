@@ -2,6 +2,20 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.29.3] — 2026-09-25
+
+> **一句话**：修掉 **DSH 0.1.7 的三处平台契约变更**造成的插件失效——home 兜底探测的特征标记（`settings.yaml` → `settings.yaml.imported`）· advisor 工具结果的消息形状（`user+tool-result` 块 → 独立 `tool` 角色消息）· jobs 派发的 owner 参数据型（Agent 对象 → agent/session id）。**本版改 `lib/**` ⇒ 重启 DSH 后生效。**
+
+**批 24（DSH 0.1.7 兼容修复：D-40 · D-41 · D-42）**
+
+- **【计数行】**：`node --test` **522/522**（**基线 516 + 本批 6**：D-40 = `config-api.test.mjs` +1 · D-41/D-42 = 新档 `dsh017-compat.test.mjs` +4 与 `truncation.test.mjs` 2 → 3）。⇒ 台账 §三：`config-api.test.mjs` **33 → 34** · `truncation.test.mjs` **4 → 5** · **新增 `dsh017-compat.test.mjs`（4）**；档数 **21 → 22**。
+- **根因（总纲）**：这三处都是同一种病——**插件写的是 0.1.6 的契约，0.1.7 换了契约**。三者互相独立、可分别复现，且都**不是**上游故障 / 限流 / 模型选择 / 网络问题，所以「换模型」「换 provider」「重启」都救不了。
+- **D-40（home 探测）**：0.1.7 起宿主把 `$DSH_HOME/settings.yaml` 改名为 `settings.yaml.imported`，而 `probeProfileRoot` 的特征仍是旧名 ⇒ 无 `DSH_HOME` 的部署（官方桌面版 app 插件进程）探不到 home ⇒ `saveUserConfig` 返回 false ⇒ 设置页报 500。修法：特征放宽为「含 `sessions/` 且含 `settings.yaml` **或** `settings.yaml.imported`」。
+- **D-41（消息模型 · advisor 全灭）**：0.1.6 的 `dsh-llm` `createToolResultMessage` **逐字产出的就是插件现在发的形状**（`role:'user'` + `content:[{type:'tool-result', toolCallId, content, isError}]`），0.1.7 改成**独立 `role:'tool'` 消息**（`toolCallId`/`isError` 在消息级、`content` 直接是结果块数组）并**删除了旧形状的兼容**：`dsh-llm-pi-ai` 的 `userContent` 去掉了 `case "tool-result"`（静默丢弃 ⇒ 留下空 user 消息 + 无人应答的 tool_call ⇒ 网关 `400 {"code":"1213"}`），`dsh-llm-deepseek` 的 user 分支遇到该块直接 `unsupported()` 抛 `UNSUPPORTED_CONTENT`。**触发时机**：第一轮请求正常，模型一旦调用 `read`/`grep`、**第二轮**带上工具结果即炸——两条路由两种报错，根因同一处。修法：`lib/advisor.mjs` 的 `toolResultMsg` 改判新形状；`compactMessages` 的孤儿守卫与 `keyFiles` 取文按新形状改判（`isToolResultMsg` 单点），**并补一条退化边界**——回退到数组边界仍落在 `tool` 上（配对前驱本就不在数组里）⇒ **丢弃**，绝不产出以孤儿 `tool` 开头的窗口（否则 deepseek 侧抛 `tool result has no matching call`，把「每次必炸」变成「压到 20 条以后才炸」）；`lib/consult.mjs` 的主历史渲染放行 `role:'tool'`（只留 `[tool result]` 标记、不展开 content，保 60KB 预算）。
+- **D-42（jobs owner · 全部后台派发全灭）**：0.1.7 的 `dsh-jobs-local` 在 `start(spec)` 首行新增 `resolveOwner(spec.owner)` → `agents.get(owner)`，而 agents 注册表按 **id** 键（`dsh-agent` 注册时强制 `agent.id === agent.session.id`）⇒ 插件 7 处 `owner: agent`（Agent 对象）全部抛 `session "[object Object]" has no live agent`。0.1.6 的 `start()` 直接把 `spec.owner` 当 owner 桶用 ⇒ 旧写法**当时可用**；平台自己的调用点（`dsh-tool-subagent` / `dsh-tool-workflow`）一律传 `parent.id`。**影响面**：advisor-codex · advisor-dsh · consult · eng-codex · eng-dsh · escalate-codex · escalate-dsh 七处，等于批 21「dsh 路径默认后台」在 0.1.7 上整体失效。修法：新增叶模块 `lib/job-owner.mjs`（`ownerIdOf(agent)`：`agent.id` → 回落 `agent.session.id`；**两者皆缺响亮失败**，不静默回落成对象——对象在 0.1.7 下必然被拒收，静默回落会把「必定失败的派发」伪装成「派发成功」），4 档 7 处统一改判。
+- **回归锁（5 条，新档 `test/dsh017-compat.test.mjs` + `truncation.test.mjs` 改判）**：每处一条**行为腿** + 一条**源码字节锁**。D-41 行为腿走**真实 `runAdvisorToolLoop`** 两轮夹具（llm 桩只替网络那一层），断言 `role:'tool'` / 消息级 `toolCallId`·`isError`·`source` / `content` 是结果块数组 / 负控无 `user+tool-result` 残留 / 配对链无孤儿；字节锁钉住「零处旧形状 + 恰一处 tool 角色构造点 + `keyFiles` 取文随形状搬 + consult 渲染放行 tool」。D-42 断言 `ownerIdOf` 三态 + 4 档 7 处 `jobs.start` 与 `ownerIdOf(agent)` **一一对应**、零处直传 Agent 对象。
+- **授权面变更（显式声明）**：`AP_TEST_AUTHORIZED` **新增 `test/truncation.test.mjs`**——该档的 `toolResultMsg` 夹具与 T13-boundary 期望值**逐字编码**了旧形状，D-41 换契约 ⇒ 期望值必须翻转（**这正是 T-AP9 存在的意义，不是障碍**）；T13-boundary 同批拆成正反两条腿。T-E19 清单同批登记新档 `dsh017-compat.test.mjs`。
+- **★ 本批改 `lib/**` ⇒ 重启 DSH 后生效。**
 ## [0.29.2] — 2026-09-21
 
 > **一句话**：把代码与测试里**作者私有的 provider / 模型标识**换成中性示例值，并给 npm 打包加白名单——此前 `npm pack` 会把 `docs/` 与 `test/` 一起打进去。**零行为改动。**

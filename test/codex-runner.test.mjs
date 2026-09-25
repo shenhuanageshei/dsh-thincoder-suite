@@ -672,7 +672,7 @@ test("jobs 派发: 预算超 cap 且 ctx.jobs 可用 → 派后台任务（owner
   assert.ok(!out.includes("含评审全文"), "D-09：删除「通知含评审全文」虚假承诺（通知只含一行指针）")
   assert.ok(!out.includes("完成时会话内自动收到通知"), "旧虚假承诺文案整体移除")
   assert.equal(startPayload.kind, "advisor-codex")
-  assert.equal(startPayload.owner, agent, "owner 绑定发起会话的 agent")
+  assert.equal(startPayload.owner, agent.id ?? agent.session.id, "D-42：owner = 共享 agent/session id（0.1.7 平台按 id 查活代理，传对象必被拒收）")
   assert.ok(startPayload.label.includes("codex-model-a"))
   // done settle → finalize 恰好一次：轮次推进 + 评审全文进 job output
   const outcome = await hooks.done
@@ -1677,7 +1677,7 @@ test("R2 escalate codex jobs: 预算>cap 且 jobs 可用 → 派发 + 句柄/UI-
   assert.ok(!out.includes("post-op report"), "派发即返回句柄（不是交付报告）")
   assert.equal(specs.length, 1)
   assert.equal(specs[0].payload.kind, "escalate-codex", "job kind 机制专属")
-  assert.equal(specs[0].payload.owner, deps.agent, "owner 绑定发起 agent（cancel/通知路由）")
+  assert.equal(specs[0].payload.owner, deps.agent.id ?? deps.agent.session.id, "D-42：owner = 共享 agent/session id（cancel/通知路由同一判据）")
   assert.ok(specs[0].payload.label.includes("900s"), "job label 含预算")
   assert.equal(typeof specs[0].hooks.cancel, "function", "hooks.cancel（→ ctrl.abort）存在")
   const st0 = sessionState(sid)
@@ -1821,7 +1821,7 @@ test("R2 eng_coder codex jobs: 预算>cap 且 jobs 可用 → 派发 + 句柄文
   assert.ok(!out.includes("eng_coder delivery"), "派发即返回句柄（不是交付报告）")
   assert.equal(specs.length, 1)
   assert.equal(specs[0].payload.kind, "eng-codex", "job kind 机制专属")
-  assert.equal(specs[0].payload.owner, deps.agent, "owner 绑定发起 agent")
+  assert.equal(specs[0].payload.owner, deps.agent.id ?? deps.agent.session.id, "D-42：owner = 共享 agent/session id")
   assert.equal(typeof specs[0].hooks.cancel, "function", "hooks.cancel（→ ctrl.abort）存在")
   assert.equal(sessionState(sid).advisorRound, 2, "派发即返回：轮次未重置（done 未 settle）")
   const outcome = await specs[0].hooks.done
@@ -3660,7 +3660,7 @@ test("R5 §7.1 dsh 自动派发: >cap + ctx.jobs → job 内跑完整 runAdvisor
   assert.ok(out.includes("job 内预算不钳制"), "派发文案明示 job 内预算不钳制（D-17 只护同步路径）")
   assert.equal(specs.length, 1)
   assert.equal(specs[0].payload.kind, "advisor-dsh")
-  assert.equal(specs[0].payload.owner, agent, "owner 绑定会话 agent")
+  assert.equal(specs[0].payload.owner, agent.id ?? agent.session.id, "D-42：owner = 共享 agent/session id")
   assert.ok(specs[0].payload.label.includes("dsh review (p:m, 900s)"), "label 含路由与预算")
   assert.ok(streamCalls >= 1, "run() 内 llm.stream 已被消费（job 启动即跑完整循环——纯进程内调用，无子进程）")
   // done settle → finalize 恰好一次：轮次推进恰好 1、prior 只存评审正文（D-19：机制后缀不进 prior）

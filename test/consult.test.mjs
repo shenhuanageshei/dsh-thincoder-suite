@@ -385,7 +385,7 @@ async function b15DeliveryChecks() {
   const spec = h.jobs.specs[0].spec
   assert.equal(spec.kind, "consult", "D15-5：kind 无路由后缀（会话混跑 dsh 与 codex-cli 行）")
   assert.equal(spec.outputLimitBytes, 131072)
-  assert.equal(spec.owner, h.deps.agent)
+  assert.equal(spec.owner, h.deps.agent.id ?? h.deps.agent.session.id, "D-42：owner = 共享 agent/session id（0.1.7 平台按 id 查活代理）")
   assert.match(spec.label, /^consult #\d+ \(4 models: p:a, p:b, p:c, p:d\)$/)
   assert.deepEqual(Object.keys(h.jobs.specs[0].hooks).sort(), ["cancel", "done"], "hooks 形 = {cancel, done}")
 

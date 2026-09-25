@@ -790,6 +790,16 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
     //   在仓外临时副本上会话期自证（不进套件）。设计档 docs/2026-09-17-writefileatomic-design.md
     //   §8.2（锚 A6…A11）· §10.1（新增档，触发登记级联）· §10.4 stage 2。台账行由主代理同批登记。
     "write-atomic.test.mjs",
+    // 批 24（D-41 / D-42：DSH 0.1.7 平台契约变更）新增档——**在其落地的同一 stage 内登记**
+    // （批 9 §七 已立此纪律：台账-历史一致闸的「T-E19 ↔ fs」等值腿会在「fs 已 +1 而本表未登记」时先红）。
+    // 理由与设计档引用：dsh017-compat.test.mjs = 两处 0.1.7 契约断裂的回归锁，每处一条**行为腿** +
+    //   一条**源码字节锁**——D-41 消息模型（工具结果必须是独立 tool 角色消息：走真实
+    //   runAdvisorToolLoop 的两轮夹具，llm 桩只替网络那一层；断言 role/isError/source/toolCallId
+    //   契约 · 无 user+tool-result 残留 · 无孤儿 tool）+ D-42 jobs owner（jobs.start 的 owner 必须是
+    //   agent/session id：ownerIdOf 三态 + 4 档 7 处一一对应的字节锁）。设计档
+    //   docs/2026-09-25-dsh017-compat-design.md §6（机验锚 A1…A8：A1/A2 = D-41a/D-41b · A3/A4 = T13-boundary-a/b ·
+//   A5/A6 = D-42a/D-42b · A7/A8 = 登记与授权面）。台账行由同一提交登记。
+    "dsh017-compat.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」
