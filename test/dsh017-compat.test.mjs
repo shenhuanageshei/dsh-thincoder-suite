@@ -1,4 +1,4 @@
-// dsh017-compat.test.mjs — D-41 / D-42 的 0.1.7 兼容回归锁。
+// dsh017-compat.test.mjs — D-41 / D-42 / D-46 / D-44 的 0.1.7 兼容回归锁（批 25 增 D-46/D-44 腿）。
 //
 // 两处都是「插件写的是 0.1.6 的契约、0.1.7 换了契约」：
 // - D-41 消息模型：工具结果从 user+tool-result 块改成**独立 tool 角色消息**；
@@ -280,4 +280,24 @@ test("D-44b（锚 A3 反向腿）: 缺基座行为与改动前逐字一致——
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ————————————— D-46 静态锁（设计锚 A5 / AC-4）：7 处 jobs.start 的 run 形参必须全是 handle 形 —————————————
+// 行为腿（D-46a 的 runArgs 断言）只覆盖**被走到的那一处**；这条锁覆盖**全部 7 处**：任何一处被改回无参
+// `run: () =>` ⇒ 该档 handle 数 < jobs.start 数 ⇒ 当场红（US-4「改回旧契约即红灯」对 7/7 成立）。
+test("D-46-static (锚 A5 / AC-4): 4 档 jobs.start 与 run: (handle) 一一对应（合计 7），零处无参 run", () => {
+  const files = ["advisor", "consult", "eng", "escalate"]
+  let starts = 0, handles = 0, bare = 0
+  for (const name of files) {
+    const src = readFileSync(new URL("../lib/" + name + ".mjs", import.meta.url), "utf8")
+    const s = (src.match(/jobs\.start\(\{/g) ?? []).length
+    const h = (src.match(/run:\s*\(handle\)\s*=>/g) ?? []).length
+    const z = (src.match(/run:\s*\(\)\s*=>/g) ?? []).length
+    assert.equal(z, 0, name + ".mjs 不得残留无参 run: () =>")
+    assert.equal(h, s, name + ".mjs 的 run: (handle) 数必须等于 jobs.start 数（实得 " + h + " vs " + s + "）")
+    starts += s; handles += h; bare += z
+  }
+  assert.equal(starts, 7, "4 档 jobs.start 合计 = 7（登记值；新增派发点必须同批更新本锁）")
+  assert.equal(handles, 7, "run: (handle) 合计 = 7（登记值）")
+  assert.equal(bare, 0)
 })
