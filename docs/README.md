@@ -22,6 +22,8 @@
 
 | [job-output-fallback.md](job-output-fallback.md) | 2026-09-25 | **常设运维说明（非批次档）**：平台侧 `job_output` 读不回后台作业全文的现象、逐机制绕行方式（advisor → session-state · consult → 纪要文件 · eng/escalate → 同步派发）、以及 eng/escalate 交付报告未落盘这个缺口与三条应急 |
 
+| [dsh017-full-alignment-design.md](dsh017-full-alignment-design.md) | 2026-09-26 | **批 25 设计：插件对 DSH 0.1.7-rc.2 的全面契约对齐**——D-46 作业输出契约（`run(handle)` + 输出环 `append` + outcome 的 `result` 字段；0.1.6 的 `spec.run()` 无参与 `job.output` 在 0.1.7 已不存在）· D-44 文档集指纹的路径基座显式化；含两版源码逐字对照 · 决策 D25-1…D25-4 · 机验锚 A1…A6 |
+
 ## 吸收面
 
 | 文档 | 日期 | 主题 |
