@@ -16,6 +16,7 @@ import {
   sanitizeSessionAdvisor, describeSessionView, registerConfigApi, CONFIG_API_PREFIX, makeApiHandler,
 } from "../lib/index.mjs"
 import { resolveAdvisorRoute } from "../lib/advisor.mjs"
+import { probeProfileRoot } from "../lib/dsh-home.mjs"
 
 const mkHome = () => mkdtempSync(join(tmpdir(), "thincoder-cfg-"))
 const rmHome = (h) => { try { rmSync(h, { recursive: true, force: true }) } catch { /* 已清理 */ } }
@@ -237,6 +238,31 @@ test("U6c: resolveConfigStorePath without any DSH home → null (callers fail-sa
     else process.env.DSH_HOME = savedHome
     rmHome(root)
   }
+})
+
+test("U6d: probeProfileRoot accepts the 0.1.7 renamed marker (settings.yaml.imported)", () => {
+  // 回归锁（2026-09-25）：0.1.7 把 settings.yaml 改名为 settings.yaml.imported；只认旧名会让
+  // home 兜底探测永不命中 ⇒ 无 DSH_HOME 的部署（桌面版 app 插件进程）拿不到 home ⇒
+  // saveUserConfig 返回 false ⇒ 设置页报 500 "failed to write user config"。
+  const root = mkHome()
+  try {
+    mkdirSync(join(root, "sessions"))
+    writeFileSync(join(root, "settings.yaml.imported"), "# imported by 0.1.7\n")
+    assert.equal(probeProfileRoot(join(root, "sessions")), root,
+      "只有 settings.yaml.imported → 仍判为 profile 根（桌面版实际形态）")
+    assert.equal(probeProfileRoot(root), root, "根目录自身也是命中点")
+    // 旧名形态继续命中（升级前后兼容，便携版旧 home 不受影响）
+    writeFileSync(join(root, "settings.yaml"), "# legacy\n")
+    assert.equal(probeProfileRoot(root), root, "旧 settings.yaml 仍命中")
+    // 两个标记都没有 → 不是 profile 根（探测语义未被放宽成"有 sessions 就算"）
+    rmSync(join(root, "settings.yaml"))
+    rmSync(join(root, "settings.yaml.imported"))
+    assert.notEqual(probeProfileRoot(join(root, "sessions")), root, "无任何标记 → 不判为 profile 根")
+    // sessions/ 本身仍必需
+    writeFileSync(join(root, "settings.yaml"), "# legacy\n")
+    rmSync(join(root, "sessions"), { recursive: true, force: true })
+    assert.notEqual(probeProfileRoot(root), root, "缺 sessions/ → 不判为 profile 根")
+  } finally { rmHome(root) }
 })
 
 // ————————————— U3：host 校验 helper（与一期同源导出复用） —————————————
