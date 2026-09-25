@@ -133,3 +133,151 @@ test("D-42b 静态锁: 4 档 7 处 jobs.start 一律 ownerIdOf(agent)，零处�
   assert.equal(starts, 7, "jobs.start 落点总数 = 7（登记值）")
   assert.equal(owners, 7)
 })
+
+// ═══════════════ D-46（0.1.7 作业输出契约）· D-44（指纹基座） ═══════════════
+//
+// 本批新增腿（设计档 §6.1 锚 A1/A2/A3/A4）。D-46 的四条腿全部走**真实入口**
+// （`runEscalate` 的 dsh 后台派发 = 4 档 7 处 jobs.start 之一），只桩掉网络与平台服务——
+// 纯静态锁挡不住「形状对但接线错」（append 了、但 append 的不是正文），行为腿挡不住
+// 「换个地方又写回 run: ()」⇒ 两条腿都给。
+//
+// 注意：0.1.7 的 `spec.run(handle)` **带参**；本档的假 jobs 服务必须把 handle 传下去
+// （既有测试里的 fakeJobsFactory 是 0.1.6 形态的无参调用——它靠 handle 可选链仍绿，但
+// 证明不了「正文进了环」）。这里的假服务 = 0.1.7 形态：调 `spec.run(handle)` 并记录 append。
+import { mkdirSync } from "node:fs"
+import { computeDocHash, normalizeDocPath } from "../lib/doc-hash.mjs"
+import { runEscalate } from "../lib/escalate.mjs"
+import { sessionState, dropSession } from "../lib/state.mjs"
+
+/** 0.1.7 形态的假 jobs 服务：调 `spec.run(handle)`，把 handle 的 append 调用逐次记下来。 */
+function fakeJobs017(handle) {
+  const specs = []
+  const appended = []
+  const runArgs = []
+  const jobs = {
+    start(spec) {
+      runArgs.push(spec.run.length) // run 的形参个数（0.1.7 契约 = 1：handle）
+      const hooks = spec.run(handle)
+      specs.push({ spec, hooks })
+      return (spec.kind ?? "job") + "-" + specs.length
+    },
+  }
+  return { jobs, specs, appended, runArgs }
+}
+
+/** dsh 后台行的一次真实派发：返回 { appended, outcome, runArgs, dispatchText }。 */
+async function driveEscalateDshJob(sid, body) {
+  const handle = {
+    id: "job-" + sid,
+    append(text, options) { this.calls.push({ text, options }) },
+    updateProgress() { /* 平台进度行：本批不用 */ },
+    calls: [],
+  }
+  const { jobs, specs, runArgs } = fakeJobs017(handle)
+  const st = sessionState(sid)
+  const subagents = {
+    async start() {
+      return {
+        result: Promise.resolve({ stopReason: "completed", output: [{ type: "text", text: body }] }),
+        dispose: async () => { /* 无资源 */ },
+      }
+    },
+  }
+  const deps = {
+    ctx: { subagents, get: (s) => (s === "jobs" ? jobs : null) },
+    agent: { session: { id: sid, header: { delegationDepth: 0, cwd: tmpdir() } } },
+    config: { consultModels: [{ provider: "p", model: "m" }], dshBackgroundTimeoutMs: 1000 },
+    state: st,
+    signal: undefined,
+  }
+  const dispatchText = await runEscalate(deps, "dsh background work", undefined, false, true)
+  const outcome = await specs[0].hooks.done
+  dropSession(sid)
+  return { handle, appended: handle.calls, outcome, runArgs, dispatchText, specs }
+}
+
+test("D-46a 契约腿（锚 A1）: spec.run(handle) 收到 0.1.7 句柄；正文经 handle.append 进输出环，且 append 的文本 = 正文", async () => {
+  const BODY = "did the work\n\nTouched files: none"
+  const r = await driveEscalateDshJob("d46a-esc-dsh", BODY)
+  {
+    assert.deepEqual(r.runArgs, [1], "run 的形参个数 = 1（0.1.7 的 run(handle)；0.1.6 的无参版本收不到环）")
+    assert.equal(r.specs.length, 1, "恰一次 jobs.start")
+    assert.ok(r.dispatchText.includes("dsh"), "前置：确实走了 dsh 后台派发（不是同步快路径）")
+    assert.equal(r.appended.length, 1, "正文恰 append 一次（0.1.7 的读法只认输出环，不读 job.output）")
+    assert.equal(typeof r.appended[0].text, "string", "append 的实参是字符串")
+    assert.equal(r.appended[0].text, r.outcome.result, "append 的文本 = outcome.result（同一段正文，不是两种拼法）")
+    assert.ok(r.appended[0].text.includes(BODY), "append 的文本含子代理正文（报告没丢）")
+    assert.ok(r.appended[0].text.startsWith("escalate ("), "append 的文本是本 job 的交付正文（不是状态行）")
+  }
+})
+
+test("D-46b 契约腿（锚 A2）: outcome 同时含 result 与 output 且同值；detail 仍是短句", async () => {
+  const BODY = "REPORT-BODY-46B\n\nTouched files: none"
+  const r = await driveEscalateDshJob("d46b-esc-dsh", BODY)
+  assert.equal(r.outcome.status, "completed", "前置：成功终态")
+  assert.equal(typeof r.outcome.result, "string", "result 在场（0.1.7 的 settle 只写 job.result）")
+  assert.equal(typeof r.outcome.output, "string", "output 在场（0.1.6/rc.1 读它）")
+  assert.equal(r.outcome.output, r.outcome.result, "两字段同值别名（决策 D25-1：写两处只为旧运行时不丢正文）")
+  assert.ok(r.outcome.result.includes(BODY), "正文在正文里")
+  // detail 进的是状态行/完成通知——短句，不含正文、不含换行
+  assert.ok(!r.outcome.detail.includes(BODY), "detail 不得夹正文： " + r.outcome.detail)
+  assert.ok(!r.outcome.detail.includes("\n"), "detail 不得含换行： " + r.outcome.detail)
+  assert.ok(r.outcome.detail.length <= 64, "detail 是短句（实测 " + r.outcome.detail.length + " 字符）")
+})
+
+test("D-44a（锚 A3 · A4）: 同一份文档，绝对路径指纹 == 「相对路径 + 基座」指纹，且指纹非空", () => {
+  const dir = mkdtempSync(join(tmpdir(), "thincoder-d44a-"))
+  try {
+    mkdirSync(join(dir, "docs"), { recursive: true })
+    writeFileSync(join(dir, "docs", "a.md"), "# A\n\n同一个文件，两种写法。\n")
+    const byAbs = computeDocHash([join(dir, "docs", "a.md")])
+    const byRel = computeDocHash([join("docs", "a.md")], dir) // 相对路径 + 显式基座（会话 cwd）
+    assert.equal(byAbs.ok, true, "绝对路径可读")
+    assert.equal(byRel.ok, true, "相对路径 + 基座可读（改动前这里恒 ok:false）")
+    assert.ok(byAbs.hash.length > 0, "指纹非空")
+    assert.equal(byRel.hash, byAbs.hash, "同一份临时 md：两种算法必须同一指纹")
+    assert.deepEqual(byRel.docPaths, byAbs.docPaths, "落盘路径表也同一份（同一次归一）")
+    assert.equal(byAbs.docPaths[0], normalizeDocPath(join("docs", "a.md"), dir), "归一规则单点：resolve(基座, p) + 反斜杠归一")
+    // 负控：换个基座 ⇒ 读不到（证明基座真的被用了，而不是碰巧 cwd 也对）
+    const otherDir = mkdtempSync(join(tmpdir(), "thincoder-d44a-other-"))
+    try {
+      assert.equal(computeDocHash([join("docs", "a.md")], otherDir).ok, false,
+        "换基座 ⇒ fail-closed（否则说明基座形同虚设）")
+    } finally {
+      rmSync(otherDir, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("D-44b（锚 A3 反向腿）: 缺基座行为与改动前逐字一致——resolve(p) 为锚 + fail-closed 不变", () => {
+  const dir = mkdtempSync(join(tmpdir(), "thincoder-d44b-"))
+  try {
+    mkdirSync(join(dir, "docs"), { recursive: true })
+    writeFileSync(join(dir, "docs", "a.md"), "# A\n")
+    const rel = join("docs", "a.md")
+    // ① 归一逐字一致：旧实现 = resolve(String(p))，缺基座/空串/非字符串（.map 传下标）都走它
+    assert.equal(normalizeDocPath(rel), resolve(rel).replace(/\\/g, "/"), "缺基座 = resolve(p)（改动前逐字）")
+    assert.equal(normalizeDocPath(rel, undefined), normalizeDocPath(rel), "undefined 基座 = 旧行为")
+    assert.equal(normalizeDocPath(rel, null), normalizeDocPath(rel), "null 基座 = 旧行为")
+    assert.equal(normalizeDocPath(rel, ""), normalizeDocPath(rel), "空串基座 = 旧行为")
+    assert.equal(normalizeDocPath(rel, 1), normalizeDocPath(rel), ".map 下标当基座传进来也不许抛（旧调用点兼容）")
+    assert.deepEqual([rel, rel].map(normalizeDocPath), [normalizeDocPath(rel), normalizeDocPath(rel)],
+      "list.map(normalizeDocPath) 的既有写法逐个同值（下标被忽略）")
+    // ② fail-closed 方向不变：相对路径按默认基座（process.cwd()）读不到 —— 仍返回 ok:false + missing 清单
+    const onlyUnderDir = join("d44b-only-here", "x.md")
+    mkdirSync(join(dir, "d44b-only-here"), { recursive: true })
+    writeFileSync(join(dir, "d44b-only-here", "x.md"), "x\n")
+    const noBase = computeDocHash([onlyUnderDir])
+    assert.equal(noBase.ok, false, "缺基座 + 相对路径 ⇒ fail-closed（行为不变）")
+    assert.deepEqual(noBase.missing, [normalizeDocPath(onlyUnderDir)], "missing 清单 = 旧的归一路径")
+    assert.equal(noBase.reason, "unreadable", "reason 不变")
+    // ③ 同一串给了基座就读得到（这就是 D-44 要修的那一格）
+    const withBase = computeDocHash([onlyUnderDir], dir)
+    assert.equal(withBase.ok, true, "显式基座 ⇒ 可读（D-44 的修复面）")
+    assert.deepEqual(withBase.docPaths, [normalizeDocPath(onlyUnderDir, dir)])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
