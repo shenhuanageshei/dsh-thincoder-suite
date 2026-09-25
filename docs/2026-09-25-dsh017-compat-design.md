@@ -116,7 +116,8 @@ export function ownerIdOf(agent) {
   for (const candidate of [agent?.id, agent?.session?.id]) {
     if (typeof candidate === "string" && candidate !== "") return candidate
   }
-  throw new Error("[thincoder-suite] jobs.start owner 无法解析：agent 既无 id 也无 session.id…")
+  throw new Error("[thincoder-suite] jobs.start owner 无法解析：agent 既无 id 也无 session.id"
+    + "（0.1.7 起平台按 id 查找活代理，传对象必被拒收——D-42）")
 }
 ```
 
