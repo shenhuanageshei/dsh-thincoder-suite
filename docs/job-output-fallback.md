@@ -13,7 +13,11 @@
 Cannot read properties of undefined (reading 'output')
 ```
 
-截至 2026-09-25 的三次复现：`advisor-dsh-1`（advisor 代码评审）· `consult-1`（会诊）· `job_list()`（列作业；同一族，报 `binding arguments must be lossless JSON`）。
+截至 2026-09-25 的**四次**复现：`advisor-dsh-1` · `advisor-dsh-3`（advisor 评审）· `consult-1`（会诊）· **`pwsh-315`（平台自己的后台 pwsh 作业）**。
+
+**★ 定性更正（2026-09-25 二次核查）**：这不是「DSH 没有这个机制」——**机制在**：`job_output` / `job_list` / `job_kill` 由 `@deepseek-ai/dsh-tool-jobs` 提供。0.1.7-rc.2 的读取实现是 `readBody(read)`，它读 **`read.job.output.spillPaths`**，即**期望新形态** `{ chunks, lossy, result?, job }`。而 `job_list` 正常、不存在的 id 报干净的 `unknown job …` ⇒ 工具在、作业找得到，**坏的只是「读输出」这一步**：**读的一方与被读的一方不是同一代代码**（本机 profile 的 pnpm 店里残留着 **39 个 0.1.7-rc.1** 的 core 包，而 app 里是 rc.2；这是便携版→桌面版迁移留下的两代并存）。
+
+**★ 另更正一处我自己的错**：早前把 `job_list()` 也算作一次「复现」是**我的调用姿势错误**——它不带参数调用，在 Code-Mode 边界就被拒（报的是另一条 `binding arguments must be lossless JSON`），与本缺陷无关；用 `job_list({})` 调用**完全正常**。
 
 **★ 作业本身是成功的**：派发成功、跑完、完成通知也照常到达——坏的只有「读全文」这一条路径。
 
@@ -51,9 +55,11 @@ Cannot read properties of undefined (reading 'output')
 
 1. **每次后台作业 settle 时把全文落盘**到 `$DSH_HOME/.thincoder/jobs/<kind>-<n>.txt`，并在派发文案里给出这个路径（工具描述同步）。
 2. 派发文案改为**首选落盘路径、`job_output` 作为附加**——平台修好后前者依然有效，不会再出现「描述指向一条坏路径」。
+3. **本机侧的对齐（与插件无关，但值得做）**：让 profile 的 core 包与 app 同代（清掉 `profiles/desktop/node_modules/.pnpm` 里那批未再被 lock 引用的 0.1.7-rc.1 残留、按 app 的版本重装 profile 依赖）——**请在 app 关闭时做**。做完用一次平台自产作业复测：`pwsh` 带 `run_in_background: true` 起一个 2 秒的作业，再用 `job_output` 读；读得回 ⇒ 不配对已消除；仍读不回 ⇒ 是 rc.2 自身的 bug，可按上面两处形状差异（`readBody` 期望 vs `readJob` 返回）向上游报。
 
 ## §7 变更记录
 
 | 日期 | 变更 |
 |---|---|
 | 2026-09-25 | 首版：三次复现 · 两条已验证绕行 · eng/escalate 落盘缺口 · 三条应急 · 永久修法指向批 25（D-45） |
+| 2026-09-25 | **二次核查订正**：复现改为四次（补 `advisor-dsh-3` 与**平台自产的 `pwsh-315`**）· **定性更正**为「机制在、是本机两代 core 包不配对」· 撤掉误记的 `job_list()` 一次（我的调用姿势错，`job_list({})` 正常）· 永久修法补第 3 条（本机对齐 + 复测办法） |
