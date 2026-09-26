@@ -802,6 +802,17 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
     "dsh017-compat.test.mjs",
     // 批 26 契约面常设锁档（九条平台触点，设计档 docs/dsh017-batch26-design.md §2.3）——登记缺口补登（理由/裁定来源：分歧审计 ③-G1）。
     "platform-surface.test.mjs",
+    // 批 27 新增档（残差清零：宿主验收回归锚 + 落盘面回归锚）——**在其落地的同一 stage 内登记**
+    // （批 9「同 stage 登记」纪律：台账-历史一致闸的「T-E19 ↔ fs」等值腿会在「fs 已 +1 而本表
+    // 未登记」时先红）。本两行由批 27 分歧审计 D2 点名级联补登（裁定来源：批 27 分歧审计 D2；
+    // 授权面=只改本清单数组与本注释，不动本档其它任何断言）。
+    // 理由与设计档引用（docs/dsh017-batch27-design.md §3 / §5.1）：
+    //   · host-check.test.mjs —— A27-5 kill 收窄 + A27-7 超时解析单点（静态计数只看非注释行——
+    //     分歧修复 D1）；
+    //   · job-persistence.test.mjs —— A27-1…A27-4 清扫/轮转与零落盘 · A27-6 pathForm warn ·
+    //     A27-8 cwdHint 静态 7 处 + 收口点直喂/真实派发双行为腿（分歧修复 D5）。
+    "host-check.test.mjs",
+    "job-persistence.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」

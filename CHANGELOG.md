@@ -2,6 +2,20 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.29.6] — 2026-09-26
+
+> **一句话**：**收拾干净**——作业落盘目录不再只增不减、索引重写零伪造、`cwdHint` 接上最后一处（D-40/D-44 同一条纪律）、宿主验收执行面的 kill 语义收窄、非法 `pathForm` 变可见。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。
+
+**批 27（残差清零：把批 26 的四条 🔵 与划出去的边界收干）**
+
+- **【计数行】**：`node --test` **559/559**（**基线 545 + 本批 14**：新档 `test/job-persistence.test.mjs` +9 · 新档 `test/host-check.test.mjs` +5）。⇒ 台账 §三新增两行，档数 **23 → 25**。
+- **D-49（🟡 声明面 ≠ 实际面，批内已修）**：清扫声明「只碰四类 kind」，实现却另外删 `.index.jsonl.tmp-*`，且手写 tmp+rename（重复造轮）。修法：改用 `lib/dsh-home.mjs` 的 `writeFileAtomic`（`.<base>.tmp-` 前缀自带陈旧清理 + rename 有界重试）⇒ 声明与实现一致、轮子消除。
+- **US-1 清扫/轮转**：`sweepJobReports({maxAgeDays=7, maxFiles=200})`——**只认** `/^(advisor|consult|eng|escalate)-[A-Za-z0-9._-]+\.txt$/`（平台 `pwsh-*` 等形态**永不触碰**）；天数轴 + 条数轴双上限；索引只保留**仍存在文件**的行、**零伪造**（存活行与原行逐字节相同）；persist 成功后尽力而为，任何失败只 warn。
+- **US-2/3/4**：非法 `pathForm` ⇒ warn 一行且不抛 · 超时值域解析**单点**（`effectiveTimeoutMs`）· `finish()` 只在超时/未收到 close 时 kill（正常 close ⇒ clearTimeout + settle）。
+- **US-5**：`jobOutcome(handle, outcome, opts?)` 增可选 `cwdHint` ⇒ `pickDshHome` 不再拿 `process.cwd()` 猜基座（与 D-40/D-44 同一物种的最后一处）；四档 28 处调用点统一加 `jobPersistOpts`，**缺省行为逐字不变**。
+- **US-6**：无 `DSH_HOME` ⇒ **零落盘**回归锚（复用既有注入缝）· 清掉批 26 实现窗口留下的一次性产物 `smoke-nohome-1.txt`。**订正一处自查误判**：初判为「测试隔离泄漏」，经 `git log -S` 全历史检索证本仓无该字面 ⇒ 已撤销「隔离缝改造」设计项（设计档 §1⑥ 留痕）。
+- **流程实据**：设计评审 3 轮至 PASS · 首轮交付 558/552/6 → **分歧审计**（只读）判定「需修复轮」（1 条自伤 + 5 条登记级联）→ 修复轮 `eng-dsh-4` 逐条收敛 → 交付码评 · **落盘通道二次实证**：`eng-dsh-4.txt`（8405 字节）由宿主直接读回，全程未借 `job_output`。
+- **残留（边界）**：索引与「手工删文件」之间存在一段不一致窗口（下次成功落盘即自愈）· 清扫不碰他形态产物（需人工清）。
 ## [0.29.5] — 2026-09-26
 
 > **一句话**：**把报告拿回来**——后台作业的全文不再依赖平台那条坏掉的读取口，跑完就落在盘上（`$DSH_HOME/.thincoder/jobs/<jobId>.txt`）；同时**把验证门归位**（dsh 子代理不再自己跑 check，改由宿主执行并回执）。**本版改 `lib/**` ⇒ 重启 DSH 后生效**（实测：本版落地后运行中实例已自动重载，`eng-dsh-1` 的报告确实落盘可读）。
