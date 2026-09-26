@@ -2,6 +2,19 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.29.4] — 2026-09-26
+
+> **一句话**：把插件的**作业输出**按 DSH 0.1.7-rc.2 的新契约生产（**输出环** + `job.result`），并让**文档集指纹**不再拿 `process.cwd()` 猜基座——前者决定「后台作业的报告正文能不能到模型」，后者决定「设计评审签发的合格证到底绑没绑上文档集」。**本版改 `lib/**` ⇒ 重启 DSH 后生效。**
+
+**批 25（DSH 0.1.7 契约对齐：D-46 · D-44；残留 D-47）**
+
+- **【计数行】**：`node --test` **527/527**（**基线 522 + 本批 5**：D-46 = `dsh017-compat.test.mjs` +3〔D-46a · D-46b · D-46-static〕· D-44 = 同档 +2〔D-44a · D-44b〕）。⇒ 台账 §三：`dsh017-compat.test.mjs` **4 → 9**；档数 **22**（不变）。
+- **D-46（🔴 作业输出契约）**：0.1.6 的生产方式是 `spec.run()`（**无参**）+ 正文放 `done` 的 outcome 的 `output`（平台存进 `job.output`，读时返回 `{ text, snapshot }`）；0.1.7-rc.2 改成 `spec.run(handle)`（handle = `{ id, append(text, options), updateProgress(line) }`）+ 正文由**输出环**承载（`handle.append` / `spec.output` 泵入），而 `settle` 只写 **`job.result = outcome.result`**（**`job.output` 字段已不存在**）。⇒ 插件四处派发既不写环也不返回 `result` ⇒ **报告正文在 0.1.7 下到不了模型**（与读取接口是否可用无关）。修法：新增 `lib/job-outcome.mjs` **单点收口** `jobOutcome(handle, outcome)`——正文入环 ⊕ `result`/`output` 同值别名（决策 D25-1：两代运行时都读得到）⊕ `handle?.append?.` 可选链（D25-2：旧运行时不传 handle 不许抛）；四处派发共 **28 处** outcome 全部换装（advisor 6 · consult 3 · eng 10 · escalate 9）。
+- **D-44（文档集指纹基座）**：`normalizeDocPath` 用 `resolve(String(p))`（**不带基座 ⇒ 退化成 `process.cwd()`**），而宿主进程的 cwd 是 profile 目录 ⇒ 相对路径的 `documents` 一律读不到 ⇒ `computeDocHash` fail-closed ⇒ `pendingDocHash` 置 null ⇒ **指纹门控续期与「文档已变更」检测双双失效**（诊断文案还把它归给「该次评审未绑定文档集」，误导排查）。修法：`normalizeDocPath(p, baseCwd?)` / `computeDocHash(paths, baseCwd?)` 接受**显式基座**，调用方传**会话 cwd**（advisor 签发侧 · eng 续期复核）；**缺基座逐字旧行为**（向后兼容）。有意不改 Guard-E 复核点（入参已归一的绝对路径，且受 `guard-e` T-E17 字节锁）。
+- **回归腿（5 条）**：D-46a/D-46b 走**真入口** `runEscalate` 的 dsh 后台派发（钉 `run` 形参个数 === 1、append 文本 === `outcome.result`）· D-44a（绝对 vs「相对 + 基座」同指纹且非空）/ D-44b（缺基座四态逐字 + `ok:false` 不变）· **D-46-static**（锚 A5 全量静态锁：`run: (handle)` 计数 === `jobs.start({` 计数、四档合计 **7**、**零处无参 `run: ()`**——任何一处被改回旧契约即红灯）。
+- **交付评审**：第 1 轮 **FAIL**（1🔴 静态锁 A5 未落地 · 1🟡 触发列滞后 · 3🔵）→ 逐条处置 → 第 2 轮 **PASS**。既有结构锁**逐字保留**（`stageGateNote(` = 5 · `failStop(` = 18 · 失败行零门字样）。
+- **流程实据（写进版本史，供后人避坑）**：本批实现走**后台派发**。`codexCli.budgetCapMs` 的缺省是 540000（9 分钟）——**同步派发**另受平台 `run_code` 墙钟约束（实测 600s），所以**把上限提到 60 分钟也在同步路径上用不上**；长任务的正解是后台路径（由 `dshBackgroundTimeoutMs` 兜底）。派发时插件会打 D-16 不变式提醒。
+- **残留（如实登记）**：**D-47** 冻结写门禁的路径归一仍猜基座 ⇒ 相对路径 **fail-open**（改动须同改 `guard-e` A2 夹具）→ **批 26**；**D-45** 作业全文落盘兜底 → 留转。
 ## [0.29.3] — 2026-09-25
 
 > **一句话**：修掉 **DSH 0.1.7 的三处平台契约变更**造成的插件失效——home 兜底探测的特征标记（`settings.yaml` → `settings.yaml.imported`）· advisor 工具结果的消息形状（`user+tool-result` 块 → 独立 `tool` 角色消息）· jobs 派发的 owner 参数据型（Agent 对象 → agent/session id）。**本版改 `lib/**` ⇒ 重启 DSH 后生效。**
