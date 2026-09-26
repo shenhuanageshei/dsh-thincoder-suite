@@ -416,7 +416,7 @@ let codexExeSeq = 0
 const codexExe = (p) => "t-ap-" + p + "-" + (++codexExeSeq) // probeCache/modelCache 按 executable 键控
 
 test("T-AP1e (AC-AP1, 审计 #3): 宿主 job kill（cancel 回调）→ `cancel@settle`，不是 `unknown@agent`", async () => {
-  // —— eng：dsh 后台 job（eng.mjs 的 `cancel: (reason) => ctrl.abort(reason)` + 该 job 的 catch 面）——
+  // —— eng：dsh 后台 job（eng.mjs 的 `cancel: cancelJob // 批 29 单①：写点具名化（行为逐字相同；原注释写 `ctrl.abort(reason)` 已成陈旧指针，顺手订正）` + 该 job 的 catch 面）——
   const engJobs = fakeJobs()
   const sidE = "ap-eng-jobkill-" + randomUUID()
   const stE = sessionState(sidE)
@@ -1054,7 +1054,8 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *  ★ 同批把 T13-boundary 拆成正反两条腿：a) 回退把配对 assistant 收进窗口（配对完整）；
  *  b) 全 tool 中段且配对前驱不在数组里 ⇒ 孤儿整体丢弃（新契约下的协议要求）。
  *  授权通道 = docs/test-lifecycle.md §二（本条是**修改**授权，非退役）。 */
-const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs", "test/context-budget.test.mjs", "test/session-state.test.mjs", "test/truncation.test.mjs"]
+// 批 29 / 单①（设计 §3「授权例外五档」之一）：D29-3 把 `stages[].check` 语义改为「宿主验收清单」，host 态渲染文本随之改变 ⇒ `test/stages.test.mjs:288` 的 four-part 渲染对位必须同批对齐。**同批登记在此**（不留给「被自家锁打红再临场解释」，先例：批 28 的 D28-6）。
+const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs", "test/context-budget.test.mjs", "test/session-state.test.mjs", "test/truncation.test.mjs", "test/stages.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */
 const AP_BASELINE_SHA = "9282882"
 

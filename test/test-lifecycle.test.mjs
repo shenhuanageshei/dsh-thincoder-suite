@@ -192,13 +192,17 @@ test("T-LC4 (AC-5 / 锚 N2+N3): 四方一致——台账 ↔ fs ↔ T-E19 清单
       "退役行若命中基线档，必须逐档出现在 AP_TEST_AUTHORIZED 里（子集谓词）")
 
     // —— 谓词自证（律 3）：三条合成行必须分别判出 违规 / 合规 / 合规 ——
-    //    批 22 订正（D-39）：违规样例由 `session-state.test.mjs` 换成 `stages.test.mjs`——前者因本批
+    //    批 29 订正（单①）：违规样例由 `stages.test.mjs` 换成 `preset-static.test.mjs`——前者因 D29-3
+    //    （`stages[].check` 语义改名「宿主验收清单」，host 态渲染文本随之改变）**已进授权表**；再拿它
+    //    当「未授权」样例会让这条自证**自身失效**（它要证的恰是「谓词不得恒空」）。**当时全表仅剩
+    //    `preset-static.test.mjs` 一档仍在表外**，故换用该档；谓词语义逐字不变。
+    //    （历史）批 22 订正（D-39）：违规样例由 `session-state.test.mjs` 换成 `stages.test.mjs`——前者因本批
     //    的夹具改动**已进授权表**（`AP_TEST_AUTHORIZED` 新增 `context-budget` / `session-state` 两项），
     //    再拿它当「未授权」样例会让这条自证**自身失效**（它要证的恰是「谓词不得恒空」）。换成仍在表外
     //    的基线档，谓词语义逐字不变。
     const synth = (file) => ["2026-01-01", "deadbeef", "test/" + file + " :: \"some title\"", "R1 + 证据", "1", "0", "—"]
-    assert.deepEqual(authorizationViolations([synth("stages.test.mjs")], baselinePaths, authorized),
-      ["test/stages.test.mjs"], "自证：基线档且未授权 ⇒ 必须判违规（谓词不得恒空）")
+    assert.deepEqual(authorizationViolations([synth("preset-static.test.mjs")], baselinePaths, authorized),
+      ["test/preset-static.test.mjs"], "自证：基线档且未授权 ⇒ 必须判违规（谓词不得恒空）")
     assert.deepEqual(authorizationViolations([synth("design-review-guard.test.mjs")], baselinePaths, authorized),
       [], "自证：基线档且在授权表内 ⇒ 合规")
     assert.deepEqual(authorizationViolations([synth("stage-gate.test.mjs")], baselinePaths, authorized),

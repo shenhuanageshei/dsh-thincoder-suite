@@ -285,8 +285,11 @@ test("runEngCoder integration: valid stages render into the spawn prompt (Staged
     assert.ok(prompt.includes("## Staged execution"))
     assert.ok(prompt.includes("### Stage 1 — alpha"))
     assert.ok(prompt.includes("### Stage 2 — beta"))
-    assert.ok(prompt.includes("### Stage 1 — alpha\nFiles:\n- lib/a.mjs\nAcceptance:\na works\nSelf-check:\nnode --check lib/a.mjs"),
-      "four-part section layout verbatim")
+    // D29-3（批 29 单①明文授权：**仅** check 渲染文本对位，机制断言一字不动）：dsh 路径缺省
+    // checkMode="host" ⇒ 第四段标签是「Host check (宿主验收清单——由宿主执行，你不要执行；宿主用):」，
+    // 不再是「Self-check:」（该字样在 host 态已按 D29-3 清除）。
+    assert.ok(prompt.includes("### Stage 1 — alpha\nFiles:\n- lib/a.mjs\nAcceptance:\na works\nHost check (宿主验收清单——由宿主执行，你不要执行；宿主用):\nnode --check lib/a.mjs"),
+      "four-part section layout verbatim（host 态第四段标签 = Host check）")
     assert.ok(prompt.includes("passed/failed/skipped"), "stage status table directive")
     assert.ok(prompt.includes("Touched files: <paths>"), "tail-line convention untouched")
     assert.ok(prompt.indexOf("## Staged execution") > prompt.indexOf("## Docs involved"))
