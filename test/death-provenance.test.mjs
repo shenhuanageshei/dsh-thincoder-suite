@@ -271,7 +271,8 @@ test("T-AP1d (AC-AP1): consult 家族 {timeout, stop, cancel, unknown} 四构造
   const { id: idT, ctrl: ctrlT } = await consultStart(hT)
   const dT = await consultDigestOf(hT.state, idT)
   assert.match(dT, /timed out after 1s/, "超时信封可见")
-  assert.equal(abortTag(ctrlT.signal.reason), "abort(timeout@agent)", "看门狗写点载荷 = timeout@agent")
+  assert.equal(abortTag(ctrlT.signal.reason), "abort(timeout@agent)",
+    "看门狗写点载荷 = timeout@agent" + timingState({ consultTimeoutMs: 30, reason: abortTag(ctrlT.signal.reason) }))
   cleanupConsult(hT)
 
   // stop：consult_stop 早停 —— **经由消费面断言**（批 6 修复轮审计 🔴 #1：用例不得再手搓
@@ -515,7 +516,8 @@ test("T-AP1f (AC-AP1, 审计 #5): 未覆盖站点矩阵——codex settle 面 / 
   try {
     const outE2 = await runEngCoder(depsE2, { task: "implement x", designToken: stE2.designToken })
     assert.ok(outE2.includes("eng_coder aborted. · abort(unknown@settle: no reason on signal)"),
-      "dsh 外层 catch：signal.aborted ∧ dshCtrl 未中止 ⇒ settle（换成 agent 即红）：" + outE2)
+      "dsh 外层 catch：signal.aborted ∧ dshCtrl 未中止 ⇒ settle（换成 agent 即红）：" + outE2
+      + timingState({ rejectDelayMs: 5, head: outE2.slice(0, 60) }))
   } finally { dropSession(sidE2) }
 
   // —— (4) escalate dsh 外层 catch 的 settle 臂（escalate.mjs:593）——
@@ -530,7 +532,8 @@ test("T-AP1f (AC-AP1, 审计 #5): 未覆盖站点矩阵——codex settle 面 / 
   try {
     const outS2 = await runEscalate(depsS2, "task text", undefined, false, false)
     assert.ok(outS2.includes("escalate (p:m) aborted. · abort(unknown@settle: no reason on signal)"),
-      "escalate dsh 外层 catch 的 settle 臂：" + outS2)
+      "escalate dsh 外层 catch 的 settle 臂：" + outS2
+      + timingState({ rejectDelayMs: 5, head: outS2.slice(0, 60) }))
   } finally { dropSession(sidS2) }
 })
 
@@ -627,8 +630,9 @@ const silentThenAbortError = (opts) => (async function* () {
 test("T-AP3 (AC-AP3): 无声样 AbortError → 超时尾；用户取消 → interrupted；返回形态同判；源码锁", async () => {
   // (a) 适配器以**不含 "deadline reached" 字样**的 AbortError 抛出 → 仍判超时尾（P2 的核心）
   const outA = await runAdvisorToolLoop({ llm: makeLlm([silentThenAbortError]) }, loopOpts({ timeoutMs: 1200 }))
-  assert.ok(outA.startsWith("Advisor: review timeout after "), outA)
-  assert.ok(!outA.includes("Advisor: interrupted."), "无声样 AbortError 不得被误判 interrupted")
+  assert.ok(outA.startsWith("Advisor: review timeout after "), outA + timingState({ timeoutMs: 1200 }))
+  assert.ok(!outA.includes("Advisor: interrupted."),
+    "无声样 AbortError 不得被误判 interrupted" + timingState({ timeoutMs: 1200, head: outA.slice(0, 60) }))
 
   // (b) 用户真取消 → 逐字 "Advisor: interrupted."
   const ctrl = new AbortController()
@@ -642,7 +646,7 @@ test("T-AP3 (AC-AP3): 无声样 AbortError → 超时尾；用户取消 → inte
   const outB = await p
   assert.ok(outB.startsWith("Advisor: interrupted."), outB)
   assert.ok(!outB.includes("review timeout after"), "用户取消 ≠ 超时")
-  assert.ok(outB.includes("abort(user@"), "用户取消也要自证来源")
+  assert.ok(outB.includes("abort(user@"), "用户取消也要自证来源" + timingState({ timeoutMs: 5000, head: outB.slice(0, 60) }))
 
   // (c) **返回形态**（流以 resolve 而非 reject 结束，`reason.kind === "aborted"`）：
   // ⚠ 批 6 修复轮（审计 🟡 #2）：AC-AP3 的「返回形态**同判**」正臂（复合信号已中止 ∧ 用户信号
@@ -662,7 +666,8 @@ test("T-AP3 (AC-AP3): 无声样 AbortError → 超时尾；用户取消 → inte
     loopOpts({ timeoutMs: 5000, signal: ctrlC.signal }))
   assert.ok(outC.startsWith("Advisor: interrupted."), outC)
   assert.ok(outC.includes("abort(user@settle: caller interrupt)"),
-    "返回形态按**信号状态**归因（settle = 宿主/调用方面）：" + outC)
+    "返回形态按**信号状态**归因（settle = 宿主/调用方面）：" + outC
+    + timingState({ timeoutMs: 5000, midStreamAbortAfterMs: 20, head: outC.slice(0, 60) }))
 
   // (d) 源码锁（AC-AP3 口径：**在循环 catch 内**零命中）：文本嗅探已删，超时判定绑 latch/结构化载荷
   const src = libFile("advisor.mjs")
@@ -685,39 +690,86 @@ test("T-AP4a (AC-AP4): shouldBudgetNudge 纯函数三态 + 边界", () => {
   assert.equal(shouldBudgetNudge(900, NaN, false), false, "非数值预算 → 不提示")
 })
 
-test("T-AP4b (AC-AP4): 同场跨阈多次检查只注入一条提示，且不进返回正文", async () => {
-  // 第 1 轮慢（320ms > 75%×400ms=300ms）→ 第 2 轮循环顶跨阈注入；第 2 轮再产出一轮工具调用
-  //（第二次跨阈检查不得再注入）；第 3 轮静默 → 预算到点超时。
-  const slowToolCallThenSilent = () => (async function* () {
-    await sleep(320)
-    yield { type: "block-end", block: { type: "tool-call", id: "c1", name: "read", arguments: JSON.stringify({ path: "package.json" }) } }
-    yield textFinish
-  })()
-  const toolCallThenSilent = () => (async function* () {
-    yield { type: "block-end", block: { type: "tool-call", id: "c2", name: "read", arguments: JSON.stringify({ path: "package.json" }) } }
-    yield textFinish
-  })()
-  const silent = (opts) => (async function* () {
-    while (true) { await sleep(10); if (opts.signal?.aborted) return }
-  })()
+/** A29-4a（D-51 ①）：时序类腿的**失败差量**——断言失败时把 actual/expected 与关键状态摘要
+ * 一并写进测试输出，使偶发红**当场可诊断**（不靠重跑撞见）。`state` 由调用点给。 */
+const timingState = (state) => " · 时序状态摘要=" + JSON.stringify(state)
 
-  const llm = makeLlm([slowToolCallThenSilent, toolCallThenSilent, silent])
-  const out = await runAdvisorToolLoop({ llm }, loopOpts({ timeoutMs: 400 }))
-  assert.ok(out.startsWith("Advisor: review timeout after "), out)
+/** A29-4b（D-51 ②）：**可注入时钟**——只替换 `Date.now`（**不碰任何定时器**），时间只由夹具
+ * **显式推进** ⇒ 真实耗时（磁盘 I/O、事件循环争用）不再进入判据，**零真实 sleep**。恢复放在
+ * `finally`：本腿之外的一切行为逐字不变。 */
+async function withFakeClock(base, fn) {
+  const clock = { t: base }
+  const savedNow = Date.now
+  Date.now = () => clock.t
+  try { return await fn(clock) } finally { Date.now = savedNow }
+}
 
+test("T-AP4b (AC-AP4, D-51): 同场跨阈多次检查只注入一条提示，且不进返回正文（可注入时钟：零真实等待）", async () => {
+  // ★ 批 29 单② / US-2（D-51）：本腿原用**真实 `await sleep(320)`** 去撞 400ms 预算的 75% 阈值
+  //   （窗口 = [300,400)，只剩约 80ms 余量）——全量并发跑时，轮内真实开销（工具执行 + 事件循环
+  //   争用）一旦越过那 80ms，round 1 就**先**撞上超时分支，而「恰好一条提示」的断言随即转红
+  //   （D-51 登记的偶发红）。现在时间**只由夹具显式推进**（假时钟），真实耗时不再进入判据
+  //   ⇒ 该腿不再依赖真实等待/并发时序（零 sleep）。剧本：round 1 越 75%（不越 100%）⇒ 注入 →
+  //   round 2 复检不重注 → round 3 越预算 ⇒ 超时尾。
+  const BASE = 1_700_000_000_000
   const NUDGE = "评审预算已用 75%"
-  const counts = llm.calls.map((c) => c.snapshot.filter((m) => m.includes(NUDGE)).length)
-  assert.equal(counts[0], 0, "第 1 轮未跨阈 → 不注入")
-  assert.equal(counts[counts.length - 1], 1, "跨阈后（含多次检查）**恰好一条**：" + JSON.stringify(counts))
-  assert.ok(llm.calls[llm.calls.length - 1].snapshot.some((m) => m.includes("advisor 组 timeoutMs")), "提示含配置键指引")
-  assert.ok(!out.includes(NUDGE), "提示**不进**返回正文（N-5）")
+  const TOOL = (id) => ({ type: "block-end", block: { type: "tool-call", id, name: "read", arguments: JSON.stringify({ path: "package.json" }) } })
+  /** 跑一场（新 llm + 新假时钟）：返回往返文本、逐轮快照里的提示计数与终态时钟读数。 */
+  const runScene = async () => {
+    let llm = null
+    let out = null
+    let clockT = 0
+    await withFakeClock(BASE, async (clock) => {
+      const round1 = () => (async function* () { clock.t += 320; yield TOOL("c1"); yield textFinish })()
+      const round2 = () => (async function* () { yield TOOL("c2"); yield textFinish })()
+      const round3 = () => (async function* () { clock.t += 100; yield TOOL("c3"); yield textFinish })()
+      llm = makeLlm([round1, round2, round3])
+      out = await runAdvisorToolLoop({ llm }, loopOpts({ timeoutMs: 400 }))
+      clockT = clock.t
+    })
+    return { llm, out, clockT }
+  }
+
+  const s1 = await runScene()
+  const counts1 = s1.llm.calls.map((c) => c.snapshot.filter((m) => m.includes(NUDGE)).length)
+  const st1 = { clockT: s1.clockT, calls: s1.llm.calls.length, counts: counts1, head: String(s1.out).slice(0, 60) }
+  assert.ok(String(s1.out).startsWith("Advisor: review timeout after "),
+    "假时钟推进到 420 > 400 ⇒ 预算到点（走超时尾）：" + timingState(st1))
+  assert.equal(counts1.length, 3, "三轮回合（越阈 / 复检 / 越预算）" + timingState(st1))
+  assert.equal(counts1[0], 0, "第 1 轮未跨阈 → 不注入" + timingState(st1))
+  assert.equal(counts1[counts1.length - 1], 1, "跨阈后（含多次检查）**恰好一条**：" + JSON.stringify(counts1) + timingState(st1))
+  assert.ok(s1.llm.calls[s1.llm.calls.length - 1].snapshot.some((m) => m.includes("advisor 组 timeoutMs")),
+    "提示含配置键指引" + timingState(st1))
+  assert.ok(!String(s1.out).includes(NUDGE), "提示**不进**返回正文（N-5）" + timingState(st1))
 
   // 两场（两次独立评审）各注入一条——`alreadyNudged` 是**每场**局部量
-  const llm2 = makeLlm([slowToolCallThenSilent, toolCallThenSilent, silent])
-  const out2 = await runAdvisorToolLoop({ llm: llm2 }, loopOpts({ timeoutMs: 400 }))
-  assert.ok(out2.startsWith("Advisor: review timeout after "), out2)
-  const counts2 = llm2.calls.map((c) => c.snapshot.filter((m) => m.includes(NUDGE)).length)
-  assert.equal(counts2[counts2.length - 1], 1, "第二场同样恰好一条：" + JSON.stringify(counts2))
+  const s2 = await runScene()
+  const counts2 = s2.llm.calls.map((c) => c.snapshot.filter((m) => m.includes(NUDGE)).length)
+  const st2 = { clockT: s2.clockT, calls: s2.llm.calls.length, counts: counts2, head: String(s2.out).slice(0, 60) }
+  assert.ok(String(s2.out).startsWith("Advisor: review timeout after "), "第二场同样走到超时尾" + timingState(st2))
+  assert.equal(counts2[0], 0, "第二场第 1 轮同样未跨阈" + timingState(st2))
+  assert.equal(counts2[counts2.length - 1], 1, "第二场同样恰好一条：" + JSON.stringify(counts2) + timingState(st2))
+
+  // —— A29-4a 注入式负控（D-51 ①）：**断言失败 ⇒ timingState 的状态摘要真的进入输出** ——
+  //   此前 timingState 只出现在**成功路径的断言消息**里，没有任何腿证明它在**失败时**也被抛出
+  //   （「失败可诊断」可能只是文案承诺）。这里就地造一个**必然失败**的比较并当场捕获，证明
+  //   (1) 失败以 AssertionError 抛出（不被静默吞）、(2) 消息里带状态摘要键与逐字内容、
+  //   (3) actual/expected 差量同在、(4) 异常不外泄到用例之外。零真实等待（纯同步，无 sleep）。
+  const injectedState = { counts: [0, 1], clockT: BASE + 420 }
+  let injectedError = null
+  try {
+    assert.equal(0, 1, "注入式负控（预期失败）：" + timingState(injectedState))
+  } catch (e) {
+    injectedError = e
+  }
+  assert.ok(injectedError !== null, "负控的执行点必须可达（失败不得被静默吞掉）")
+  assert.match(String(injectedError.name), /AssertionError/, "负控：失败以 AssertionError 抛出")
+  assert.equal(injectedError.code, "ERR_ASSERTION", "负控：确是断言失败（不是其它异常）")
+  const injectedMsg = String(injectedError.message)
+  assert.ok(injectedMsg.includes("时序状态摘要="), "负控：失败消息含 timingState 的状态摘要键：" + injectedMsg)
+  assert.ok(injectedMsg.includes('"counts":[0,1]'), "负控：状态摘要**逐字**进入失败消息：" + injectedMsg)
+  assert.equal(injectedError.actual, 0, "负控：actual 差量在场")
+  assert.equal(injectedError.expected, 1, "负控：expected 差量在场")
 })
 
 // ————————————— T-AP5（AC-AP5）：竞态形态（resolve 结束）仍归因 + crash 透传 —————————————
@@ -830,15 +882,16 @@ test("T-AP6 (AC-AP6): 超时尾含 rounds/tool calls/review text produced + 预�
   const out = await runAdvisorToolLoop({ llm: makeLlm([textAndToolCall, silent]) }, loopOpts({ timeoutMs: 1200 }))
   // §12 #1：既有整段**逐字**——其后才是追加段（以「 · tool calls:」为界，左侧字符不得改动）
   const head = out.split(" · tool calls:")[0]
-  assert.match(head, /^Advisor: review timeout after \d+s \(completed 1 tool rounds, 1 files read\)\. Try again with a narrower scope\.$/, head)
+  assert.match(head, /^Advisor: review timeout after \d+s \(completed 1 tool rounds, 1 files read\)\. Try again with a narrower scope\.$/,
+    head + timingState({ timeoutMs: 1200, tailHead: out.slice(-140) }))
   assert.ok(out.includes(" · tool calls: 1"), out)
   assert.ok(out.includes(" · review text produced: yes"), out)
   assert.ok(out.includes(" · budget: 1s（advisor 组 timeoutMs）——收窄范围重发，或上调该组 timeoutMs。"), out)
 
   // 未产出正文的场次 → no
   const outNo = await runAdvisorToolLoop({ llm: makeLlm([silent]) }, loopOpts({ timeoutMs: 300 }))
-  assert.ok(outNo.includes("review text produced: no"), outNo)
-  assert.ok(outNo.includes("tool calls: 0"), outNo)
+  assert.ok(outNo.includes("review text produced: no"), outNo + timingState({ timeoutMs: 300 }))
+  assert.ok(outNo.includes("tool calls: 0"), outNo + timingState({ timeoutMs: 300, head: outNo.slice(0, 60) }))
 })
 
 // ————————————— T-AP7（AC-AP7）：裸写点灭绝 + 零新增写点 + 零定时器时长变更 —————————————
@@ -1055,7 +1108,17 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
  *  b) 全 tool 中段且配对前驱不在数组里 ⇒ 孤儿整体丢弃（新契约下的协议要求）。
  *  授权通道 = docs/test-lifecycle.md §二（本条是**修改**授权，非退役）。 */
 // 批 29 / 单①（设计 §3「授权例外五档」之一）：D29-3 把 `stages[].check` 语义改为「宿主验收清单」，host 态渲染文本随之改变 ⇒ `test/stages.test.mjs:288` 的 four-part 渲染对位必须同批对齐。**同批登记在此**（不留给「被自家锁打红再临场解释」，先例：批 28 的 D28-6）。
-const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs", "test/context-budget.test.mjs", "test/session-state.test.mjs", "test/truncation.test.mjs", "test/stages.test.mjs"]
+// 批 29 / 单②（设计档 docs/dsh017-batch29-design.md §3「D-37 / T-AP9 基线锁授权例外」）：
+// 本单明文授权修改的基线面里，有两条**能**走本清单（它们不是 R0 元锁档）——
+//   · `test/job-persistence.test.mjs` —— US-4 🔵①②③ 的对位断言落点（A29-6）；
+//   · `test/contract-baseline.test.mjs` —— US-4 🔵④⑤⑥ 的对位断言落点（A29-6）。
+// 两条档都**不在**批 6 基线 `9282882`（前者批 27 新增、后者批 28 新增）⇒ 锚 B 本来就不覆盖它们；
+// 此处**照本单授权面同批登记**是「白纸黑字」而非「被自家锁打红再临场解释」（先例：批 28 的 D28-6）。
+// ★ 本单授权面里的另两条 —— `test/guard-e.test.mjs` 与**本档** `test/death-provenance.test.mjs` ——
+//   是 `test/test-lifecycle.test.mjs` 的 **R0 元锁档**，该闸**明令禁止** R0 出现在本清单里
+//   （见其 T-LC4 的「授权面不得包含 R0 元锁档」断言）⇒ 它们的授权只能落在**本单任务书明文**与
+//   设计档 §7 留痕上，**不可能**也不允许登记在此（登记反而会让 T-LC4 转红）。
+const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs", "test/context-budget.test.mjs", "test/session-state.test.mjs", "test/truncation.test.mjs", "test/stages.test.mjs", "test/job-persistence.test.mjs", "test/contract-baseline.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */
 const AP_BASELINE_SHA = "9282882"
 

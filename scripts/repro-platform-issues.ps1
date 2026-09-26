@@ -124,8 +124,16 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $report.Add("Repo root: " + $repoRoot)
 $report.Add("")
 $report.Add("READ-ONLY run statement (A28-6): this script only read; it did not modify repo files,")
-$report.Add("config, or environment. Its only write was a temp dir under TEMP for the job_output")
-$report.Add("leg (" + $tempHome + "), removed when this report finishes.")
+$report.Add("config, or environment.")
+# Batch 29 (US-3 / A28-6): the statement must branch on the TEMP-dir outcome -- the degraded run
+# really did NOT write anything, so claiming a temp dir would be a false statement in the report.
+if ($tempHomeOk) {
+  $report.Add("Its only write was a temp dir under TEMP for the job_output leg (" + $tempHome + "),")
+  $report.Add("removed when this report finishes.")
+} else {
+  $report.Add("no temp dir was created this run (TEMP dir unavailable) -- the job_output leg can")
+  $report.Add("use any empty temp dir as its independent DSH_HOME.")
+}
 $report.Add("")
 $report.Add("## Environment context")
 if ($dshHome) { $report.Add("- DSH home located: " + $dshHome) } else { $report.Add("- DSH home located: NOT FOUND (guided legs below remain valid; ledger leg skipped)") }

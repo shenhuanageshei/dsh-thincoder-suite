@@ -6,7 +6,10 @@
 // US-6 零落盘回归锚（A27-4：home 不可解析 ⇒ 零文件落盘 + 进程内只 warn 一次）。
 //
 // 全部用例走 dshHomeOverride / cwdHint 注入缝 + 临时目录（对齐 dsh017-compat / write-atomic 先例），
-// **不写真实 $DSH_HOME**；A27-4 放在档首（其「只 warn 一次」判据依赖本进程此前的零落盘前置）。
+// **不写真实 $DSH_HOME**；A27-4 的「只 warn 一次」判据此前**依赖用例顺序**（只有本进程第一个触发
+// no-home 形态的用例才能看到首条告警——断言实际测的是「顺序」而非「闩」）；批 29 单② / US-4 🔵③
+// 起改用测试缝 `__resetWarnedNoHomeForTest`（命名约定 + `@internal`，见 lib/job-outcome.mjs），
+// 用例自带前置 ⇒ **顺序无关**（该腿仍是档首，但只是习惯，不再是判据前提）。
 // A27-8 两条行为腿不传 override：临时清空 DSH_HOME（save/restore）+ 假 profile 根 ⇒ pickDshHome
 // 只能从 cwdHint（= 夹具会话 cwd）探测出落点，透传缺失即红。
 import { test } from "node:test"
@@ -17,7 +20,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { runEngCoder } from "../lib/eng.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
-import { jobOutcome, sweepJobReports, PATH_FORMS } from "../lib/job-outcome.mjs"
+import { jobOutcome, sweepJobReports, PATH_FORMS, __resetWarnedNoHomeForTest } from "../lib/job-outcome.mjs"
 import { probeProfileRoot } from "../lib/dsh-home.mjs"
 
 // 隔离契约（对齐既有测试档 dsh017-compat.test.mjs）：本档会 settle 真作业 ⇒ jobOutcome 尝试
@@ -57,6 +60,9 @@ test("A27-4 零落盘回归锚 (US-6 / AC-2): home 不可解析 ⇒ 零文件落
   const warnings = []
   const origWarn = console.warn
   try {
+    // 批 29 单② / US-4 🔵③：**仅测试**——清零「只 warn 一次」闩，使本腿不再依赖用例顺序
+    // （此前它靠「排在本档首位」才拿得到首条告警）。
+    __resetWarnedNoHomeForTest()
     // 前提自证：注入形态真的不可解析（否则本锚测的不是它声称的形态）
     assert.equal(probeProfileRoot(hintDir), null, "临时 cwdHint 目录向上探测必须解析不到 profile 根")
     console.warn = (...a) => { warnings.push(a.map(String).join(" ")) }
@@ -335,3 +341,81 @@ test("US-1 触发时机 (D27-1): persist 成功后自动清扫一次——顺手
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+test("A29-6① (US-4 🔵①): maxAgeDays:0 被拒（回落缺省 7）——不得存在「一参数清空 jobs 目录」的入口", () => {
+  const home = makeHome("a29-6a")
+  try {
+    plant(home, "advisor-fresh.txt", 0)   // 今天：若 0 生效（cutoff = now）它必被删
+    plant(home, "advisor-8d.txt", 8)      // 超缺省 7 天
+    writeIndex(home, [indexLine("advisor-fresh", "advisor"), indexLine("advisor-8d", "advisor")])
+    const r = sweepJobReports({ dshHomeOverride: home, maxAgeDays: 0 })
+    assert.ok(r && r.deletedAge === 1 && r.deletedCount === 0,
+      "maxAgeDays:0 ⇒ 非法 ⇒ 回落缺省 7：只删 8 天那个（0 生效会全删）：" + JSON.stringify(r))
+    assert.equal(existsSync(join(jobsDir(home), "advisor-fresh.txt")), true,
+      "★ 今天的文件必须活着——0 被拒的直接行为证据（0 生效 = cutoff=now ⇒ 见到的文件全删）")
+    assert.equal(existsSync(join(jobsDir(home), "advisor-8d.txt")), false, "回落 7 天后仍按龄裁决")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("A29-6① 谓词自证 (US-4 🔵①): 校验收紧为 > 0（不是「只认 ≥1 的整数」）——正有限小数即生效；源级口径锁", () => {
+  // 行为腿：正有限小数必须生效（实现若被误写成「整数且 ≥1」，本腿转红）
+  const home = makeHome("a29-6a2")
+  try {
+    plant(home, "advisor-1min.txt", 1 / 1440)   // 1 分钟前 ≈ 0.000694 天
+    const r = sweepJobReports({ dshHomeOverride: home, maxAgeDays: 0.0001 })  // 阈值 = 0.0001 天 ≈ 8.64s
+    assert.ok(r && r.deletedAge === 1, "正有限小数阈值必须生效（0.0001 天 ≈ 8.64s ≪ 1 分钟）：" + JSON.stringify(r))
+    assert.equal(existsSync(join(jobsDir(home), "advisor-1min.txt")), false, "超 8.64s 即删")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+  // 源级口径锁：谓词逐字 = `> 0`（旧的 `>= 0` 已收口）+ JSDoc 写明拒绝 0 的理由
+  const src = readFileSync(new URL("../lib/job-outcome.mjs", import.meta.url), "utf8")
+  assert.match(src, /o\.maxAgeDays > 0/, "maxAgeDays 谓词必须逐字为 `> 0`")
+  assert.ok(!/o\.maxAgeDays >= 0/.test(src), "旧的 `>= 0` 谓词必须已删（0 = 全删语义被拒）")
+  assert.ok(src.includes("一参数清空"), "注释/JSDoc 写明 0 的语义 = 一参数清空 jobs 目录")
+  assert.ok(src.includes("不可逆的批量删除"), "JSDoc 写明为何拒绝 0（不可逆的批量删除）")
+})
+
+test("A29-6②③ (US-4 🔵②③): kept 口径注释在场（stat 失败不计入）+ 测试缝可用（顺序无关）+ 静态锁：生产路径零引用该缝", () => {
+  const src = readFileSync(new URL("../lib/job-outcome.mjs", import.meta.url), "utf8")
+  // ② kept 口径：stat 失败 ⇒ 跳过 ⇒ **不计入 kept**（摘要语义不得靠读者猜）
+  assert.ok(src.includes("stat 失败") && src.includes("不计入 `kept`"),
+    "注释必须写明「stat 失败不计入 kept」的口径")
+  // ③ 测试缝的**可见性机制**（评审 #8）：命名约定（`__` 前缀 + `ForTest` 后缀）+ JSDoc `@internal`
+  assert.equal(typeof __resetWarnedNoHomeForTest, "function", "测试缝已导出且可调用")
+  assert.ok(src.includes("export function __resetWarnedNoHomeForTest("), "命名约定：__ 前缀 + ForTest 后缀")
+  assert.ok(src.includes("@internal"), "JSDoc 标注 @internal（本仓无私有导出 ⇒ 可见性靠约定 + 标注）")
+  // ③ 静态锁：生产路径（lib/** 内**除本档自身**）零引用该缝
+  const libUrl = new URL("../lib/", import.meta.url)
+  const seam = "__resetWarnedNoHomeForTest"
+  const refsSeam = (text) => text.includes(seam)
+  assert.equal(refsSeam("const x = " + seam + "()"), true, "谓词自证：命中即真（不是恒假断言）")
+  assert.equal(refsSeam("const x = 1"), false, "谓词自证：不命中即假")
+  const hits = readdirSync(libUrl)
+    .filter((f) => f.endsWith(".mjs") && f !== "job-outcome.mjs")
+    .filter((f) => refsSeam(readFileSync(new URL(f, libUrl), "utf8")))
+  assert.deepEqual(hits, [], "生产路径零引用测试缝：" + JSON.stringify(hits))
+  // ③ 行为腿：清零 ⇒ 闩复位 ⇒ 再次可见（证明「只一次」确实来自那个闩）
+  const hintDir = makeHome("a29-6c")
+  const warnings = []
+  const origWarn = console.warn
+  try {
+    assert.equal(probeProfileRoot(hintDir), null, "前提自证：注入形态真的不可解析")
+    console.warn = (...a) => { warnings.push(a.map(String).join(" ")) }
+    const nohome = () => warnings.filter((w) => w.includes("DSH_HOME 不可解析")).length
+    __resetWarnedNoHomeForTest()
+    jobOutcome({ id: "advisor-seam-1", append() {} }, { status: "completed", detail: "d", output: "SEAM-1" }, { cwdHint: hintDir })
+    assert.equal(nohome(), 1, "清零后首条告警可见（缝真的接在闩上）")
+    jobOutcome({ id: "advisor-seam-2", append() {} }, { status: "completed", detail: "d", output: "SEAM-2" }, { cwdHint: hintDir })
+    assert.equal(nohome(), 1, "未清零 ⇒ 去重照旧（只 warn 一次）")
+    __resetWarnedNoHomeForTest()
+    jobOutcome({ id: "advisor-seam-3", append() {} }, { status: "completed", detail: "d", output: "SEAM-3" }, { cwdHint: hintDir })
+    assert.equal(nohome(), 2, "再次清零 ⇒ 再次可见（顺序无关，不再靠「排第一位」）")
+  } finally {
+    console.warn = origWarn
+    rmSync(hintDir, { recursive: true, force: true })
+  }
+})
+

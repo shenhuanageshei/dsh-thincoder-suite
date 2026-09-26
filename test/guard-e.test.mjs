@@ -831,6 +831,19 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
     // 授权面 = **只改本清单数组与本注释**，不动本档其它任何断言（本批任务书明文；先例 = 批 27/28
     // 同款登记行）。台账行 docs/test-lifecycle.md 由主代理同批登记（批 27 §3 分工裁定）。
     "silence-watchdog.test.mjs",
+    // 批 29 **单②**（US-2 + US-3 + US-4 + D-52）新增档——**在其落地的同一 stage 内登记**
+    // （批 9「同 stage 登记」纪律：台账-历史一致闸的「T-E19 ↔ fs」等值腿会在「fs 已 +1 而本表
+    // 未登记」时先红）。理由与设计档引用（docs/dsh017-batch29-design.md §2.3 / §3 / §5.1 ·
+    // A29-5 / AC-5）：
+    //   · repro-script-readonly.test.mjs = A28-6 遗留**机验腿**的落点：复现脚本
+    //     scripts/repro-platform-issues.ps1 的**只读性静态锁**（除 $env:TEMP 下临时目录的创建/
+    //     清理外零写 cmdlet · 零 git · 零 $env:X= 赋值 · 纯 ASCII · 零重定向）+ 报告只读声明按
+    //     $tempHomeOk 分支渲染的文案锁。**静态腿**而非「跑一遍看」的理由见该档首注（设计 §2.3）。
+    //   · D-52（A29-7）的对位锁**不新增档**：落在既有会诊测试档 test/consult.test.mjs（该档早已
+    //     在 AP_TEST_AUTHORIZED 内，且它不是基线档）⇒ 本清单只加这一行。
+    // 授权面 = **只改本清单数组与本注释**，不动本档其它任何断言（本单任务书明文；先例 = 批 27 / 28 / 29 单① 同款登记行）。
+    // 台账行 docs/test-lifecycle.md 由主代理同批登记（批 27 §3 分工裁定）。
+    "repro-script-readonly.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」

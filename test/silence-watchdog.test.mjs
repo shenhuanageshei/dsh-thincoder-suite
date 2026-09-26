@@ -6,7 +6,9 @@
 //   · **A29-1**：派发期 toolFilter 生效——执行类工具**不在**子会话可用集、非执行类（读写/检索）
 //     **仍在**；**证据口径两种形态必须在断言里区分**：平台回显生效清单 = **强证**，
 //     否则以派发载荷 toolFilter.deny 为**弱证**（如实标注）；
-//   · **A29-2**：取不到平台工具名清单 ⇒ **如实标注「未生效」**（deny 保持逐字基线，不假装拦住）。
+//   · **A29-2**：取不到平台工具名清单 ⇒ **如实标注「未生效」**（deny 保持逐字基线，不假装拦住）；
+//     applied:false 的**两条归因各一条腿且可判**：**读取面不可用**（读取函数返回 null）vs
+//     **面可用但可限制名集为空**（返回 []——公开面在场，只是名集为空）。
 //
 // ★ 纪律（本档自持）：
 //   ① **全部用注入缝，零真实等待**——假时钟（now）+ 假 setInterval/clearInterval（手动 tick，
@@ -162,6 +164,16 @@ test("A29-3a (D29-2 / AC-2): 注入静默（无输出）⇒ 既有取消写点 a
     assert.ok(outcome.output.includes("--- eng_coder 执行已停止 —— **不自动重派**，由用户裁决。---"),
       "静默终止沿用 FAILURE_OPTIONS_BLOCK 常量（不新造 wrapper）")
     assert.ok(outcome.output.includes("取证指路（D-48）"), "静默信封附取证指路句")
+    // ★ 交付验收 3 条 Deferred 🔵（批 29 单② 第 5 条 c）：**显式锁定诚实限制** —— reject 形态下
+    //   `sub.result` 以 AbortError **reject** ⇒ 落 eng.mjs 的 catch 作用域，那里**拿不到
+    //   outputText**（与既有 ABORTED 兜底信封同款：partial 记「无」）⇒ 静默信封的 partial 体
+    //   **为空**。本断言把「空」从「碰巧」变成**契约**：将来若给 reject 面补上 partial，本行会红，
+    //   提醒同批更新该限制的登记口径（不得静默放宽）。
+    const partialSeg = outcome.output.split("Partial output:")[1] ?? ""
+    assert.equal(partialSeg.split("\n")[1] ?? null, "",
+      "reject-race 下 partial 体为空（诚实限制：catch 作用域无 outputText）：" + JSON.stringify(partialSeg.slice(0, 80)))
+    assert.ok(partialSeg.includes("半途写入可能残留"),
+      "空 partial 下仍带 ABORTED 回滚指引（与 resolve 侧对称，不是「什么都没说」）：" + partialSeg.slice(0, 120))
     assert.equal(f.cleared.length, 1, "settle 的 finally 清掉轮询定时器（不泄漏）")
     assert.equal(f.handle.calls.length, 1, "正文照常经 handle.append 进输出环（D-46 契约未破）")
     f.drop()
@@ -324,6 +336,25 @@ test("A29-2 (AC-1 / D29-1): 取不到平台工具名清单 ⇒ 如实标注「�
     assert.ok(plan.reason.length > 0)
     assert.equal(collectRegisteredToolNames(ctx), null, "读取面不可用 ⇒ null（诚实返回，不退化成硬编码名单）")
   }
+  // —— 🔵(a) **空集面**（零实现改动）：applied:false 的**另一条**归因 = 面可用但可限制名集为空 ——
+  //    （lib/eng.mjs 的 names.length === 0 分支，与 names === null 的「读取面不可用」分开归因）
+  //    此前只有 null 路有锁 ⇒ 这里补上 [] 路，并证明两形态在**同一读取函数**上可判。
+  const emptySurfaceCtx = { tools: { view: () => ({ restrictableNames: new Set() }) } }
+  const emptyPlan = resolveExecToolDeny(emptySurfaceCtx)
+  assert.equal(emptyPlan.applied, false, "空集面 ⇒ 同样如实标「未生效」（不假装拦住）")
+  assert.deepEqual(emptyPlan.deny, BASE_DENY, "空集面 ⇒ deny 逐字等于基线（未下发任何名字）")
+  assert.deepEqual(emptyPlan.execNames, [], "空集面 ⇒ 零执行类名")
+  assert.equal(emptyPlan.source, "view.restrictableNames", "空集面的来源仍是**公开读取面**（面在场，只是名集为空）")
+  assert.ok(String(emptyPlan.reason).includes("可限制名集为空"),
+    "空集面归因 = 面可用但可限制名集为空：" + emptyPlan.reason)
+  assert.ok(!String(emptyPlan.reason).includes("读取面不可用"),
+    "空集面**不得**被混成「读取面不可用」：" + emptyPlan.reason)
+  // 两形态可判：同一读取函数返回 []（面在场但空集）vs null（面不可用）
+  const emptyNames = collectRegisteredToolNames(emptySurfaceCtx)
+  assert.deepEqual(emptyNames, [], "面可用但名集为空 ⇒ []（不是 null）")
+  const nullNames = collectRegisteredToolNames({ tools: {} })
+  assert.equal(nullNames, null, "对照：读取面不可用 ⇒ null")
+  assert.notDeepStrictEqual(emptyNames, nullNames, "两形态**可判**（[] ≠ null，不得折成同一种归因）")
   const noExec = resolveExecToolDeny({ tools: { list: () => ["read", "write", "grep"] } })
   assert.equal(noExec.applied, false, "注册面里没有执行类谓词命中 ⇒ 同样如实标未生效")
   assert.deepEqual(noExec.deny, BASE_DENY)

@@ -1,10 +1,12 @@
 // stage-gate.test.mjs — 阶段门（stageGateNote）三态 + 接线断言（批 9 · 设计档 §6.4 / AC-9/AC-10/AC-11）。
 //
-// 本档锁三件事：
+// 本档锁四件事：
 //   ① **判定三态**（全 passed ⇒ 零横幅 · 任一 failed ⇒ 点名阶段号 · 表缺失/不可解析 ⇒ UNDECLARED）；
 //   ② **接线**：每个**成功交付返回点**各调一次（helper 单一实现 —— D-26-⑥），**失败/abort 返回点零接线**
 //      （失败交付已是失败，不需声明闸——AGENTS 令牌化的边缘设计，见设计档 §6.4/图 2）；
 //   ③ **横幅形态**：置于交付文本**前部**，报告正文**一字不改**（US-9：主代理要读完整报告来发修复轮）。
+//   ④ **形状放宽（D-54）**：表头 **≥3 列**且按名定位（中文表头 / 多一列均可）· 数据行 **≥3 格** ·
+//      状态词中英双表；横幅文案按「找不到带头行」与「表在场但不可解析」**分岔**（诊断质量）。
 //
 // ★ 计数口径说明（**与设计档 §10.3 / AC-11 的「5 个成功返回点」的差异，如实登记、不静默**）：
 //   设计档 / 纪要初稿把「4 个路径（codex 同步 / codex 后台 / dsh 同步 / dsh 后台）**+ 主返回点**」
@@ -244,4 +246,80 @@ test("T-SG6 (D9-11 / AC-14): 门不碰任务书——T9 fixture 逐字节未动�
   for (const banned of ["buildCoderBrief", "renderStagesBlock", "deliverBookkeeping", "child_process"]) {
     assert.ok(!body.includes(banned), "门函数体不得出现 " + banned + "（门与任务书/簿记/执行面三者解耦）")
   }
+})
+
+// ————————————— ④ D-54：表头/数据行形状放宽（恒假阳性专项） —————————————
+
+/**
+ * T-SG7（D-54）：旧实现把「表在报告最前」写成「表头**恰 3 列** + 列名逐字 + 数据行**恰 3 格**」⇒
+ * 真实报告（中文表头 / 多一列）**恒**判 UNDECLARED ⇒ 一个恒假阳性的门等于没有门。本腿锁五类：
+ *   ① 中文 4 列表 / 中文 3 列（含粗体与「阶段 N — …」）/ 英文 4 列表 ⇒ **零横幅**（D-54 主形态）；
+ *   ② 英文 3 列契约表头 ⇒ **零横幅**（既有契约形，必须**不靠**放宽才过）；
+ *   ③ **无表** ⇒ 沿用旧文案的 UNDECLARED（检测力不退化）；
+ *   ④ 表在场但**列位**或**状态词**不可解析 ⇒ **分岔的新文案**（点名表在场 + 它实际看到的那一行）；
+ *   ⑤ failed / 失败 行 ⇒ FAILED stage N 横幅**仍燃**（中英两形）。
+ * 末段为「还原即红」自证：旧谓词的两条**字面**必须已从 lib/eng.mjs 消失。
+ */
+test("T-SG7 (D-54): 表头按名定位（中文/多列形判绿）· 无表仍 UNDECLARED · 表在场不可解析走分岔文案 · failed 仍燃", () => {
+  // ① 中文 4 列表（真实反馈形：| # | 项 | 状态 | 证据 |）⇒ **零横幅**
+  const cn4 = ["| # | 项 | 状态 | 证据 |", "|---|---|---|---|",
+    "| 1 | 补漏 import | 通过 | python -m pytest tests/a.py |",
+    "| 2 | 作用域扫描 | 完成 | AST 全量扫描，零未定义名 |"].join("\n")
+  assert.equal(stageGateNote(STAGES, cn4), "", "中文 4 列表必须判绿（D-54 恒假阳性的主形态）")
+
+  // ①b 中文 3 列（真实落盘形：| 阶段 | 状态 | 检查摘要 |，含 **粗体** 与「阶段 N — …」阶段格）
+  const cn3 = ["| 阶段 | 状态 | 检查摘要 |", "|---|---|---|",
+    "| 阶段 1 — 补漏 import + 未定义名扫描 | **通过** | 宿主待跑：python -m pytest tests/a.py |",
+    "| 2 | ✅ 完成 | 已提交 5f2a56b7 |"].join("\n")
+  assert.equal(stageGateNote(STAGES, cn3), "", "中文 3 列表（粗体 + 前导装饰）必须判绿")
+
+  // ② 英文 3 列表（既有契约形）⇒ 零横幅——这一条必须**不是**靠放宽才过
+  assert.equal(stageGateNote(STAGES, ALL_PASSED), "", "英文 3 列契约表头 ⇒ 零横幅（既有契约形）")
+
+  // ②b 多一列（真实落盘形：| Stage | Status | check summary | Files |）⇒ 零横幅
+  const en4 = ["| Stage | Status | check summary | Files |", "|---|---|---|---|",
+    "| 1 | **passed** | 宿主待跑：node host-half.test.mjs | lib/index.js |",
+    "| 2 | passed（已提交 43a166d1） | node --check | lib/a.mjs |"].join("\n")
+  assert.equal(stageGateNote(STAGES, en4), "", "英文 4 列表必须判绿（旧实现恒 null）")
+
+  // ③ 无表 ⇒ UNDECLARED（沿用旧文案；检测力不退化）
+  const noTable = stageGateNote(STAGES, "delivered ok\n\nTouched files: lib/a.mjs")
+  assert.ok(noTable.includes("UNDECLARED") && noTable.includes("报告未以阶段状态表开头"),
+    "无表 ⇒ 沿用旧文案：" + noTable)
+  assert.ok(noTable.startsWith(BANNER_HEAD), "无表同样是响亮横幅（stageGateBanner 通道）")
+
+  // ④ 表在场但**列位**不可解析 ⇒ 分岔的新文案（不得报成「表缺失」）
+  const badCols = stageGateNote(STAGES, ["| 阶段 | 状态 |", "|---|---|", "| 1 | 通过 |"].join("\n"))
+  assert.ok(badCols.includes("UNDECLARED"), "表在场但缺列 ⇒ 仍 UNDECLARED：" + badCols)
+  assert.ok(badCols.includes("阶段表在场但列位或状态词不可解析"),
+    "④ 必须走**分岔的新文案**（不得与「表缺失」同文案）：" + badCols)
+  assert.ok(badCols.includes("摘要"), "新文案必须点名它**实际看到**的表头/缺列：" + badCols)
+  assert.ok(!badCols.includes("报告未以阶段状态表开头"), "表在场不得报「表缺失」：" + badCols)
+  assert.ok(badCols.startsWith(BANNER_HEAD), "分岔文案同样走 stageGateBanner 响亮通道")
+
+  // ④b 表在但**状态词**不可识别 ⇒ 同一分岔文案，并点名实际看到的那一行（否定形「未通过」不猜成通过）
+  const badStatus = stageGateNote(STAGES, ["| 阶段 | 状态 | 检查摘要 |", "|---|---|---|",
+    "| 1 | 未通过 | 宿主待跑 |"].join("\n"))
+  assert.ok(badStatus.includes("阶段表在场但列位或状态词不可解析") && badStatus.includes("未通过"),
+    "状态词不可识别 ⇒ 分岔文案 + 实际行：" + badStatus)
+
+  // ⑤ failed 行 ⇒ FAILED stage N 横幅**仍燃**（中英两形）
+  const cnFailed = stageGateNote(STAGES, ["| 阶段 | 状态 | 检查摘要 |", "|---|---|---|",
+    "| 1 | 通过 | ok |", "| 2 | 失败 | 宿主待跑 → red |"].join("\n"))
+  assert.ok(cnFailed.includes("FAILED stage 2"), "中文「失败」必须仍燃 FAILED 横幅：" + cnFailed)
+  assert.ok(!cnFailed.includes("FAILED stage 1"), "不得误伤通过阶段：" + cnFailed)
+  const enFailed = stageGateNote(STAGES, ["| Stage | Status | check summary | Files |", "|---|---|---|---|",
+    "| 1 | passed | ok | lib/a.mjs |", "| 2 | **failed** | red | lib/b.mjs |"].join("\n"))
+  assert.ok(enFailed.includes("FAILED stage 2"), "英文 4 列表的 failed 行必须仍燃：" + enFailed)
+
+  // 「还原即红」自证（同 T-LC2 计数器正负对照先例）：旧谓词对上面判绿的三形**必然**不可解析，
+  // 且那两条旧形状字面必须已从生产源码消失 ⇒ 把定位逻辑改回去，① 立刻转红。
+  const legacyHeaderOk = (cells) => cells.length === 3
+    && /stage/i.test(cells[0]) && /status/i.test(cells[1]) && /summary/i.test(cells[2])
+  assert.equal(legacyHeaderOk(["#", "项", "状态", "证据"]), false, "自证：旧谓词必判中文 4 列表不可解析")
+  assert.equal(legacyHeaderOk(["阶段", "状态", "检查摘要"]), false, "自证：旧谓词必判中文 3 列不可解析")
+  assert.equal(legacyHeaderOk(["Stage", "Status", "check summary"]), true,
+    "自证：旧谓词对英文 3 列契约表头是过的（② 不靠放宽才过）")
+  assert.ok(!ENG_SRC.includes("header.length !== 3"), "还原即红：源码不得回退到「表头恰 3 列」旧谓词")
+  assert.ok(!ENG_SRC.includes("c.length !== 3"), "还原即红：源码不得回退到「数据行恰 3 格」旧谓词")
 })

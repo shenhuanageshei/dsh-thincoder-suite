@@ -752,3 +752,80 @@ test("selectConsultModels（provider:model / 裸 provider / 裸 model / 未知�
   await b15RobustnessChecks()
   await b15ShapeAndSurfaceChecks()
 })
+
+// ═════════ D-52 / A29-7（批 29 单②）：会诊只读白名单的**对位锁** ═════════
+//
+// 病（2026-09-26 取证）：会诊子代理的只读白名单（`READONLY_TOOLS` / `READONLY_TOOLS_CORE`）
+// 是 consult.mjs 的模块私有常量，**没有任何对位锁**——白名单被改动（混进写类工具 / 换成 deny
+// 黑名单语义 / 干脆不再下发 toolFilter）时，全套测试**一片绿**。本档补两条：
+//   ① **静态**：白名单成员集恰为只读集合（零写类工具）+ 两处派发点都以 `allow` 键下发；
+//   ② **行为**：`ctx.subagents.start("spawn", …)` 收到的 spec 里 `toolFilter.allow` 逐项在场、
+//      且**不得**出现 `deny`（平台契约：`allow` = keep only / `deny` = remove；两种语义不可混用）。
+// 平台契约（2026-09-26 取证）：`restrict(filter)` 的 `allow` = keep only，`deny` = remove；
+// 未注册名会被**响亮拒绝**——这正是 consult.mjs 那条 `unknown → 降级核心三件` 重试腿的由来。
+test("A29-7 (D-52): 会诊只读白名单对位锁——静态成员集 = 只读集合且 allow 键在场；行为：派发 spec 零 deny、allow 逐项在场", async () => {
+  // —— 谓词（先自证可判违规，再对真档断言）——
+  const READONLY_UNIVERSE = ["read", "glob", "grep", "web_search", "web_fetch"]
+  const WRITE_CLASS = ["write", "edit", "run_code", "pwsh", "bash", "powershell", "sh", "zsh", "cmd",
+    "shell", "exec", "spawn", "terminal", "process", "run_terminal", "task", "write_file",
+    "str_replace_editor", "notebook_edit"]
+  const writeIn = (list) => list.filter((t) => WRITE_CLASS.includes(t))
+  assert.deepEqual(writeIn(["read", "write"]), ["write"], "谓词自证：写类成员必须被判出（不是恒真断言）")
+  assert.deepEqual(writeIn(["read", "glob"]), [], "谓词自证：只读成员不得被误判")
+
+  const src = readFileSync(new URL("../lib/consult.mjs", import.meta.url), "utf8")
+  const arrayOf = (name) => {
+    const m = new RegExp("const " + name + " = \\[([^\\]]*)\\]").exec(src)
+    return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : null
+  }
+  const full = arrayOf("READONLY_TOOLS")
+  const core = arrayOf("READONLY_TOOLS_CORE")
+  assert.ok(Array.isArray(full) && Array.isArray(core), "两个白名单常量必须可从源码文本解析出来")
+  // ① 静态：成员集**恰为**只读集合（逐项 ⊆ 只读全集 ⇒ 零写类工具），且降级集 ⊆ 全集
+  assert.deepEqual(full, [...READONLY_UNIVERSE],
+    "白名单成员集恰为只读集合（成员漂移即红，须显式更新本锁）：" + JSON.stringify(full))
+  assert.deepEqual(core, ["read", "glob", "grep"], "降级集 = 读 + 检索三件：" + JSON.stringify(core))
+  assert.deepEqual(writeIn(full), [], "白名单不得混入任何写类工具：" + JSON.stringify(writeIn(full)))
+  assert.ok(core.every((t) => full.includes(t)), "降级集必须是全量的子集")
+  // ① 静态：两处派发点都用 `allow` 键（keep-only 语义），且**零** `deny`（黑名单语义）
+  const allowSites = [...src.matchAll(/toolFilter:\s*\{\s*allow:\s*(READONLY_TOOLS|READONLY_TOOLS_CORE)\s*\}/g)]
+    .map((m) => m[1]).sort()
+  assert.deepEqual(allowSites, ["READONLY_TOOLS", "READONLY_TOOLS_CORE"].sort(),
+    "两处派发点都显式以 allow 键下发白名单：" + JSON.stringify(allowSites))
+  assert.equal((src.match(/toolFilter:\s*\{\s*deny/g) ?? []).length, 0,
+    "consult.mjs 不得把只读白名单换成 deny 黑名单语义")
+
+  // —— ② 行为：主路径（全量白名单）收到 spec 的 toolFilter ——
+  const subA = makeSubagents({ delayMs: 20, reply: "ok" })
+  const hA = makeDeps({ subagents: subA })
+  try {
+    await startConsultSession(hA.deps, "problem", undefined)
+    await waitFor(() => subA.started.length === 1)
+    assert.equal(subA.started[0].kind, "spawn", "子代理类型 = spawn")
+    const tfA = subA.started[0].req.toolFilter
+    assert.ok(tfA && typeof tfA === "object", "spec 必须带 toolFilter：" + JSON.stringify(tfA))
+    assert.deepEqual(Object.keys(tfA), ["allow"], "toolFilter 恰有 allow 一个键（零 deny）：" + JSON.stringify(Object.keys(tfA)))
+    assert.equal(tfA.deny, undefined, "★ 不得出现 deny（一旦出现，语义就从 keep-only 变成黑名单）")
+    for (const t of READONLY_UNIVERSE) {
+      assert.ok(tfA.allow.includes(t), "白名单逐项在场：" + t + " → " + JSON.stringify(tfA.allow))
+    }
+  } finally { cleanup(hA.sessionId, hA.state) }
+
+  // —— ② 行为：降级腿（可选工具未注册 ⇒ 平台响亮拒绝 ⇒ 核心三件重试）同样只有 allow ——
+  const subB = {
+    started: [],
+    async start(kind, req) {
+      subB.started.push({ kind, req })
+      if (subB.started.length === 1) throw new Error("unknown tool: web_search")
+      return { result: Promise.resolve({ output: [{ type: "text", text: "ok" }], stopReason: "completed" }), dispose: async () => {} }
+    },
+  }
+  const hB = makeDeps({ subagents: subB })
+  try {
+    await startConsultSession(hB.deps, "problem", undefined)
+    await waitFor(() => subB.started.length === 2)
+    assert.deepEqual(subB.started[1].req.toolFilter, { allow: ["read", "glob", "grep"] },
+      "降级腿 = 核心三件白名单，且仍零 deny：" + JSON.stringify(subB.started[1].req.toolFilter))
+  } finally { cleanup(hB.sessionId, hB.state) }
+})
+

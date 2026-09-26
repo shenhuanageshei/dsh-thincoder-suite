@@ -250,3 +250,77 @@ test("基线常量: 版本非空且 recorded-at 为 ISO 日期；来源枚举钉
   assert.deepEqual(REGISTRATION_SURFACE_BASELINE, { toolsRegister: 1, systemPromptSection: 3, textTool: 8 },
     "#7 基线 = 批 28 上调值（textTool 7→8：contractWatch，D28-6；上调登记见 REGISTRATION_SURFACE_BASELINE 注释）")
 })
+
+// ═════════ A29-6（批 29 单② / US-4 🔵④⑤⑥）：源②键过滤化简 · once 标记的共用语义 · 版本词元大小写 ═════════
+
+test("A29-6④ (US-4 🔵④): 源②键过滤化简为单一前缀判据——行为不变（core 优先 / 非 core 前缀键仍可达）", () => {
+  const src = readFileSync(LIB("contract-baseline.mjs"), "utf8")
+  // 只看**代码**（注释里保留旧写法作对照不算命中——锁的是实现，不是散文）
+  const codeOnly = src.split(/\r?\n/).filter((l) => {
+    const t = l.trim()
+    return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*")
+  }).join("\n")
+  assert.ok(codeOnly.includes('filter((k) => k.startsWith("@deepseek-ai/dsh"))'),
+    "键过滤 = 单一前缀判据（源码字节级）")
+  assert.ok(!codeOnly.includes('k !== "@deepseek-ai/dsh-core"'),
+    "冗余分支必须已从**代码**删除（化简后集合恒等）")
+  // 行为不变（化简前后集合恒等）：① core 在场 ⇒ 优先取 core；② 只有非 core 前缀键 ⇒ 仍可达
+  const home = mkTemp("keys")
+  try {
+    writeFileSync(join(home, "package.json"), JSON.stringify({ dependencies: {
+      "@deepseek-ai/dsh-skew": "^" + PLATFORM_VERSION_BASELINE,
+      "@deepseek-ai/dsh-core": "^" + PLATFORM_VERSION_BASELINE,
+    } }), "utf8")
+    const both = readPlatformVersion({}, { dshHomeOverride: home, resolveCorePackage: () => null })
+    assert.equal(both.source, "profile-manifest", "② 命中 manifest")
+    assert.ok(both.evidence.includes("@deepseek-ai/dsh-core@"), "core 在场 ⇒ 优先取 core：" + both.evidence)
+    assert.equal(both.version, PLATFORM_VERSION_BASELINE, "范围符剥除后可比")
+    // ② 只有非 core 前缀键（本机实测的 rc.1/rc.2 混杂形态）⇒ 化简后仍然可达
+    writeFileSync(join(home, "package.json"), JSON.stringify({ dependencies: {
+      "@deepseek-ai/dsh-skew": "^" + PLATFORM_VERSION_BASELINE,
+    } }), "utf8")
+    const skew = readPlatformVersion({}, { dshHomeOverride: home, resolveCorePackage: () => null })
+    assert.equal(skew.source, "profile-manifest", "非 core 前缀键仍被接受")
+    assert.ok(skew.evidence.includes("@deepseek-ai/dsh-skew@"), "取的是该前缀键：" + skew.evidence)
+    assert.equal(skew.version, PLATFORM_VERSION_BASELINE)
+    // 无任何 dsh 键 ⇒ 仍不可得（不猜）
+    writeFileSync(join(home, "package.json"), JSON.stringify({ dependencies: { "lodash": "^4" } }), "utf8")
+    const none = readPlatformVersion({}, { dshHomeOverride: home, resolveCorePackage: () => null })
+    assert.equal(none.source, "unknown", "无 dsh 键 ⇒ 不可得（不猜）")
+  } finally { rmTemp(home) }
+})
+
+test("A29-6⑤⑥ (US-4 🔵⑤⑥): once 标记两形态共用（注释 + 行为）· 版本词元大小写等价（match 仍须真等价）", () => {
+  const src = readFileSync(LIB("contract-baseline.mjs"), "utf8")
+  // ⑤ 注释到场：`unknown` 与 `mismatch` **共用** ⇒ 首个 unknown 会占坑
+  assert.ok(src.includes("首个 unknown 会占坑"), "once 标记的共用语义必须写明（🔵⑤）")
+  assert.ok(src.includes("`unknown` 与 `mismatch` **共用**"), "点名两形态共用同一闩")
+  // ⑤ 行为腿：先 unknown（占坑）⇒ 随后的 mismatch **不再响**（闩是共用的，不是每形态一个）
+  const home = mkTemp("once")
+  try {
+    const seen = []
+    const opts = { dshHomeOverride: home, resolveCorePackage: () => null, warn: (...a) => seen.push(a.join(" ")) }
+    resetVersionSentinelWarnForTests()
+    const r1 = runVersionSentinel({}, opts)
+    assert.equal(r1.status, "unknown", "前提：第一场取不到版本 ⇒ unknown")
+    const r2 = runVersionSentinel({ pkg: { version: "9.9.9-not-a-platform" } }, opts)
+    assert.equal(r2.status, "mismatch", "前提：第二场是真 mismatch")
+    assert.equal(seen.length, 1, "闩为两形态共用：首个 unknown 占坑后 mismatch 不再响（实测 " + seen.length + " 条）")
+    assert.ok(String(seen[0]).includes("unknown"), "占坑的那一句是先到的 unknown：" + String(seen[0]).slice(0, 80))
+  } finally { resetVersionSentinelWarnForTests(); rmTemp(home) }
+  // ⑥ 大小写等价：混合大小写词元必须与基线**等价**（不再误报 mismatch —— 旧行为是稳定假阳性）
+  const home2 = mkTemp("case")
+  try {
+    const opts = { dshHomeOverride: home2, resolveCorePackage: () => null }
+    const mixed = evaluateVersionSentinel({ pkg: { version: "0.1.7-RC.2" } }, opts)
+    assert.equal(mixed.status, "match", "0.1.7-RC.2 与基线 0.1.7-rc.2 等价（🔵⑥）：" + JSON.stringify(mixed))
+    assert.deepEqual(mixed.warnings, [], "等价 ⇒ 零告警（不再稳定假阳性）")
+    const upperV = evaluateVersionSentinel({ pkg: { version: "V0.1.7-RC.2" } }, opts)
+    assert.equal(upperV.status, "match", "大写 V 前缀同样被剥（先归一再剥符号）")
+    // 反例自证：真不同的版本仍必须 mismatch（大小写归一没有退化成「恒 match」）
+    const real = evaluateVersionSentinel({ pkg: { version: "0.1.7-rc.3" } }, opts)
+    assert.equal(real.status, "mismatch", "真不同的版本仍 mismatch（谓词未被削弱）")
+    assert.equal(real.warnings.length, 1, "mismatch 仍恰一条告警")
+  } finally { rmTemp(home2) }
+})
+
