@@ -45,7 +45,7 @@
 | #2 `jobs.start` 的 owner（**derived**：与 D-42b 同锁，未来新增派发点须**两处同改**） | 四档 `jobs.start(` 处数 === `ownerIdOf(agent)` 处数（=== 7），零处直传 Agent 对象 |
 | #3 jobs 输出契约（**derived**：与 D-46-static 同锁，两处同改） | 四档 `run` 形参个数 === 1（收 handle），且 `jobOutcome(` 被四处派发调用 |
 | #4 `settings.yaml` 改名（**derived**：与 U6d 同锁，两处同改） | home 探测函数**同时接受** `settings.yaml` 与 `settings.yaml.imported` |
-| #5 `subagents.start` 形状 | 调用点的参数键集合 ⊆ {prompt,parent,signal,agentOptions,toolFilter,outputSchema}（出现集合外键即红） |
+| #5 `subagents.start` 形状 | 调用点的参数键集合 ⊆ **实测并集 9 键** {prompt, parent, signal, agentOptions, toolFilter, outputSchema, persona, label, maxDepth}（出现集合外键即红；**订正**：设计原文只列 6 键，按字面实现会「出生即红」——三档现有调用点确在传 persona/label/maxDepth，见 `test/platform-surface.test.mjs` 档内注释） |
 | #6 agent/session 字段 | 具体谓词：桩上 `session.header.cwd` 为**非空字符串**、`session.id` 非空、`options.provider/model` 为字符串（评审 #9 要求实谓词，非「存在性」） |
 | #7 注册面 | 期望计数 = **实测基线并写死**（`ctx.tools.register` 与 `systemPrompt.section` 各 N 处，N 于实现时由 fresh grep 实测填入本行；「不变」以该数字为准，评审 #9） |
 | #8 `connection.requestRejection` | 处理函数**首个**调用是信任栅栏（D-39 腿复述） |
@@ -158,6 +158,7 @@
 |---|---|
 | 2026-09-26 | **第 1 轮设计评审处置并入**（用户裁定「全按建议」）：🔴 §3 补 `lib/eng.mjs` 授权并以 `handle?.id` 消解 28 处透传 · 🟡 补「触点→断言」九行对照表 · 🟡 新腿逐条点名落档 · 🟡 锚改名 A26-1…A26-7 · 🟡 文件名/覆盖语义 + `index.jsonl` + 清扫边界 · 🔵 `handle?.id` · 🔵 墙钟常量 600000 · 🔵 空报告/取消两句语义 |
 | 2026-09-26 | **分歧审计（第 1 轮）处置并入**：§2.2 落点函数名与「夹具必然代价」订正 · §2.5 shell（cmd.exe）与「不阻塞」语义订正 · **新增 §2.5 D48-5**（宿主验收执行面抽 leaf 模块 `lib/host-check.mjs`，取「锁零改动」路线）· §3 补 `lib/host-check.mjs` 与 `scripts/fix-desktop-core-skew.ps1`（收编越界档）· §5.1 补 **A26-8**（宿主验收回执锚）· §8 两处事实订正 |
+| 2026-09-26 | **交付码评处置并入**（PASS · 3🟡+4🔵零🔴）：🟡1 T-SG4 注释/消息落点改 `lib/host-check.mjs` · 🟡2 advisor 单飞拒绝与 consult 消化指引两处文案改「首选读落盘文件」 · 🟡3 §2.3 #5 键集合订正为实测并集 9 键；🔵4/5/6/7（非法 pathForm 静默回落 · 超时解析重复 · 正常 close 仍 kill · jobOutcome 未传 cwdHint）**转批 27** |
 | 2026-09-26 | **第 2 轮设计评审处置并入**（PASS 后的 4🟡+6🔵）：#1 A26-5 点名落档 · **#2 D26-5 定案=采纳 D48-2** · #3 D48-2 执行信封钉死（cwd/shell/超时 120s/失败不改作业态）· #4 D-47 的 cwd 来源与线程化点 · #5 `job-output-fallback.md` 纳入级联 · #6 三条 derived 锁标注「两处同改」· #7 脚本归属 + **新增 §8 环境实验记录** · #8 `pathForm` 枚举钉死 · #9 #6/#7 改实谓词与写死基线 · #10 作业永不结算 + `index.jsonl` 并发两条边缘 |
 | 2026-09-26 | **用户新报三问题并入**：D-45 **扩面到四条机制**（含 `pathForm` 记录，解「advisor 三形态并存、条件不明」）；**新增 §2.5 D-48**（eng 验证相位起跑即挂死：根因链 + D48-1…D48-4 + 决策点 D26-5）；登记表新增 **D-48（🔴）** |
 | 2026-09-26 | 首版：D-45 落盘兜底 · D-47 冻结门禁 · 契约面常设锁 · 搭车两项；含重启后 `job_output` 仍崩的实测证据 · 决策 D26-1…D26-4 · 锚 A1…A5 · AC-1…AC-6 |
