@@ -8,15 +8,27 @@
 // 对但接线错」，两者互补。
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { randomUUID } from "node:crypto"
 import { runAdvisorToolLoop } from "../lib/advisor.mjs"
 import { ownerIdOf } from "../lib/job-owner.mjs"
+// 批 26 搭车②：原中段 import 上移到文件首部（纯可读性；ESM 的 import 本就提升，语义零变化）。
+import { computeDocHash, normalizeDocPath } from "../lib/doc-hash.mjs"
+import { runEscalate } from "../lib/escalate.mjs"
+import { runEngCoder } from "../lib/eng.mjs"
+import { sessionState, dropSession } from "../lib/state.mjs"
+import { jobOutcome, PATH_FORMS } from "../lib/job-outcome.mjs"
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const LIB = (f) => join(PLUGIN_DIR, "lib", f)
+
+// 隔离契约（对齐既有测试档）：本档的 job settle 会经 jobOutcome 尝试落盘（批 26 / D-45）——
+// 显式置空 ⇒ home 不可解析 ⇒ 不落盘；A26-1/A26-2 用 dshHomeOverride 注入缝**定向**验证落盘面，
+// 既有腿（D-41/D-42/D-44/D-46）由此保持零盘副作用。
+process.env.DSH_HOME = ""
 
 /** 两段式 llm 桩：第 1 次调用回一个 tool-call，第 2 次回正文收尾；两次的 streamOpts 全留存。 */
 function makeToolCallLlm(toolName, argumentsJson) {
@@ -144,10 +156,6 @@ test("D-42b 静态锁: 4 档 7 处 jobs.start 一律 ownerIdOf(agent)，零处�
 // 注意：0.1.7 的 `spec.run(handle)` **带参**；本档的假 jobs 服务必须把 handle 传下去
 // （既有测试里的 fakeJobsFactory 是 0.1.6 形态的无参调用——它靠 handle 可选链仍绿，但
 // 证明不了「正文进了环」）。这里的假服务 = 0.1.7 形态：调 `spec.run(handle)` 并记录 append。
-import { mkdirSync } from "node:fs"
-import { computeDocHash, normalizeDocPath } from "../lib/doc-hash.mjs"
-import { runEscalate } from "../lib/escalate.mjs"
-import { sessionState, dropSession } from "../lib/state.mjs"
 
 /** 0.1.7 形态的假 jobs 服务：调 `spec.run(handle)`，把 handle 的 append 调用逐次记下来。 */
 function fakeJobs017(handle) {
@@ -301,3 +309,195 @@ test("D-46-static (锚 A5 / AC-4): 4 档 jobs.start 与 run: (handle) 一一对�
   assert.equal(handles, 7, "run: (handle) 合计 = 7（登记值）")
   assert.equal(bare, 0)
 })
+// ═══════════════ 批 26 · A26-1/A26-2（D-45 落盘）⊕ A26-5（搭车① 墙钟文案） ═══════════════
+//
+// A26-1：环里在写的同时盘上出现内容一致的正文文件（AC-1/AC-6：同一目录 + index.jsonl 记
+// pathForm）。A26-2：落盘目录不可写 ⇒ 只 warn、不抛、不改 outcome（D26-2：兜底不得成为新的
+// 失败源）。两条都经 dshHomeOverride 注入缝定向到临时目录（生产解析链 pickDshHome 不受干扰）。
+
+test("A26-1 落盘腿 (D-45 / AC-1·AC-6): jobOutcome 环里在写，盘上同时出现内容一致的正文文件 + index.jsonl 记 pathForm", () => {
+  const home = mkdtempSync(join(tmpdir(), "thincoder-a26-1-"))
+  try {
+    const calls = []
+    const handle = { id: "advisor-dsh-1", append(text, options) { calls.push({ text, options }) } }
+    const BODY = "REPORT-BODY-A26-1\n\nTouched files: lib/x.mjs"
+    const out = jobOutcome(handle, { status: "completed", detail: "review delivered", output: BODY },
+      { dshHomeOverride: home, pathForm: "session-state" })
+    const dir = join(home, ".thincoder", "jobs")
+    const file = join(dir, "advisor-dsh-1.txt")
+    assert.equal(existsSync(file), true, "落盘文件存在（AC-1 的存在性判据）")
+    assert.equal(readFileSync(file, "utf8"), BODY, "落盘内容 = 报告正文（AC-1）")
+    assert.equal(calls.length, 1, "环里在写（0.1.7 契约不因落盘而旁路）")
+    assert.equal(calls[0].text, BODY, "环里的文本 = 落盘的正文（同一段，不是两种拼法）")
+    assert.equal(out.result, BODY, "result 别名不变（批 25 契约零回归）")
+    const rows = readFileSync(join(dir, "index.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    assert.equal(rows.length, 1, "index.jsonl 恰一行（单行 JSON + append）")
+    const row = rows[0]
+    assert.deepEqual(Object.keys(row).sort(), ["at", "bytes", "jobId", "kind", "pathForm"], "行形状 = { jobId, kind, at, bytes, pathForm }")
+    assert.equal(row.jobId, "advisor-dsh-1", "jobId 原值入档（文件名才做字符收窄）")
+    assert.equal(row.kind, "advisor-dsh", "kind 由 branded id 前缀派生（<kind>-N，平台契约要点 #1）")
+    assert.equal(row.bytes, Buffer.byteLength(BODY, "utf8"), "bytes = 正文字节数")
+    assert.ok(PATH_FORMS.includes(row.pathForm), "pathForm 在钉死枚举内")
+    assert.equal(row.pathForm, "session-state", "advisor 记自己的 pathForm（批 26 §2.1.4：advisor ⇒ session-state）")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("A26-1b 落盘边缘 (D-45): 空报告也写文件（pathForm=none）· 无 handle.id 不落盘（D26-7 的兼容代价如实执行）", () => {
+  const home = mkdtempSync(join(tmpdir(), "thincoder-a26-1b-"))
+  try {
+    jobOutcome({ id: "eng-dsh-9", append() {} }, { status: "completed", detail: "d", output: "" }, { dshHomeOverride: home })
+    const dir = join(home, ".thincoder", "jobs")
+    assert.equal(existsSync(join(dir, "eng-dsh-9.txt")), true, "空报告也写文件（AC 判据 = 文件存在）")
+    assert.equal(readFileSync(join(dir, "eng-dsh-9.txt"), "utf8"), "", "内容为空串")
+    const rows = readFileSync(join(dir, "index.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    assert.equal(rows[0].pathForm, "none", "无正文 ⇒ pathForm=none（钉死枚举的一态）")
+    // 无 handle.id ⇒ 不落盘（旧运行时不传 handle ⇒ 无 id ⇒ 静默跳过，不抛）
+    const before = existsSync(dir) ? readdirSync(dir).length : 0
+    const out = jobOutcome({ append() {} }, { status: "completed", detail: "d", output: "x" }, { dshHomeOverride: home })
+    const after = existsSync(dir) ? readdirSync(dir).length : 0
+    assert.equal(after, before, "无 handle.id ⇒ 不落盘")
+    assert.equal(out.result, "x", "无 id 不影响收口本体（环/result 照常）")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("A26-1 扩展 (评审 #5): index.jsonl 末行可解析为 {jobId,kind,at,bytes,pathForm} 且 pathForm ∈ 钉死枚举——跨 advisor/consult/eng/escalate 各跑一次", () => {
+  // 四条机制各跑一次收口点（设计档 §2.1.3/§2.1.4：pathForm 由收口点按本次结算实际携带正文的
+  // 通道判定——advisor=session-state · consult=consult-minutes · eng/escalate 调用点不传 ⇒
+  // 正文非空推断为 result）。静态腿证明四机制的调用面确实如此传值：行为腿不是自说自话。
+  const home = mkdtempSync(join(tmpdir(), "thincoder-a26-1x-"))
+  try {
+    const dir = join(home, ".thincoder", "jobs")
+    const lastRow = () => {
+      const lines = readFileSync(join(dir, "index.jsonl"), "utf8").trim().split("\n")
+      const row = JSON.parse(lines[lines.length - 1])
+      assert.deepEqual(Object.keys(row).sort(), ["at", "bytes", "jobId", "kind", "pathForm"],
+        "末行形状 = { jobId, kind, at, bytes, pathForm }")
+      assert.ok(PATH_FORMS.includes(row.pathForm), "pathForm ∈ 钉死枚举：" + String(row.pathForm))
+      return row
+    }
+    // advisor ⇒ session-state（与其 jobOutcome 调用点实传值一致）
+    jobOutcome({ id: "advisor-dsh-1", append() {} }, { status: "completed", detail: "d", output: "ADVISOR-BODY" },
+      { dshHomeOverride: home, pathForm: "session-state" })
+    let row = lastRow()
+    assert.equal(row.jobId, "advisor-dsh-1")
+    assert.equal(row.kind, "advisor-dsh", "kind 由 branded id 前缀派生")
+    assert.equal(row.pathForm, "session-state", "advisor ⇒ session-state（§2.1.4）")
+    // consult ⇒ consult-minutes
+    jobOutcome({ id: "consult-1", append() {} }, { status: "completed", detail: "d", output: "CONSULT-DIGEST" },
+      { dshHomeOverride: home, pathForm: "consult-minutes" })
+    row = lastRow()
+    assert.equal(row.kind, "consult")
+    assert.equal(row.pathForm, "consult-minutes", "consult ⇒ consult-minutes（§2.1.4）")
+    // eng（调用点不传 pathForm ⇒ 非空正文推断为 result）
+    jobOutcome({ id: "eng-dsh-1", append() {} }, { status: "completed", detail: "d", output: "ENG-REPORT" },
+      { dshHomeOverride: home })
+    row = lastRow()
+    assert.equal(row.kind, "eng-dsh")
+    assert.equal(row.pathForm, "result", "eng ⇒ result（调用点不传 + 非空正文推断）")
+    // escalate（同 eng 推断）
+    jobOutcome({ id: "escalate-dsh-1", append() {} }, { status: "completed", detail: "d", output: "ESC-REPORT" },
+      { dshHomeOverride: home })
+    row = lastRow()
+    assert.equal(row.kind, "escalate-dsh")
+    assert.equal(row.pathForm, "result", "escalate ⇒ result（调用点不传 + 非空正文推断）")
+    // 追加语义：四行齐在，末行是 escalate（「末行」判据真实成立，不是首行碰巧对）
+    const all = readFileSync(join(dir, "index.jsonl"), "utf8").trim().split("\n")
+    assert.equal(all.length, 4, "四机制各恰一行")
+    assert.equal(JSON.parse(all[all.length - 1]).kind, "escalate-dsh")
+    // 静态腿：调用面的实传值（登记值；新增/删除 jobOutcome 调用点须两处同改）
+    const advisorSrc = readFileSync(LIB("advisor.mjs"), "utf8")
+    const consultSrc = readFileSync(LIB("consult.mjs"), "utf8")
+    assert.equal((advisorSrc.match(/jobOutcome\(handle,/g) ?? []).length, 6, "advisor jobOutcome 调用点 = 6（登记值）")
+    assert.equal((advisorSrc.match(/pathForm: "session-state"/g) ?? []).length, 6, "advisor 6 处全部实传 session-state")
+    assert.equal((consultSrc.match(/jobOutcome\(handle,/g) ?? []).length, 3, "consult jobOutcome 调用点 = 3（登记值）")
+    assert.equal((consultSrc.match(/pathForm: "consult-minutes"/g) ?? []).length, 3, "consult 3 处全部实传 consult-minutes")
+    for (const name of ["eng.mjs", "escalate.mjs"]) {
+      assert.equal((readFileSync(LIB(name), "utf8").match(/pathForm:/g) ?? []).length, 0,
+        name + " 调用点零处实传 pathForm（缺省推断是其契约的一部分——传了反而两路判据不一）")
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("A26-2 只 warn 腿 (D-45 / AC-2): 落盘目录不可写 ⇒ 只 warn，不抛、不改 outcome", () => {
+  const home = mkdtempSync(join(tmpdir(), "thincoder-a26-2-"))
+  try {
+    // 把 home 钉成一个**文件** ⇒ mkdir(join(home, ".thincoder", "jobs")) 必 ENOTDIR（不可写形态）
+    const blocker = join(home, "not-a-dir")
+    writeFileSync(blocker, "x")
+    const warnings = []
+    const orig = console.warn
+    let calls = []
+    let out
+    try {
+      console.warn = (...a) => { warnings.push(a.map(String).join(" ")) }
+      out = jobOutcome({ id: "eng-dsh-2", append: (t2) => calls.push(t2) },
+        { status: "completed", detail: "eng_coder delivery", output: "BODY-A26-2" }, { dshHomeOverride: blocker })
+    } finally {
+      console.warn = orig
+    }
+    assert.equal(out.result, "BODY-A26-2", "outcome 原样返回（不改 outcome）")
+    assert.equal(out.status, "completed", "作业终态不被落盘失败翻转")
+    assert.equal(calls.join("|"), "BODY-A26-2", "环照写（兜底失败不拖累主契约）")
+    assert.ok(warnings.some((w) => w.includes("落盘失败")), "落盘失败必须 warn 留痕（不许静默）：" + JSON.stringify(warnings))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("A26-5 墙钟文案腿 (搭车① / AC-5): background=false 且 budgetCap ≥ 600000 ⇒ 返回文本点明「本路会白等」；低于墙钟 ⇒ 不出现", async () => {
+  const escSrc = readFileSync(LIB("escalate.mjs"), "utf8")
+  assert.ok(escSrc.includes("本路会白等") && escSrc.includes("background === false && budgetCap >= PLATFORM_RUN_CODE_WALL_MS"),
+    "escalate 同款白等提示在场（同触发条件：background=false 且 cap ≥ PLATFORM_RUN_CODE_WALL_MS）")
+  const mk = (capMs) => {
+    const sid = "a26-5-" + randomUUID()
+    const st = sessionState(sid)
+    st.engineering = true
+    st.designToken = randomUUID() + ":" + (Date.now() + 3600_000)
+    const subagents = {
+      async start() {
+        return {
+          result: Promise.resolve({ stopReason: "completed", output: [{ type: "text", text: "delivered" }] }),
+          dispose: async () => {},
+        }
+      },
+    }
+    const llm = {
+      async resolveModelInfo() {
+        return { reasoning: { efforts: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }], defaultEffort: "low" } }
+      },
+    }
+    return {
+      sid,
+      token: st.designToken,
+      deps: {
+        ctx: { subagents, llm },
+        agent: { session: { id: sid, header: { cwd: PLUGIN_DIR } }, options: { provider: "p", model: "m" } },
+        config: { codexCli: { budgetCapMs: capMs } },
+        signal: undefined,
+        configDefaultEngineering: false,
+      },
+    }
+  }
+  const hi = mk(600000)
+  try {
+    const out = await runEngCoder(hi.deps, { task: "implement x", designToken: hi.token, background: false })
+    assert.ok(out.includes("本路会白等"), "cap=600000 ≥ PLATFORM_RUN_CODE_WALL_MS ⇒ 白等提示随回复带出：" + out.slice(0, 220))
+    assert.equal(sessionState(hi.sid).mutatedThisRun, true, "前置：确实走完同步交付（告警 fail-open 不改返回路径）")
+  } finally {
+    dropSession(hi.sid)
+  }
+  const lo = mk(540000)
+  try {
+    const out2 = await runEngCoder(lo.deps, { task: "implement x", designToken: lo.token, background: false })
+    assert.ok(!out2.includes("本路会白等"), "cap=540000 < 600000 ⇒ 不出现（阈值方向负控，否则天天误报）")
+  } finally {
+    dropSession(lo.sid)
+  }
+})
+

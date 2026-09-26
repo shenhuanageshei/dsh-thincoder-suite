@@ -127,10 +127,14 @@ test("T-SG4 (AC-11 / 锚 N5): 每个成功交付返回点各调一次 stageGateN
     assert.ok(/deliveryText\(|eng_coder delivery:/.test(l), "接线点必须携带交付文本：" + l.trim().slice(0, 120))
   }
 
-  // 零新执行面：`lib/**` 的子进程调用点计数不变（门**纯解析**，不得 spawn）
+  // 执行面基线（批 26 / 决策 D26-5 有意改锁）：原锁「`lib/**` 的子进程调用点计数恒 1（仅 codex 适配器）」
+  // 随 D48-2 宿主验收回执落地放宽——eng.mjs 新增一个执行面调用点（runHostStageChecks：宿主侧按
+  // stages 的 check 命令跑验收，设计档 §2.5 执行信封）。「门纯解析、不得 spawn」的原始语义仍成立：
+  // stageGateNote 函数体切片的四标识符禁用检查（T-SG6）原样保留，执行面只存在于 runHostStageChecks
+  // 一处。新基线 = 2；再新增执行面（计数 > 2）仍会红（锁的判别力不降，只随设计变更换基线）。
   const hits = readdirSync(LIB_DIR).filter((f) => f.endsWith(".mjs"))
     .reduce((n, f) => n + (readFileSync(join(LIB_DIR, f), "utf8").match(/child_process/g) ?? []).length, 0)
-  assert.equal(hits, 1, "`lib/**` 的子进程调用点计数必须仍为 1（仅 codex 适配器）——实测 " + hits)
+  assert.equal(hits, 2, "`lib/**` 的子进程调用点计数 = 2（codex 适配器 + eng.mjs 宿主验收 D48-2，批 26 新基线）——实测 " + hits)
 })
 
 // ————————————— ③ 端到端：横幅前置 + 报告正文一字不改 + 失败路径反向 —————————————

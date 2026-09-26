@@ -800,6 +800,8 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
     //   docs/2026-09-25-dsh017-compat-design.md §6（机验锚 A1…A8：A1/A2 = D-41a/D-41b · A3/A4 = T13-boundary-a/b ·
 //   A5/A6 = D-42a/D-42b · A7/A8 = 登记与授权面）。台账行由同一提交登记。
     "dsh017-compat.test.mjs",
+    // 批 26 契约面常设锁档（九条平台触点，设计档 docs/dsh017-batch26-design.md §2.3）——登记缺口补登（理由/裁定来源：分歧审计 ③-G1）。
+    "platform-surface.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」
@@ -1039,3 +1041,38 @@ test("T-E21 (AC-E21, 锚 A10): 单一实现——写工具枚举 / 路径归一 
   assert.match(readFileSync(ENG_SRC, "utf8"), /import \{ computeDocHash, normalizeDocPath \} from "\.\/doc-hash\.mjs"/,
     "A10/N-3: eng.mjs 显式 import normalizeDocPath（不自造 cwd 归一）")
 })
+
+// ═══════════════════════════ 批 26 · A26-3（D-47）：冻结门禁的相对路径不再 fail-open ═══════════════════════════
+// 设计档 docs/dsh017-batch26-design.md §2.2 / §5.1 A26-3：冻结集比对用 normalizeDocPath(target)
+// 归一 target，而冻结集元素是绝对路径——不传基座 ⇒ 退化成 process.cwd()（宿主进程的 cwd 是
+// profile 目录）⇒ 相对路径 target 静默放行。修复 = 归一基座传会话 cwd（agent.session.header.cwd）。
+test("A26-3 (D-47): 冻结集比对对相对路径 target 不再 fail-open——会话 cwd 作归一基座", async () => {
+  // 会话 cwd 故意 ≠ process.cwd()（node --test 从插件根跑）：只有基座真的被用上，相对路径才命中冻结集
+  const dir = mkdtempSync(join(tmpdir(), "thincoder-a26-3-"))
+  try {
+    const docAbs = normalizeDocPath(join(dir, "docs", "frozen.md"))
+    const gate = makeDocFreezeGate(() => ({ jobIds: ["advisor-dsh-1"], docSet: [docAbs] }))
+    let calledNext = false
+    const next = async () => { calledNext = true; return { kind: "allow" } }
+    const verdict = await gate({
+      name: "edit",
+      agent: { session: { id: "a26-3", header: { cwd: dir, delegationDepth: 0 } } },
+      arguments: { file_path: join("docs", "frozen.md") },
+    }, next)
+    assert.equal(calledNext, false, "相对路径命中冻结集 ⇒ 不得放行（修复前 normalizeDocPath 不带基座即 fail-open）")
+    assert.equal(verdict && verdict.kind, "deny", "相对路径 target 命中冻结集 ⇒ 被拦：" + JSON.stringify(verdict))
+    assert.ok(String(verdict && verdict.reason).startsWith("frozen: "), "拒绝文案走 frozen 通道（与写门禁的 denied: 不混用）")
+    // 负控：不沾冻结集的相对路径 ⇒ 照常放行（基座只修 fail-open，不把门修宽）
+    let calledNext2 = false
+    const verdict2 = await gate({
+      name: "edit",
+      agent: { session: { id: "a26-3b", header: { cwd: dir, delegationDepth: 0 } } },
+      arguments: { file_path: join("docs", "other.md") },
+    }, async () => { calledNext2 = true; return { kind: "allow" } })
+    assert.equal(calledNext2, true, "不沾冻结集的 target 照常放行")
+    assert.equal(verdict2 && verdict2.kind, "allow")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+

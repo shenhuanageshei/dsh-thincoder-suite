@@ -2,6 +2,19 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.29.5] — 2026-09-26
+
+> **一句话**：**把报告拿回来**——后台作业的全文不再依赖平台那条坏掉的读取口，跑完就落在盘上（`$DSH_HOME/.thincoder/jobs/<jobId>.txt`）；同时**把验证门归位**（dsh 子代理不再自己跑 check，改由宿主执行并回执）。**本版改 `lib/**` ⇒ 重启 DSH 后生效**（实测：本版落地后运行中实例已自动重载，`eng-dsh-1` 的报告确实落盘可读）。
+
+**批 26（把报告拿回来 ⊕ 把验证门归位：D-45 · D-47 · D-48）**
+
+- **【计数行】**：`node --test` **545/545**（**基线 527 + 本批 18**：D-45 = `test/dsh017-compat.test.mjs` +5〔A26-1/A26-1b/A26-2/index.jsonl 形状/pathForm 跨四机制〕· 新档 `test/platform-surface.test.mjs` +12〔九条触点常设锁 + A26-6/A26-7/A26-8〕· D-47 = `test/guard-e.test.mjs` +1〔A26-3〕）。⇒ 台账 §三：`dsh017-compat.test.mjs` **9 → 14** · `guard-e.test.mjs` **24 → 25** · **新增 `platform-surface.test.mjs`（12）**；档数 **22 → 23**。
+- **D-45（🟡 报告拿不回）**：`job_output` 在这台机器上对**所有**作业都崩（含平台自产）⇒ 报告正文无第二条可读路径。修法：`lib/job-outcome.mjs` 在**收口点**把正文写到 `$DSH_HOME/.thincoder/jobs/<jobId>.txt`（`jobId = handle?.id`），并追加 `index.jsonl` 记 `{jobId,kind,at,bytes,pathForm}`（`pathForm` 钉死枚举 result/ring/session-state/consult-minutes/none，由**实际携带正文的通道**判定）；四条机制全文统一落盘；派发文案与工具描述改「**首选读落盘文件**，`job_output` 作附加」。**实证**：`eng-dsh-1.txt`（12262 字节）已落盘并被宿主读回。**环境实验**：干净移除 profile 自带的 rc.1 jobs 副本后重启，`job_output` **仍崩** ⇒ 平台自身读法缺陷（不属本仓，建议上游修）。
+- **D-47（🟡 门禁 fail-open）**：`makeDocFreezeGate` 的 `target` 归一带 `process.cwd()` ⇒ 相对路径对不上绝对冻结集即**静默放行**。修法：归一改传 `agent.session.header.cwd`（与 D-44 同款来源）；**A2 夹具零改动**（实测其只锁 `makeWriteGate` 的可执行行）；新增 A26-3 腿（相对路径命中 ⇒ deny + 负控放行）。
+- **D-48（🔴 验证相位挂死）**：dsh 子代理跑 stages 的 `check` 命令时**既不报错也不返回**（实测挂 8 分钟、日志 0 字节，而宿主同命令 7.24 秒全绿）。修法：**D48-1** 新增 `stages[].checkMode`（dsh 缺省 `host`）⇒ 任务书不再要求子代理执行命令 · **D48-2** 新增 `lib/host-check.mjs` 承接宿主验收执行面（独立 120s 超时并收敛为 `timed out`、失败只标回执 FAIL 而**不改作业状态**）——抽成 leaf 模块是为了**不撞**常驻锁 T-AP7（该锁把四档的定时器标识逐字钉死并与 HEAD 交叉核验，结构上不可再容纳新定时器）· **D48-3** 兜底信封附 stages 的 check 命令原文 + 取证指路 · **D48-4** 上游建议：沙箱拒绝子进程应**报错**而非挂起。
+- **九条平台触点常设锁**（新档 `platform-surface.test.mjs`）：把 0.1.7 那一轮「被撞出来」的九处契约面钉成**可独立转红**的断言（#2/#3/#4 标 `derived`，与既有锁**两处同改**）⇒ 下次平台换契约在改的当下就红。
+- **流程实据**：设计评审跑了 **5 轮**（R1 FAIL → R2 PASS → R3 PASS → R4 FAIL → R5 PASS）；R4 抓到的 🔴 是**我自己只扫了一半订正**（§2.2 改了、§3/D26-3/登记表还留着旧说法）——这也顺带证明 **D-44 修好后的「文档集指纹 ⇒ 改档即废令牌」护栏真的生效**（改完文档拿旧令牌派单被直接拒）。实现走 eng_coder 首轮 + 分歧修复轮；**越界档** `scripts/fix-desktop-core-skew.ps1`（+46/-12，修的是真缺陷：HEAD 版扫错目录会空跑、`-Restore` 可能被空备份遮蔽）已补进设计档 §3 收编。
+- **残留**：平台 `job_output` 读取面（上游）· 落盘目录的清扫/轮转（本批边界）· `pathForm` 的 `ring` 为保留位（当前不产出）。
 ## [0.29.4] — 2026-09-26
 
 > **一句话**：把插件的**作业输出**按 DSH 0.1.7-rc.2 的新契约生产（**输出环** + `job.result`），并让**文档集指纹**不再拿 `process.cwd()` 猜基座——前者决定「后台作业的报告正文能不能到模型」，后者决定「设计评审签发的合格证到底绑没绑上文档集」。**本版改 `lib/**` ⇒ 重启 DSH 后生效。**
