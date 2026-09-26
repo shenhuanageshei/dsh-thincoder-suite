@@ -24,6 +24,8 @@
 
 | [dsh017-full-alignment-design.md](dsh017-full-alignment-design.md) | 2026-09-26 | **批 25 设计：插件对 DSH 0.1.7-rc.2 的全面契约对齐**——D-46 作业输出契约（`run(handle)` + 输出环 `append` + outcome 的 `result` 字段；0.1.6 的 `spec.run()` 无参与 `job.output` 在 0.1.7 已不存在）· D-44 文档集指纹的路径基座显式化；含两版源码逐字对照 · 决策 D25-1…D25-4 · 机验锚 A1…A6 |
 
+| [dsh017-batch26-design.md](dsh017-batch26-design.md) | 2026-09-26 | **批 26 设计：把报告拿回来**——D-45 作业全文自持落盘（收口点落盘 + 派发文案改「首选落盘路径」）· D-47 冻结写门禁相对路径 fail-open（与 guard-e A2 夹具同批改）· 契约面常设锁（9 条触点）· 搭车：同步派发墙钟提示 + import 上移。含重启后 `job_output` 仍崩的实测证据 · 决策 D26-1…4 · 锚 A1…A5 · AC-1…AC-6 |
+
 ## 吸收面
 
 | 文档 | 日期 | 主题 |
