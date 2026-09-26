@@ -27,7 +27,9 @@
 | [dsh017-batch26-design.md](dsh017-batch26-design.md) | 2026-09-26 | **批 26 设计：把报告拿回来**——D-45 作业全文自持落盘（收口点落盘 + 派发文案改「首选落盘路径」）· D-47 冻结写门禁相对路径 fail-open（与 guard-e A2 夹具同批改）· 契约面常设锁（9 条触点）· 搭车：同步派发墙钟提示 + import 上移。含重启后 `job_output` 仍崩的实测证据 · 决策 D26-1…4 · 锚 A1…A5 · AC-1…AC-6 |
 
 | [dsh017-batch27-design.md](dsh017-batch27-design.md) | 2026-09-26 | **批 27 设计：残差清零**——落盘清扫/轮转（钉死四类 kind 正则 · 双重上限 · 索引只留存活行且零伪造 · 不误删他人文件）· 三条小硬化（非法 `pathForm` 可见 · 超时 helper 单点 · kill 只留超时/未 close 路径）· `cwdHint` 透传 · **零落盘回归锚**（初版写的「测试隔离缝」经自查订正**已撤销**——全历史检索证本仓无泄漏测试）。决策 D27-1…5 · 锚 **A27-1…8** · AC-1…7 |
-| [dsh017-batch28-design.md](dsh017-batch28-design.md) | 2026-09-26 | **批 28 设计：对外收口**——上游报告包（平台三问题：`job_output` 读法 · 沙箱子进程挂起 · advisor 三形态）+ 只读复现脚本 · **版本哨兵**（不一致响亮告警、不阻断）· 契约面巡检工具（与九条锁同源）· 结项说明。决策 D28-1…5 · 锚 A28-1…6 · AC-1…6 |
+| [dsh017-batch28-design.md](dsh017-batch28-design.md) | 2026-09-26 | **批 28 设计：对外收口**——上游报告包（平台三问题：`job_output` 读法 · 沙箱子进程挂起 · advisor 三形态）+ 只读复现脚本 · **版本哨兵**（不一致响亮告警、不阻断）· 契约面巡检工具（与九条锁同源）· 结项说明。决策 D28-1…**7** · 锚 A28-1…6 · AC-1…6 |
+| [upstream-2026-09-26-platform-issues.md](upstream-2026-09-26-platform-issues.md) | 2026-09-26 | **上游报告包（批 28 · US-1）**：三条平台问题的自包含报告——① `job_output` 读全文对所有作业都崩（干净移除 profile 自带 rc.1 副本后仍崩 ⇒ 平台自身读法缺陷）② 沙箱拒子进程应**报错**而非挂起（实测挂 8 分钟、日志 0 字节；宿主同命令 7.24 秒全绿）③ advisor 三形态并存（内联条件不明）。每条含现象 / 最小复现 / 一手证据 / 影响 / 建议；配套只读复现脚本 [`scripts/repro-platform-issues.ps1`](../scripts/repro-platform-issues.ps1) |
+| [dsh017-program-closeout.md](dsh017-program-closeout.md) | 2026-09-26 | **结项说明（批 28 · US-4）**：批次脉络（24/25/26/27/28）· 九条触点矩阵**只做指针 + 摘要**（权威源 = `lib/contract-baseline.mjs`）· 四道护栏（令牌 docHash · 锚/AC · 常驻锁 · 宿主验收回执）· 「平台换契约时的标准动作」（先跑 `contractWatch` → 对照矩阵 → 开新批） |
 
 ## 吸收面
 

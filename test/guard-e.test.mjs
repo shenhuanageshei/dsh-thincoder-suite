@@ -813,6 +813,14 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
     //     A27-8 cwdHint 静态 7 处 + 收口点直喂/真实派发双行为腿（分歧修复 D5）。
     "host-check.test.mjs",
     "job-persistence.test.mjs",
+    // 批 28 新增档（对外收口：契约面基线单一事实源）——**在其落地的同一 stage 内登记**
+    // （批 9「同 stage 登记」纪律：台账-历史一致闸的「T-E19 ↔ fs」等值腿会在「fs 已 +1 而本表
+    // 未登记」时先红）。理由与设计档引用（docs/dsh017-batch28-design.md §2.2/§2.3/§5.1）：
+    // contract-baseline.test.mjs = 版本哨兵三态（A28-1 一致零告警 / A28-2 不一致一条响亮告警且
+    // 不阻断 / A28-3 取不到标 unknown 不崩）+ contractWatch 返回形状（A28-4）+ 九条谓词同源静态锁
+    // （A28-5：不存在第二份字面）的唯一机验锚档；同批上调的注册面基线 #7（textTool 7→8，D28-6）
+    // 的期望值也钉在该锚档断言的基线常量上。台账行由主代理同批登记（批 27 §3 分工裁定）。
+    "contract-baseline.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」
