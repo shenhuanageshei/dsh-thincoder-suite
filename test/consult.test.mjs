@@ -9,6 +9,14 @@
 // ③ consultTimeoutMs 看门狗仍有界（泄漏兜底不因 ① 而失效）。
 // ④ cleanupConsultSessions（session 销毁）中止全部在跑子代理。
 // ⑤ selectConsultModels 选择器语义（provider:model / 裸 provider / 裸 model / 未知）。
+// ⑥ **批 30 / US-5（D-58 · A30-8 / A30-9）**：注入面消毒（裸会话引用形态被断开、带路径形态原样）+ 失败
+//    可诊断（无 diagnostic 时兜底读子会话落盘 `turn/end.reason`；读不到 ⇒ 如实声明「子代理面不可诊断」）
+//    + codex 行带出 `env.diagnostics`（exit code / stderr）；**US-7（D-59 · A30-11）**：池行前置可用性预检——
+//    模型不在目录 / effort 不被接受 ⇒ 该行**不派发**并点名「因配置未派发」+ 原因（判据 = 零 codex exec 调用）；
+//    目录不可得 ⇒ fail-open 不拦 + 响亮标注（诚实降级）；**US-6（D30-6 · A30-10 / A30-12）**：权限面判据
+//    读**模型请求头**（`request/header`，不得以「restrict 未抛错」代替）+ **会诊产物**（派发回复的 detail 段 ·
+//    settle 后的 digest）带「本部署无法保证只读」如实声明与**弱证 / 模型面**证据口径（含一条跨档防漂移锁）。
+//    ★ 全部**并入既有块**（台账 §三零改：零新增顶层 `test(`）。
 // 假 subagents 忠实复刻 dsh-subagent-in-process-driver 的取消语义：request.signal abort →
 // 子代理被取消（stopReason "aborted"）；否则 delayMs 后以 reply 完成。零真实 LLM 调用。
 process.env.DSH_HOME = ""
@@ -18,11 +26,19 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, write
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { EventEmitter } from "node:events"
+// 批 30 / US-5（D-58 · 锚 A30-9）：多帧 zstd 会话档的自造夹具（逐帧压缩 + 顺序拼接，真机同形）。
+import * as nodeZlib from "node:zlib"
 import {
   startConsultSession, stopConsultSession, cleanupConsultSessions, selectConsultModels,
   composeConsultDigest, readConsultLedger, consultDigestionGate, consultLedgerOrphans,
   undigestedConsultSessions, CONSULT_DIGEST_REPLY_CAP,
+  // 批 30 / US-5：注入面消毒（A30-8）与落盘日志定位 slug（A30-9 的证据通道）
+  sanitizeInjectedText, projectKeySlug,
 } from "../lib/consult.mjs"
+// 批 30 / US-6（D30-6 · 锚 A30-10/A30-12）：**模型面**证据的捕获与成文（eng.mjs 侧实现，
+// 读取器复用 consult.mjs 的补导出——设计 §2.6「不得新建模块」）
+import { readChildModelToolSurface, renderModelSurfaceEvidence } from "../lib/eng.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -727,7 +743,457 @@ async function b15RobustnessChecks() {
   cleanup(h3.sessionId, h3.state)
 }
 
-test("selectConsultModels（provider:model / 裸 provider / 裸 model / 未知）+ 批 15 交付与消化面（AC-1…AC-26 的腿）+ 修复轮补腿（AC-7 形状 · AC-16 正向锁 · AC-20 alreadySettled · AC-23/US-12）+ 收尾修复轮补腿（交付代码评审 #1 看门狗清除 · #2 终结事件 sessionId 与幽灵孤儿 · #3 落点路径字面锁）", async () => {
+// ═══════════════ 批 30 / US-5（D-58 · 锚 A30-8 / A30-9）：注入面消毒 + 失败可诊断 ═══════════════
+//
+// 来源：会诊 #13 **全灭**的已确证真因（子会话落盘 `turn/end` seq 7 铁证 + 平台源码链 + 本地解码
+// 复现）：注入文本里的**裸会话引用形态**被平台当 canonical URI 解析 ⇒ base64url + JSON.parse 抛 ⇒
+// 整回合 `reason.kind="error"` ⇒ 子代理 `stopReason="error"`（**不带 diagnostic**）⇒ 插件只渲染
+// 一行「child ended: error」。本组的消费面与 D-28 腿同源 = **digest**。
+// ★ 判据正则**以字面钉进本档**（**不 import 平台模块**——避免测试与平台内部耦合）；
+//   来源坐标 = `dsh-session-reference/lib/types/uri.js:59` 的 bare 分支：
+//     /@\[((?:\\.|[^\\\]])*)\]\((dsh-session:[^\s)]*)\)|(dsh-session:[A-Za-z0-9_-]+)/gu
+//   本档只钉**裸分支那一半**（它才是 #13 命中的那一路）。
+const PLATFORM_BARE_SESSION_REF = /(dsh-session:[A-Za-z0-9_-]+)/gu
+/**
+ * 病态样本**以拼接形态**写（不写整串字面）：设计 §2.0 C 的写作纪律——裸简写不得作为整串出现在
+ * 可能被注入的文本里；本档照此形态，免得测试自己成为下一个罪证源（判据正则仍是字面，见上）。
+ */
+const BARE_REF_SAMPLE = "dsh-session" + ":" + "483-499"
+/** 带路径的引用形态（合规写法）：平台两个分支都**不命中**（`dsh-session` 之后是 `/` 而非 `:`）。 */
+const PATH_REF_SAMPLE = "dsh-session/lib/types/index.js:483-499"
+/** 平台 bare 分支的命中数。**每次新建正则**：带 `g` 的正则有 `lastIndex` 状态，复用会让断言互相污染。 */
+const bareRefHits = (text) => [...String(text).matchAll(new RegExp(PLATFORM_BARE_SESSION_REF.source, "gu"))].length
+/** 假 codex 子进程调用记录里**真的发起了任务**的那些（`args[0] === "exec"`；探测调用不算）。 */
+const execCalls = (log) => (Array.isArray(log) ? log : []).filter((args) => args[0] === "exec")
+
+/**
+ * 假 codex 子进程（注入缝 `deps.spawn`；形状对齐 test/codex-runner.test.mjs 的同族夹具）：
+ * `--version` ⇒ 探测成功；`debug models` ⇒ 非零退出（目录走 models_cache.json 兜底）；
+ * 其余（exec）⇒ 非零退出 + stderr（本组要证的正是 stderr / exit code 上浮进 digest）。
+ */
+function a30CodexSpawn(stderrText, log) {
+  return (_file, args) => {
+    // 派发面取证：`args[0] === "exec"` 才是**真的发起了 codex 任务**（`--version` / `debug models` 只是探测）
+    if (Array.isArray(log)) log.push(args.slice())
+    const child = new EventEmitter()
+    child.pid = 424242
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.stdin = { write() { }, end() { } }
+    child.kill = () => { }
+    ;(async () => {
+      // ★ 先让出一拍再发事件：调用方是在 spawn 返回**之后**才挂 `stdout/stderr.on("data")` 的，
+      //   同步 emit 会整批丢失（现场形态 = 「codex --version 退出码 0（输出: ）」⇒ RUNNER_UNAVAILABLE）。
+      await sleep(0)
+      if (args.includes("--version")) {
+        child.stdout.emit("data", Buffer.from("codex-cli 0.150.1\n"))
+        await sleep(5)
+        child.emit("exit", 0)
+        return
+      }
+      if (args.includes("models")) { await sleep(5); child.emit("exit", 1); return }
+      child.stderr.emit("data", Buffer.from(stderrText))
+      await sleep(5)
+      child.emit("exit", 1)
+    })()
+    return child
+  }
+}
+
+/** 批 30 / US-5（A30-8 / A30-9）的可机检腿——并入既有块（台账 §三零改：本档零新增顶层 `test(`）。 */
+async function b30InjectionAndDiagnosticsChecks() {
+  // ——— ① A30-8 谓词自证（先证可判，再对真档断言） ———
+  assert.equal(bareRefHits(BARE_REF_SAMPLE), 1, "谓词自证：裸形态必须命中平台 bare 分支（不是恒假断言）")
+  assert.equal(bareRefHits(PATH_REF_SAMPLE), 0, "谓词自证：带路径形态**本就不命中**（`dsh-session` 之后是 `/`）")
+  assert.equal(bareRefHits(sanitizeInjectedText(BARE_REF_SAMPLE)), 0, "★ 消毒后不再命中（删掉消毒 ⇒ 本行必红）")
+  assert.ok(sanitizeInjectedText(BARE_REF_SAMPLE).includes("\u200B"), "断开方式 = 插入零宽空格")
+  assert.equal(sanitizeInjectedText(BARE_REF_SAMPLE).replace(/\u200B/g, ""), BARE_REF_SAMPLE,
+    "除插入的零宽空格外**逐字不变**（纯替换，不做任何其它改写）")
+  assert.equal(sanitizeInjectedText(PATH_REF_SAMPLE), PATH_REF_SAMPLE, "带路径的引用形态**一字不改**（原样保留）")
+  assert.equal(sanitizeInjectedText("普通正文\n第二行"), "普通正文\n第二行", "无关文本逐字不变（含换行）")
+
+  // ——— ①b 批 30 修复轮 / 码评 🟡#1：**markdown 提及分支**的形态腿（轮 1 的消毒面扩了它，却没有腿）———
+  // 病（码评实证）：消毒的 F3 订正把「`](` 紧跟 `dsh-session:`」这一**上下文形态**一并纳入断开面，
+  //   但**没有任何断言**覆盖它 ⇒ 删掉那一半、只留 bare 分支时**全套仍绿**（净损失一条防线）。
+  // 判据正则**以字面钉住平台提及分支**：`@\[…\]\((dsh-session:[^\s)]*)\)`（来源坐标同上：
+  //   `dsh-session-reference/lib/types/uri.js:59`；载荷是 `[^\s)]*` ⇒ **任意、可为空**）。
+  //   两个判据：① **载荷侧** `(dsh-session:[^\s)]*)`（与设计/工单逐字同形）；② **完整提及形态**
+  //   `\]\((dsh-session:[^\s)]*)\)`——后者才是平台正则真正要求的那一形（带 `](` 上下文与收尾 `)`）。
+  //   它与 bare 分支的载荷形状**不同** ⇒ 两半可各自转红（删任一半，对位的断言必红）。
+  const MENTION_PAYLOAD_RE = /(dsh-session:[^\s)]*)/gu
+  const MENTION_FULL_RE = /\]\((dsh-session:[^\s)]*)\)/gu
+  const hitsOf = (re, text) => [...String(text).matchAll(new RegExp(re.source, "gu"))].length
+  const mentionPayloadHits = (text) => hitsOf(MENTION_PAYLOAD_RE, text)
+  const mentionFullHits = (text) => hitsOf(MENTION_FULL_RE, text)
+  const MD_REF_SAMPLE = "](" + "dsh-session" + ":" + "!!!"   // 载荷**非词字符开头**：bare 分支本就不命中
+  const MD_REF_EMPTY = "](" + "dsh-session" + ":" + ")"      // 载荷**为空**：bare 分支同样不命中
+  assert.equal(mentionPayloadHits(MD_REF_SAMPLE), 1, "谓词自证：提及形态的**载荷侧**必须命中（不是恒假断言）")
+  assert.equal(bareRefHits(MD_REF_SAMPLE), 0, "谓词自证：该样本**本就不命中** bare 分支（故本段只裁 markdown 那一半）")
+  assert.equal(mentionPayloadHits(MD_REF_EMPTY), 1, "谓词自证：空载荷形态同样命中提及载荷侧")
+  assert.equal(mentionFullHits(MD_REF_EMPTY + "x)"), 1, "谓词自证：**完整提及形态**（带收尾 `)`）命中")
+  assert.equal(mentionPayloadHits(sanitizeInjectedText(MD_REF_SAMPLE)), 0,
+    "★ 🟡#1 决定性（markdown 半）：消毒后不再命中提及载荷侧（删掉实现里 `](dsh-session:` 那一半 ⇒ 本行必红）")
+  assert.equal(mentionPayloadHits(sanitizeInjectedText(MD_REF_EMPTY)), 0, "空载荷形态同样被断开（载荷任意 ⇒ 不能只断词字符形态）")
+  assert.equal(mentionFullHits(sanitizeInjectedText(MD_REF_EMPTY + "x)")), 0,
+    "★ 完整提及形态（`](dsh-session:<载荷>)`）消毒后不再命中（平台正则真正要求的那一形）")
+  assert.equal(sanitizeInjectedText(MD_REF_SAMPLE).replace(/\u200B/g, ""), MD_REF_SAMPLE,
+    "仍是**纯替换**（只插入零宽空格，`](` 与其余文本一字不改）")
+  assert.ok(sanitizeInjectedText(MD_REF_SAMPLE).includes("](") && sanitizeInjectedText(MD_REF_SAMPLE).includes("!!!"),
+    "★ 断言「`](` 上下文被保留」——实现若把整段 `](dsh-session:` 删掉，本行与上一行同时红")
+  // 另一半（bare）的独立可转红：**只**断 markdown 上下文时，带词字符载荷的形态仍会命中
+  assert.equal(bareRefHits(sanitizeInjectedText(BARE_REF_SAMPLE)), 0,
+    "★ 🟡#1 决定性（bare 半）：`dsh-session:` + 词字符载荷仍被断开（删掉那一半 ⇒ 本行必红）")
+
+  // ——— ② A30-8 行为腿：经**真实派发路径**（prompt 装配点）验证两个来源都过消毒 ———
+  {
+    const sub = makeSubagents({ delayMs: 10, reply: "ok" })
+    const h = makeDeps({ subagents: sub })
+    // 注入源：① 问题正文含裸形态；② 主历史派生消息里**同时**含裸形态与带路径形态
+    h.deps.agent.session.deriveMessages = () => [
+      { role: "user", content: [{ type: "text", text: "证据：裸 " + BARE_REF_SAMPLE + " 与带路径 " + PATH_REF_SAMPLE }] },
+    ]
+    try {
+      await startConsultSession(h.deps, "问题里的裸形态 " + BARE_REF_SAMPLE, undefined)
+      await waitFor(() => sub.started.length === 1)
+      const promptText = (sub.started[0].req.prompt ?? []).map((part) => part?.text ?? "").join("\n")
+      assert.ok(promptText.length > 0, "前置：prompt 文本可读（假子代理收到真实装配结果）")
+      assert.equal(bareRefHits(promptText), 0,
+        "★ 派发出去的 prompt 里**零命中**平台 bare 分支（问题正文与主历史两个来源都过消毒；漏一处本行必红）")
+      assert.ok(promptText.includes(PATH_REF_SAMPLE), "带路径的引用形态原样保留在注入文本里")
+      assert.ok(promptText.includes("问题里的裸形态"), "问题正文照常注入（消毒不改其余内容）")
+    } finally { cleanup(h.sessionId, h.state) }
+  }
+
+  // ——— ③ A30-9 证据通路的 slug 移植必须与**真机观测值**一致（否则定位永远走不到主路径） ———
+  assert.equal(projectKeySlug("D:\\DSH-Portable\\plugins\\dsh-thincoder-suite"),
+    "--D-DSH-Portable-plugins-dsh-thincoder-suite--",
+    "slug 移植 == 本机 $DSH_HOME/sessions/ 下的真实目录名（逐字比对；漂移 ⇒ 本行红）")
+  const zstdOk = typeof nodeZlib.zstdCompressSync === "function" && typeof nodeZlib.zstdDecompressSync === "function"
+
+  // ——— ④ A30-9 形态一「有 reason」：stopReason=error 且**无 diagnostic** ⇒ digest 带出真因 ———
+  {
+    const childId = "a30-9-child-" + (++seq)
+    const sub = {
+      started: [],
+      async start(_kind, req) {
+        sub.started.push(req)
+        return { id: childId, result: Promise.resolve({ output: [], stopReason: "error" }), dispose: async () => { } }
+      },
+    }
+    const h = makeDeps({ subagents: sub })
+    try {
+      const frames = [
+        JSON.stringify({ type: "session", version: 4, id: childId }),
+        JSON.stringify({ type: "turn/end", seq: 7, time: 1, data: { turn: 1, reason: { kind: "error", error: { message: "A30-9 真因：Unexpected token", code: "UNKNOWN" } } } }),
+      ]
+      const dir = join(h.dshHome, "sessions", projectKeySlug(h.cwd), childId)
+      mkdirSync(dir, { recursive: true })
+      const frameBytes = frames.map((f) => nodeZlib.zstdCompressSync(Buffer.from(f + "\n", "utf8")))
+      writeFileSync(join(dir, "session.v4.jsonl.zstd"), Buffer.concat(frameBytes))
+      const r = await startConsultSession(h.deps, "问题", undefined)
+      const digest = await waitDigest(sessOf(h.state, r.id))
+      if (zstdOk) {
+        assert.ok(digest.includes("child session turn/end"),
+          "★ digest 带出兜底读到的真因（删掉兜底读 ⇒ 本行必红）：" + JSON.stringify(digest.slice(0, 260)))
+        assert.ok(digest.includes("Unexpected token"), "真因原文（reason.error.message）在场（不是只给 stopReason）")
+        assert.ok(digest.includes("error: A30-9 真因"), "reason.kind 一并带出（单行证据行）")
+      } else {
+        assert.ok(digest.includes("子代理面不可诊断"),
+          "本运行时不带 zstd ⇒ 如实降级声明「不可诊断」（诚实降级，不假装读到）")
+      }
+      assert.ok(digest.includes("child ended: error"), "既有 stopReason 语义不变（兜底只**追加**证据）")
+    } finally { cleanup(h.sessionId, h.state) }
+  }
+
+  // ——— ⑤ A30-9 形态二「无 reason（退路）」：会话档不存在 / 子会话 id 缺失 ⇒ **如实声明不可诊断** ———
+  {
+    const sub = {
+      started: [],
+      async start(_kind, req) {
+        sub.started.push(req)
+        // 子会话 id 缺失（无 id / 无 localAgent）= 定位不到会话档的**最保守形态**
+        return { result: Promise.resolve({ output: [], stopReason: "error" }), dispose: async () => { } }
+      },
+    }
+    const h = makeDeps({ subagents: sub })
+    try {
+      const r = await startConsultSession(h.deps, "问题", undefined)
+      const digest = await waitDigest(sessOf(h.state, r.id))
+      assert.ok(digest.includes("子代理面不可诊断"),
+        "★ 退路：定位 / 解压 / id 任一不可得 ⇒ digest **明写**「子代理面不可诊断」（不假装、不吞掉）："
+          + JSON.stringify(digest.slice(0, 260)))
+      assert.ok(!digest.includes("child session turn/end"), "退路里**不得**出现「读到了真因」的措辞")
+    } finally { cleanup(h.sessionId, h.state) }
+  }
+
+  // ——— ⑥ A30-9 ③ codex 行：`env.diagnostics`（exit code / stderr）**一并显示**，不再只显示 userMessage ———
+  {
+    const codexCwd = mkdtempSync(join(tmpdir(), "consult-codex-home-"))
+    writeFileSync(join(codexCwd, "models_cache.json"), JSON.stringify({
+      models: [{ slug: "gpt-a30-9", display_name: "gpt-a30-9", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }], default_reasoning_level: "low", visibility: "list", context_window: 128000 }],
+    }), "utf8")
+    const sub = makeSubagents({ delayMs: 10, reply: "unused" })
+    const h = makeDeps({ subagents: sub, config: { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-a30-9", executable: "codex-b30-9" } }] } })
+    const codexLog = []
+    Object.assign(h.deps, {
+      spawn: a30CodexSpawn("A30-9 codex stderr: model not supported with a ChatGPT account\n", codexLog),
+      platform: "linux",
+      env: { CODEX_HOME: codexCwd, PATH: "" },
+    })
+    try {
+      const r = await startConsultSession(h.deps, "问题", undefined)
+      const digest = await waitDigest(sessOf(h.state, r.id))
+      assert.equal(sub.started.length, 0, "前置：codex 行不走 dsh 子代理面（独立配置面）")
+      assert.ok(digest.includes("codex-cli PROCESS_ERROR"), "codex 行失败照常进 digest：" + JSON.stringify(digest.slice(0, 200)))
+      assert.ok(digest.includes("A30-9 codex stderr"),
+        "★ stderr 原文上浮（旧实现 `userMessage || diagnostics` 二选一 ⇒ userMessage 在场就把真因吞掉，本行必红）")
+      assert.ok(digest.includes("exit=1"), "exit code 同样上浮（diagnostics 的两半都在）")
+      assert.ok(execCalls(codexLog).length >= 1, "正向对照：该行**确实发起过** codex exec（下面的「零 exec」断言不是恒真）")
+    } finally { cleanup(h.sessionId, h.state) }
+  }
+
+  // ═══ 批次 30 / US-7（D-59 · 锚 A30-11）：池行**前置可用性预检** ═══
+  // 形态：池里含**配置性必败行** ⇒ 该行**不被派发**且点名。判据 = ①digest/文案点名「因配置未派发」
+  // + 原因；②**零 codex exec 调用**（假子进程的调用记录是「确实没派发」的直接证据，不是推断）。
+
+  // ——— ⑦ 模型**不在目录内** ⇒ 该行不派发、digest 点名；同池的 dsh 行照常结算（不连坐） ———
+  {
+    const codexHome = mkdtempSync(join(tmpdir(), "consult-pf-a-"))
+    writeFileSync(join(codexHome, "models_cache.json"), JSON.stringify({
+      models: [{ slug: "gpt-in-catalog", supported_reasoning_levels: [{ effort: "low" }] }],
+    }), "utf8")
+    const log = []
+    const sub = makeSubagents({ delayMs: 10, reply: "dsh 行照常回复" })
+    const h = makeDeps({
+      subagents: sub,
+      config: { consultModels: [
+        { provider: "p", model: "m" },
+        { runner: { kind: "codex-cli", model: "gpt-a30-11-absent", executable: "codex-b30-11a" } },
+      ] },
+    })
+    Object.assign(h.deps, { spawn: a30CodexSpawn("unused\n", log), platform: "linux", env: { CODEX_HOME: codexHome, PATH: "" } })
+    try {
+      const r = await startConsultSession(h.deps, "问题", undefined)
+      assert.ok(r && r.id, "前置：仅一行必败 ⇒ 池不整体拒发：" + JSON.stringify(r).slice(0, 200))
+      const digest = await waitDigest(sessOf(h.state, r.id)) // 等整批 settle 后再取证（此时该派发的都已派发）
+      assert.equal(execCalls(log).length, 0,
+        "★ 必败的 codex 行**未被派发**（settle 后仍零 exec 调用——假子进程调用记录直接取证，不是推断）")
+      assert.equal(sub.started.length, 1, "其余 dsh 行照常派发（一次）")
+      assert.ok(digest.includes("因配置未派发"),
+        "★ digest 点名「因配置未派发」：" + JSON.stringify(digest.slice(0, 320)))
+      assert.ok(digest.includes("codex-cli:gpt-a30-11-absent"), "点名**是那一行**（模型标签逐字在场）")
+      assert.ok(digest.includes("不在 codex 模型目录内"), "带出**原因**（目录未命中）")
+      assert.ok(digest.includes("dsh 行照常回复"), "其余行照常结算（预检不连坐）")
+      assert.equal(sessOf(h.state, r.id).models.join(","), "p:m", "session.models 只含**实际派发**的行")
+      assert.equal(sessOf(h.state, r.id).total, 1, "total = 实际派发行数（计数口径与派发面一致）")
+    } finally { cleanup(h.sessionId, h.state) }
+  }
+
+  // ——— ⑧ `reasoningEffort` 不被接受**且无法回落**（只能原样透传）⇒ 同样不派发；池内唯一行必败 ⇒ 整池拒发 ———
+  // ★ 判据收窄（见 lib/codex-adapter.mjs 的 preflightCodexRow ②）：可回落的「不被接受」**不拦**
+  //   （那是既有回落链的职责，由 codex-runner 测试档的两条回落腿钉住）；只有「连回落都做不到 ⇒
+  //   只能把一个已知不被支持的值原样送给 codex」才是配置性必败。
+  {
+    const codexHome = mkdtempSync(join(tmpdir(), "consult-pf-b-"))
+    writeFileSync(join(codexHome, "models_cache.json"), JSON.stringify({
+      // 该模型只声明一个**插件梯子不认识的**档 ⇒ 解析器无法映射 ⇒ 只能原样透传（必败形态）
+      models: [{ slug: "gpt-eff-offladder", supported_reasoning_levels: [{ effort: "minimal" }] }],
+    }), "utf8")
+    const log = []
+    const h = makeDeps({
+      subagents: makeSubagents({ delayMs: 10, reply: "unused" }),
+      config: { consultModels: [
+        { runner: { kind: "codex-cli", model: "gpt-eff-offladder", effort: "max", executable: "codex-b30-11b" } },
+      ] },
+    })
+    Object.assign(h.deps, { spawn: a30CodexSpawn("unused\n", log), platform: "linux", env: { CODEX_HOME: codexHome, PATH: "" } })
+    try {
+      const r = await startConsultSession(h.deps, "问题", undefined)
+      assert.ok(r && r.error, "池内**唯一**行必败 ⇒ 整体拒发（响亮、零派发）：" + JSON.stringify(r).slice(0, 260))
+      assert.ok(r.error.includes("因配置未派发"), "拒发文案点名「因配置未派发」")
+      assert.ok(r.error.includes("不被 codex model gpt-eff-offladder 接受"), "拒发文案带出原因（effort 不被接受）")
+      assert.ok(r.error.includes("无法映射到任何受支持档"), "原因里点明**为何不可回落**（只能原样透传）")
+      assert.ok(r.error.includes("supported: minimal"), "原因里含该模型**实际支持**的档位（可行动）")
+      assert.equal(execCalls(log).length, 0, "★ 零 exec：该行确实没被派发（省下的正是那一行预算）")
+    } finally { cleanup(h.sessionId, h.state) }
+  }
+
+  // ——— ⑨ 诚实降级：**目录不可得** ⇒ 不拦（fail-open，退回既有行为）+ 响亮 note（绝不假装拦住） ———
+  {
+    const codexHome = mkdtempSync(join(tmpdir(), "consult-pf-c-")) // 空目录：无 models_cache.json ⇒ 目录不可得
+    const log = []
+    const h = makeDeps({
+      subagents: makeSubagents({ delayMs: 10, reply: "unused" }),
+      config: { consultModels: [{ runner: { kind: "codex-cli", model: "gpt-unknown-a30-11", executable: "codex-b30-11c" } }] },
+    })
+    Object.assign(h.deps, { spawn: a30CodexSpawn("A30-11 目录不可得时的 stderr\n", log), platform: "linux", env: { CODEX_HOME: codexHome, PATH: "" } })
+    const warns = []
+    const origWarn = console.warn
+    try {
+      console.warn = (...a) => { warns.push(a.map(String).join(" ")) }
+      const r = await startConsultSession(h.deps, "问题", undefined)
+      assert.ok(r && r.id, "★ 目录不可得 ⇒ **不拦**（fail-open：绝不因读不到而砖化）：" + JSON.stringify(r).slice(0, 240))
+      const digest = await waitDigest(sessOf(h.state, r.id)) // 派发在 job 体内异步发生 ⇒ 等 settle 再取证
+      assert.ok(execCalls(log).length >= 1, "该行照常派发（settle 后有 exec 调用）")
+      assert.ok(!digest.includes("因配置未派发"), "零「因配置未派发」——降级路径不假装拦住")
+      assert.ok(warns.some((w) => w.includes("前置预检")),
+        "如实标注该降级（裸 console.warn）：" + JSON.stringify(warns.slice(0, 3)))
+    } finally {
+      console.warn = origWarn
+      cleanup(h.sessionId, h.state)
+    }
+  }
+
+  // ——— ⑩ 反向对照（**不得误拦**）：可回落的「不被接受」照常派发（既有回落链消化） ———
+  // 这条腿防的是「收窄过头」：model [low,high] + 请求 medium ⇒ 解析器回落 high ⇒ 预检**放行** ⇒
+  // 该行照常 exec（与 codex-runner 测试档的两条回落腿同一语义——本批不得把既有回落地判死）。
+  {
+    const codexHome = mkdtempSync(join(tmpdir(), "consult-pf-d-"))
+    writeFileSync(join(codexHome, "models_cache.json"), JSON.stringify({
+      models: [{ slug: "gpt-mappable", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] }],
+    }), "utf8")
+    const log = []
+    const h = makeDeps({
+      subagents: makeSubagents({ delayMs: 10, reply: "unused" }),
+      config: { consultModels: [
+        { runner: { kind: "codex-cli", model: "gpt-mappable", effort: "medium", executable: "codex-b30-11d" } },
+      ] },
+    })
+    Object.assign(h.deps, { spawn: a30CodexSpawn("mappable row（照常派发后失败）\n", log), platform: "linux", env: { CODEX_HOME: codexHome, PATH: "" } })
+    try {
+      const r = await startConsultSession(h.deps, "问题", undefined)
+      assert.ok(r && r.id, "★ 可回落行**不得**被预检拦下（拦下 = 打断既有回落语义）：" + JSON.stringify(r).slice(0, 240))
+      const digest = await waitDigest(sessOf(h.state, r.id))
+      assert.ok(execCalls(log).length >= 1, "该行照常派发（settle 后有 exec 调用）")
+      assert.ok(!digest.includes("因配置未派发"), "digest 里零「因配置未派发」（没被误拦）")
+      assert.ok(digest.includes("falling back to nearest supported effort"),
+        "既有回落 note 照常进回复尾部（medium ⇒ high，回落语义未被本批改动）：" + JSON.stringify(digest.slice(0, 300)))
+    } finally { cleanup(h.sessionId, h.state) }
+  }
+}
+/**
+ * 批 30 / US-6（D30-6 · 锚 A30-10）：**权限面判据读模型请求头**。
+ * 判据（设计 §2.6 硬要求）：「工具面已生效 / 只读已生效」这类断言，证据只能是**模型可见工具面**
+ *（子会话落盘 `request/header` 事件），**不得**以「`restrict` 未抛错」代替；读不到 ⇒ 如实标注
+ * **「模型面未验」**（并带「本部署无法保证只读」）。
+ * ★ 本函数的样本**不经平台**：自造多帧 zstd 会话档（与 A30-9 同形的夹具）。
+ * ★ ⓪ 段补的是设计 §2.6 末句的另一半（分歧修复轮 F1 / 审计实证：该声明**只在 eng_coder 的模型面
+ *   证据行**、会诊侧零命中）：**「若平台面无法收窄 ⇒ 如实标注『本部署无法保证只读』，并在会诊产物里
+ *   带该声明」** ⇒ 会诊的**两条产物**（派发回复的 detail 段 · settle 后的 digest）各一条腿；
+ *   外加一条**跨档防漂移锁**（与 `lib/eng.mjs` 的 `renderModelSurfaceEvidence` 同一句）。
+ * ★ 并入既有块（台账 §三零改：本档零新增顶层 `test(`）。
+ */
+async function b30PermissionSurfaceChecks() {
+  // ——— ⓪ **会诊产物**必须带如实声明（设计 §2.6 末句逐字：「若平台面无法收窄 ⇒ 如实标注『本部署
+  // 无法保证只读』，**并在会诊产物里带该声明**」）———
+  // ★ 分歧修复轮 F1 的实证：该声明此前**只在 eng_coder 的模型面证据行**（lib/eng.mjs 的
+  //   renderModelSurfaceEvidence），会诊侧零命中 ⇒ 本段把「会诊产物」这一半钉死。
+  // ★ 两条产物各一条独立腿（派发回复的 detail 段 / settle 后的 digest）：**任一**缺声明或被改写成
+  //   「只读生效」即红（分离断言 ⇒ 删哪一处都能定位，不是一条恒绿的大断言）。
+  const READONLY_CORE = "本部署无法保证只读（平台面无法收窄）"
+  {
+    const sub = makeSubagents({ delayMs: 10, reply: "artifact-ok" })
+    const h = makeDeps({ subagents: sub })
+    try {
+      const r = await startConsultSession(h.deps, "问题", undefined)
+      const dispatch = String(r.text ?? "")
+      assert.ok(dispatch.includes(READONLY_CORE),
+        "★ A30-10：**派发产物**必须带如实声明「" + READONLY_CORE + "」：" + dispatch)
+      assert.ok(dispatch.includes("弱证") && dispatch.includes("模型面"),
+        "★ 声明必须附**证据口径**（弱证 = allow 白名单下发 / 模型面 = 子会话 request/header）：" + dispatch)
+      assert.ok(!dispatch.includes("只读会诊"),
+        "★ 派发产物**不得**再自称「只读会诊」（平台面不可收窄：allow 白名单 ≠ 只读保证）：" + dispatch)
+      const digest = await waitDigest(sessOf(h.state, r.id))
+      const headLines = digest.split("\n").slice(0, 4).join(" / ")
+      assert.ok(digest.includes(READONLY_CORE), "★ A30-10：**digest** 必须带如实声明：" + headLines)
+      assert.ok(digest.includes("弱证") && digest.includes("模型面") && digest.includes("request/header"),
+        "★ digest 的声明必须附证据口径（弱证 + 模型面通道）：" + headLines)
+      assert.ok(digest.includes("[run_code]"),
+        "★ 声明须带本部署实测模型面（[run_code] 单元素 ⇒ 残余绕行口在场）：" + headLines)
+      assert.ok(!digest.includes("只读生效"),
+        "★ 声明**不得**被改写成「只读生效」（现场证据相反：会诊子会话实际改写过设计档）：" + headLines)
+    } finally { cleanup(h.sessionId, h.state) }
+  }
+  // ★ 跨档防漂移锁：consult 侧与 `lib/eng.mjs`（renderModelSurfaceEvidence 的未验分支）必须**同一句**
+  //   ——平台口径更新时两处同改；只改一处 ⇒ 本锁红（「同源」是可机检的性质，不是注释里的承诺）。
+  {
+    const engSrc = readFileSync(new URL("../lib/eng.mjs", import.meta.url), "utf8")
+    const consultSrc = readFileSync(new URL("../lib/consult.mjs", import.meta.url), "utf8")
+    assert.ok(engSrc.includes(READONLY_CORE), "前置：eng.mjs 的模型面证据仍以本句为口径（同源基座）")
+    assert.ok(consultSrc.includes(READONLY_CORE), "★ 同源：consult.mjs 必须逐字含本句（防两处漂移）")
+  }
+
+  const zstdOk = typeof nodeZlib.zstdCompressSync === "function" && typeof nodeZlib.zstdDecompressSync === "function"
+  const childId = "a30-10-child-" + (++seq)
+  const cwd = mkdtempSync(join(tmpdir(), "consult-a30-10-cwd-"))
+  const home = mkdtempSync(join(tmpdir(), "consult-a30-10-home-"))
+  const agent = { session: { id: "a30-10-parent", header: { cwd } } }
+  const run = { id: childId, localAgent: { session: { id: childId, header: { cwd } } } }
+  const dir = join(home, "sessions", projectKeySlug(cwd), childId)
+  const writeFrames = (frames) => {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "session.v4.jsonl.zstd"), Buffer.concat(
+      frames.map((f) => nodeZlib.zstdCompressSync(Buffer.from(f + "\n", "utf8")))))
+  }
+
+  if (!zstdOk) {
+    // 本运行时不带 zstd ⇒ 判据**必须**如实降级（不得因为「restrict 没抛错」就说已生效）
+    const noZstd = readChildModelToolSurface({ dshHome: home }, run, agent)
+    assert.equal(noZstd.verified, false, "无 zstd ⇒ 模型面未验（诚实降级）")
+    assert.ok(renderModelSurfaceEvidence(noZstd, ["pwsh"]).includes("模型面未验"), "如实标注「模型面未验」")
+    return
+  }
+
+  // ——— ① 主形态：请求头里**只有** run_code ⇒ 命名面生效 + 残余绕行口如实标注 ———
+  // ★ 多帧：`request/header` 落在**第二个**帧 ⇒ 同时验证「按 magic 切帧循环」（只读第一帧会漏）
+  writeFrames([
+    JSON.stringify({ type: "session", version: 4, id: childId }),
+    JSON.stringify({ type: "request/header", seq: 3, time: 1, data: { header: { reason: "initial", tools: [{ name: "run_code", description: "PTC transport" }] } } }),
+  ])
+  const surface = readChildModelToolSurface({ dshHome: home }, run, agent)
+  assert.equal(surface.verified, true,
+    "★ A30-10：判据读的是**模型请求头**（request/header；多帧切帧解压后仍能读到）：" + JSON.stringify(surface))
+  assert.deepEqual(surface.tools, ["run_code"], "工具面逐字来自请求头（不是派发载荷、也不是平台回显）")
+  const line = renderModelSurfaceEvidence(surface, ["pwsh", "bash"])
+  assert.ok(line.includes("request/header"), "证据行点名**证据来源**：" + line)
+  assert.ok(line.includes("模型可见工具面 = [run_code]"), "逐字带出模型可见面：" + line)
+  assert.ok(line.includes("执行类命名工具在场 0 个") && line.includes("命名面收窄生效"),
+    "命名面生效由**模型面**判定：" + line)
+  assert.ok(line.includes("残余绕行口") && line.includes("run_code"),
+    "★ run_code 在场 ⇒ 如实标注**残余绕行口**（平台保留传输面不可收窄）：" + line)
+
+  // ——— ② 反向（防「判据恒绿」）：请求头里**确有**执行类命名工具 ⇒ 必须判「收窄未生效」 ———
+  writeFrames([
+    JSON.stringify({ type: "request/header", seq: 1, time: 1, data: { header: { tools: [{ name: "pwsh" }, { name: "run_code" }] } } }),
+  ])
+  const leaked = readChildModelToolSurface({ dshHome: home }, run, agent)
+  const leakedLine = renderModelSurfaceEvidence(leaked, ["pwsh", "bash"])
+  assert.deepEqual(leaked.tools, ["pwsh", "run_code"], "反向样本的工具面逐字来自请求头")
+  assert.ok(leakedLine.includes("收窄未生效") && leakedLine.includes("pwsh"),
+    "★ 谓词不是恒绿：请求头里确有执行类 ⇒ 判**未生效**并点名：" + leakedLine)
+  assert.ok(!leakedLine.includes("命名面收窄生效"), "不得同时说生效与未生效：" + leakedLine)
+
+  // ——— ③ 三处如实降级：定位不到 / 事件不含工具面 / 子会话 id 不可得 ⇒ **模型面未验** ———
+  const missing = readChildModelToolSurface({ dshHome: home }, { id: "no-such-child-" + (++seq) }, agent)
+  assert.equal(missing.verified, false, "定位不到会话档 ⇒ 未验（不假装读到）")
+  const missingLine = renderModelSurfaceEvidence(missing, ["pwsh"])
+  assert.ok(missingLine.includes("模型面未验"), "★ 明写「模型面未验」：" + missingLine)
+  assert.ok(missingLine.includes("不得以「restrict 未抛错」代替"), "★ 明写不得用「未抛错」顶替模型面证据：" + missingLine)
+  assert.ok(missingLine.includes("本部署无法保证只读"), "★ 平台面无法收窄 ⇒ 如实声明「本部署无法保证只读」：" + missingLine)
+  assert.ok(!missingLine.includes("收窄生效") && !missingLine.includes("已生效"),
+    "★ 未验时**绝不**出现「已生效」类措辞（判据伪装的正是这一格）：" + missingLine)
+  // 事件在场但不含工具面（形状漂移）⇒ 同样未验，与「读不到档」分开归因
+  writeFrames([JSON.stringify({ type: "request/header", seq: 2, time: 1, data: { reason: "series" } })])
+  const noTools = readChildModelToolSurface({ dshHome: home }, run, agent)
+  assert.equal(noTools.verified, false, "request/header 在场但无工具面 ⇒ 未验")
+  assert.ok(noTools.reason.includes("没有可读的工具面"), "归因可读（形状漂移 vs 档不可得，分开写）：" + noTools.reason)
+  // 子会话 id 不可得 ⇒ 未验（不抛）
+  assert.equal(readChildModelToolSurface({ dshHome: home }, { localAgent: { session: {} } }, agent).verified, false,
+    "子会话 id 不可得 ⇒ 未验（不抛）")
+  // 连运行对象都没有 ⇒ 未验（不抛；取证面永不成为新的失败源）
+  assert.equal(readChildModelToolSurface({ dshHome: home }, null, null).verified, false, "无 run/agent ⇒ 未验（不抛）")
+}
+test("selectConsultModels（provider:model / 裸 provider / 裸 model / 未知）+ 批 15 交付与消化面（AC-1…AC-26 的腿）+ 修复轮补腿（AC-7 形状 · AC-16 正向锁 · AC-20 alreadySettled · AC-23/US-12）+ 收尾修复轮补腿（交付代码评审 #1 看门狗清除 · #2 终结事件 sessionId 与幽灵孤儿 · #3 落点路径字面锁）+ 批 30 / US-5 补腿（A30-8 注入面消毒 · A30-9 失败可诊断两形态 + codex 行 diagnostics）", async () => {
   const pool = [
     { provider: "a", model: "x" },
     { provider: "a", model: "y" },
@@ -751,6 +1217,10 @@ test("selectConsultModels（provider:model / 裸 provider / 裸 model / 未知�
   await b15GhostOrphanChecks()
   await b15RobustnessChecks()
   await b15ShapeAndSurfaceChecks()
+  // 批 30 / US-5（D-58 · A30-8 / A30-9）：注入面消毒 + 失败可诊断（并入既有块——台账 §三零改）
+  await b30InjectionAndDiagnosticsChecks()
+  // 批 30 / US-6（D30-6 · A30-10）：权限面判据读模型请求头（无法收窄即如实标注）
+  await b30PermissionSurfaceChecks()
 })
 
 // ═════════ D-52 / A29-7（批 29 单②）：会诊只读白名单的**对位锁** ═════════

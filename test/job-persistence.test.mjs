@@ -327,7 +327,7 @@ test("A27-8 行为腿·真实派发 (US-5 / AC-6): 经 eng 派发路径 settle �
   }
 })
 
-test("US-1 触发时机 (D27-1): persist 成功后自动清扫一次——顺手清掉既有的超龄残留", () => {
+test("US-1 触发时机 (D27-1) ⊕ 批 30 / A30-1（US-3 · 落盘只增不减）: persist 成功后自动清扫一次——顺手清掉既有的超龄残留；长版被截断短版拒绝覆盖（裸 warn）、合法整体重写不误拦", () => {
   const home = makeHome("a27-trig")
   try {
     plant(home, "advisor-9.txt", 9) // 上次会话留下的超龄残留
@@ -341,6 +341,86 @@ test("US-1 触发时机 (D27-1): persist 成功后自动清扫一次——顺手
     assert.equal(JSON.parse(rows[0]).jobId, "eng-dsh-5")
   } finally {
     rmSync(home, { recursive: true, force: true })
+  }
+
+  // ═══════════ 批 30 / US-3（D-57 · 锚 A30-1）：落盘**只增不减** ═══════════
+  // 判据（设计 §2.3）：① 新文本**短于**现值 **且** 现值**以新文本为前缀**（= 后写恰是旧写的
+  // **截断**）⇒ 盘上**仍是长版**（现值不被覆盖）+ 一行**裸** console.warn（不进正文、不进 index）；
+  // ② **合法的整体重写**（更长的新版 / 内容不同的更短版）必须**照常覆盖**（判据不得误拦）。
+  const h30 = makeHome("a30-1")
+  const warnings30 = []
+  const origWarn30 = console.warn
+  try {
+    console.warn = (...a) => { warnings30.push(a.map(String).join(" ")) }
+    const txt30 = (id) => join(jobsDir(h30), id + ".txt")
+    const truncWarns30 = () => warnings30.filter((w) => w.includes("截断覆盖"))
+    // ① 先写**含留档的长版**（正文含宿主留档小节——D-57 现场里被截掉的正是这一段）
+    const LONG = "eng 交付报告正文\n\n--- 宿主留档（机制首派观测；非交付内容） ---\n留档行甲\n留档行乙\n"
+    const out1 = jobOutcome({ id: "eng-dsh-a30-long", append() {} },
+      { status: "completed", detail: "d", output: LONG }, { dshHomeOverride: h30 })
+    assert.equal(out1.result, LONG, "收口本体：长版照常收口（result/output 同值别名不变）")
+    assert.equal(readFileSync(txt30("eng-dsh-a30-long"), "utf8"), LONG, "前置：含留档的长版已落盘")
+    const rows1 = readIndex(h30).length
+    // ② 后写**截断短版**（长版以其为前缀）⇒ 覆盖被拒
+    const SHORT = LONG.slice(0, 40)
+    assert.ok(SHORT.length < LONG.length && LONG.startsWith(SHORT), "前置自证：短版确是长版的截断（前缀且更短）")
+    const out2 = jobOutcome({ id: "eng-dsh-a30-long", append() {} },
+      { status: "completed", detail: "d", output: SHORT }, { dshHomeOverride: h30 })
+    assert.equal(readFileSync(txt30("eng-dsh-a30-long"), "utf8"), LONG,
+      "★ 盘上**仍是长版**——截断覆盖被拒（删掉实现里的读回判据 ⇒ 本行必红）")
+    assert.equal(out2.result, SHORT, "收口本体不受影响（落盘不改 outcome——D26-2 口径不变）")
+    assert.equal(truncWarns30().length, 1, "恰一行**裸** warn（不进正文）：" + JSON.stringify(truncWarns30()))
+    assert.ok(!truncWarns30()[0].includes("\n"), "该 warn 单行（可 grep）")
+    assert.ok(!readFileSync(txt30("eng-dsh-a30-long"), "utf8").includes("截断覆盖"),
+      "warn 是**裸**的（正文里不得出现该告警文案）")
+    assert.equal(readIndex(h30).length, rows1, "被拒的写不追加 index 行（未落盘成功 ⇒ 不改追溯元数据）")
+    // ③ 合法整体重写 A：**更长**的新版照常覆盖
+    const LONGER = LONG + "第二段（整体重写）\n"
+    jobOutcome({ id: "eng-dsh-a30-long", append() {} },
+      { status: "completed", detail: "d", output: LONGER }, { dshHomeOverride: h30 })
+    assert.equal(readFileSync(txt30("eng-dsh-a30-long"), "utf8"), LONGER, "合法整体重写（更长）照常覆盖（不误拦）")
+    // ④ 合法整体重写 B：**更短但内容不同**（不是前缀）照常覆盖
+    const OTHER = "完全不同的短报告\n"
+    jobOutcome({ id: "eng-dsh-a30-long", append() {} },
+      { status: "completed", detail: "d", output: OTHER }, { dshHomeOverride: h30 })
+    assert.equal(readFileSync(txt30("eng-dsh-a30-long"), "utf8"), OTHER,
+      "合法整体重写（更短但非前缀）照常覆盖——判据须**同时**要「更短」与「前缀」两个条件")
+    assert.equal(truncWarns30().length, 1, "两次合法重写零新增告警")
+    // ⑤ 边界：现值不存在 ⇒ 首写照常（判据不得把「首次落盘」误判成截断）
+    const FRESH = "首次落盘（无现值）"
+    jobOutcome({ id: "eng-dsh-a30-fresh", append() {} },
+      { status: "completed", detail: "d", output: FRESH }, { dshHomeOverride: h30 })
+    assert.equal(readFileSync(txt30("eng-dsh-a30-fresh"), "utf8"), FRESH, "无现值 ⇒ 首写照常")
+    // ⑥ 边界：空正文写在**已有非空**文件上 ⇒ 同属截断（空串是任何串的前缀）⇒ 同样被拒、仍留长版
+    jobOutcome({ id: "eng-dsh-a30-fresh", append() {} },
+      { status: "completed", detail: "d", output: "" }, { dshHomeOverride: h30 })
+    assert.equal(readFileSync(txt30("eng-dsh-a30-fresh"), "utf8"), FRESH, "空写不截断既有非空正文（空串是任何串的前缀）")
+    assert.equal(truncWarns30().length, 2, "空写同走截断分支 ⇒ 第二行 warn")
+    // ⑦ 批 30 修复轮 / F1：「更短」那一半的**唯一可辨形态 = 同文重写**（等长且互为前缀）。
+    //    现实现正确（不误判），但此前**无腿钉住**——审计实测：删掉实现里的 `text.length < prior.length`
+    //    而只留前缀条件，本档 13/13 仍全绿（只有删掉整条前缀判据才会红）⇒ 本段把「同时要两个条件」
+    //    这句话变成**机器可判**：同文重写必须按既有覆盖语义处理（覆盖 + 追加 index 行 + 零截断告警）。
+    const SAME_ID = "eng-dsh-a30-same"
+    const SAME = "同文重写正文（等长、且互为前缀——唯一的可辨截断形态）\n"
+    const rowsBeforeSame = readIndex(h30).length
+    const sameOut1 = jobOutcome({ id: SAME_ID, append() {} },
+      { status: "completed", detail: "d", output: SAME }, { dshHomeOverride: h30 })
+    assert.equal(sameOut1.result, SAME, "收口本体不受影响（同文重写不改 outcome——D26-2 口径不变）")
+    assert.equal(readFileSync(txt30(SAME_ID), "utf8"), SAME, "首写落盘")
+    const rowsAfterSame1 = readIndex(h30).length
+    assert.equal(rowsAfterSame1, rowsBeforeSame + 1, "首写照常追加一行 index")
+    const sameOut2 = jobOutcome({ id: SAME_ID, append() {} },
+      { status: "completed", detail: "d", output: SAME }, { dshHomeOverride: h30 })
+    assert.equal(sameOut2.result, SAME, "同文重写的收口本体同样不受影响")
+    assert.equal(readFileSync(txt30(SAME_ID), "utf8"), SAME, "同文重写后盘上仍是该正文")
+    assert.equal(readIndex(h30).length, rowsAfterSame1 + 1,
+      "★ F1：同文重写按**既有覆盖语义**处理——照常覆盖并**追加一行 index**（等长不构成截断）"
+      + "；删掉实现里的「更短」条件（只留前缀判据）⇒ 本行必红")
+    assert.equal(truncWarns30().length, 2,
+      "★ F1：同文重写**零**「截断覆盖」告警（不得被误判为截断）：" + JSON.stringify(truncWarns30()))
+  } finally {
+    console.warn = origWarn30
+    rmSync(h30, { recursive: true, force: true })
   }
 })
 

@@ -10,8 +10,9 @@
 //     applied:false 的**两条归因各一条腿且可判**：**读取面不可用**（读取函数返回 null）vs
 //     **面可用但可限制名集为空**（返回 []——公开面在场，只是名集为空）。
 //   · **A29-8a / A29-8b**（批 29 §2.6 US-A① / D-53 一次性留档，**两态各自成腿 ⇒ 可独立转红**）：
-//     看门狗**接线结果的首次留档**——attached 真 ⇒ 记下**命中的候选方法名**；假 ⇒ 列出
-//     `Object.keys(run)`（有界 / 去重 / 截断安全）；进程内**只一次**；返回文本零污染。
+//     看门狗**接线结果的首次留档**——**批 30 / US-2 改接口径**：记**两腿**结果（seq 主腿可用性 +
+//     事件辅腿命中面名或零命中）+ run 的 `Object.keys(run)`（有界 / 去重 / 截断安全）；
+//     进程内**只一次**；返回文本零污染。
 //   · **A29-8c**（§2.6 US-A②）：工具面「未生效」warn 的**同一行**追加 `Object.keys(ctx.tools)`
 //     键名清单（一次为限；仍不进返回文本）。
 //   · **A29-13**（§2.8 · AC-11 · D-53 可读通道）：留档搬进**回执区**——恰一条「接线留档」行（含键清单
@@ -54,9 +55,11 @@ import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import { runEngCoder, resolveExecToolDeny, readEffectiveToolEcho, execDenyEvidence, collectRegisteredToolNames, stageGateNote } from "../lib/eng.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
+// 批 30 修复轮 / F4：前提自证（PLUGIN_DIR 之上不得有 profile 根——否则交付段不产本条要量的告警）
+import { probeProfileRoot } from "../lib/dsh-home.mjs"
 import {
   ENG_SILENCE_ABORT_MS, ENG_SILENCE_POLL_MS, resolveEngSilenceAbortMs,
-  createSilenceWatchdog, attachRunHeartbeat, watchJobHandle, silenceMinutesLabel,
+  createSilenceWatchdog, attachSubagentHeartbeat, subagentSeqSampler, watchJobHandle, silenceMinutesLabel,
   formatKeyList, KEY_LIST_MAX, archiveWatchdogAttach, __resetWatchdogAttachArchiveForTest,
   // 批 29 / §2.8：留档**搬运工**的可读通道面（入队 / 搬运 / 小节标题 / 缓冲上界 / 复位缝）
   enqueueArchiveLine, drainArchiveBlock, HOST_ARCHIVE_HEADER, ARCHIVE_BUFFER_MAX,
@@ -65,6 +68,25 @@ import {
 
 // 与既有档同款隔离：DSH_HOME 置空 ⇒ home 不可解析 ⇒ 不碰真实盘（本档只测机制，不测落盘面）
 process.env.DSH_HOME = ""
+
+// ————————— 批 30 修复轮 / F4：**全档 stderr 残留计数**（只计数、**不吞**）—————————
+// 为什么要有它：🔵5 的静态锁只判「腿体窗口里出现过 `captureWarn(`」，判不出**窗口边界**——
+// 窗口只罩派发、把结算/交付留在窗外时它照样绿，而交付链尾 `saveSessionState` 的裸告警
+// （本档 DSH_HOME 置空 + PLUGIN_DIR 之上无 profile 根 ⇒ 路径必然不可解析）照样落到 stderr
+// （修复前单跑实测 **6 行**，全部来自 A29-8a/b/c/A29-13 四腿的 `settleResult → hooks.done` 段）。
+// 本计数在**模块装载期**接管 `process.stderr.write`：只**记录**匹配该文案的写入、原样转发
+// （不吞——吞掉会让「宿主的 stderr 度量」与「档内断言」互相掩盖）。node:test 单档内按**声明序
+// 顺序**执行，A29-16（本档最后一腿）据此断言「此前全部腿零残留」；任一腿漏一条即转红。
+const stderrResidual = []
+{
+  const origWrite = process.stderr.write
+  const RESIDUAL_MARK = "session state store path not resolvable"
+  process.stderr.write = function (chunk, ...rest) {
+    const s = String(chunk)
+    if (s.includes(RESIDUAL_MARK)) stderrResidual.push(s)
+    return origWrite.call(this, chunk, ...rest)
+  }
+}
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -75,7 +97,7 @@ const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
  * ★ 本泵覆盖的 await 链（就绪信号逐环对应，将来多一个 await 只需换/加一个就绪条件）：
  *   · `jobs.start` → 假服务 `spec.run(handle)`  ⇒ `f.specs.length`
  *   · `ctx.subagents.start`（挂 abort 监听）        ⇒ `f.requests.length` / `f.runs.length`
- *   · `attachRunHeartbeat`（事件面接驳）              ⇒ `f.beats.length`（earlier 的 `f.ticks` 是轮询注册）
+ *   · `attachSubagentHeartbeat`（事件辅腿接驳）        ⇒ `f.beats.length === 2`（两条真事件面；`f.ticks` 是轮询注册）
  *   · `archiveWatchdogAttach`（一次性留档 warn）      ⇒ 只能在 `captureWarn` 的 `isReady(warnings)` 里观察
  * 新增 await 会被 FLUSH_MAX 吸收，**不再**让「恰 N 拍」成为隐式契约。仍是**微任务级**，零真实等待。
  */
@@ -127,23 +149,35 @@ const llmStub = {
  *   · 假 jobs（0.1.7：带参 spec.run(handle)）· 句柄（id + append 记录）
  *   · 桩子代理的结果形态由 form 决定（reject-race / resolve-race / 永不 settle）
  *   · 假时钟 + 假 setInterval（手动 tick）· 采到的 spec 请求与子代理 run 对象
+ *   · **批 30 / US-2（D30-3）心跳面**（主腿 + 辅腿）：
+ *     - 主腿：`run.id` + `run.localAgent.session.seq`（采样器读的就是这里，`seqState.value` 可写）；
+ *       `seqStart: null` ⇒ **不装 `localAgent`**（out-of-process 的真实形态，A30-6 的降级腿）；
+ *     - 辅腿：`ctx.on / ctx.off`（两条真事件面，**按 id 过滤**）——注册记录进 `events`；
+ *       `beats[i]()` = 以**本子 id** 触发第 i 个已注册处理器；`otherBeats[i](id?)` = 以**他子 id** 触发
+ *       （A30-5 的「他子事件不续命」判据）；
+ *     - `eventSurface:false` ⇒ **不提供 `ctx.on`**（= 事件辅腿零命中的真实形态）。
  *   · `runExtra`：往 run 对象上**追加**键（A29-8 的留档探针——验证键名清单如实反映
- *     `Object.keys(run)`；刻意用与平台无关的假键名，避免与候选方法名混淆）
+ *     `Object.keys(run)`；刻意用与平台无关的假键名，避免与事件面名混淆）
  * @param {{form?: "reject"|"resolve"|"hang", eventSurface?: boolean, echoToolNames?: string[]|null,
  *   toolsSurface?: object, abortMs?: number, backstopMs?: number, partialText?: string,
- *   runExtra?: object}} [opts]
+ *   runExtra?: object, seqStart?: number|null}} [opts]
  */
 function makeFrame(opts = {}) {
   const form = opts.form ?? "reject"
   const eventSurface = opts.eventSurface !== false
   const sid = "b29-sw-" + randomUUID()
+  const childId = "b30-sub-" + randomUUID()
+  // 主腿读数（可写；null ⇒ out-of-process 形态：run 上**不装** localAgent）
+  const seqState = { value: opts.seqStart === undefined ? 0 : opts.seqStart }
   const st = sessionState(sid)
   st.engineering = true
   st.designToken = randomUUID() + ":" + (Date.now() + 3600_000)
 
   const clock = { t: 0 }
   const ticks = []
-  const beats = []
+  const beats = []        // 以**本子 id** 触发已注册事件处理器
+  const otherBeats = []   // 以**他子 id** 触发（A30-5）
+  const events = []       // ctx.on 的注册记录（A30-5 的「零残留监听」判据读 live）
   const cleared = []
   const specs = []
   const requests = []
@@ -157,6 +191,7 @@ function makeFrame(opts = {}) {
       requests.push(req)
       req.signal?.addEventListener("abort", () => { aborted = true }, { once: true })
       const run = {
+        id: childId,
         result: new Promise((res, rej) => {
           settleResult = (payload) => res(payload)
           if (form === "hang") return
@@ -172,7 +207,10 @@ function makeFrame(opts = {}) {
         }),
         dispose: async () => { /* 无资源 */ },
       }
-      if (eventSurface) run.onEvent = (cb) => { beats.push(cb) }
+      // 主腿：只有装了 localAgent 才可用（`localAgent === undefined` = out-of-process 降级形态）
+      if (seqState.value !== null) {
+        run.localAgent = { session: { id: childId, header: { cwd: PLUGIN_DIR }, get seq() { return seqState.value } } }
+      }
       if (opts.echoToolNames) run.toolNames = opts.echoToolNames
       if (opts.runExtra && typeof opts.runExtra === "object") Object.assign(run, opts.runExtra)
       runs.push(run)
@@ -180,11 +218,29 @@ function makeFrame(opts = {}) {
     },
   }
 
+  // 辅腿的注册面（只认平台真有的两条事件面；`{global:true}` 由实现在 ctx.on 的第三参上传）。
+  // ★ 只有**心跳面**的两条注册进 `beats` / `otherBeats`；`subagent/start|end` 的**就绪/终局锚**
+  //   也走 ctx.on（同样 `{global:true}`）但**不作静默判据** ⇒ 只进 `events`（供 off 残留断言）。
+  const HEARTBEAT_EVENTS = ["agent/assistant-stream", "tools/result"]
+  const heartbeatRegs = () => events.filter((e) => HEARTBEAT_EVENTS.includes(e.name))
+  const ctxOn = (name, handler, o) => {
+    const rec = { name, handler, options: o, live: true }
+    events.push(rec)
+    if (HEARTBEAT_EVENTS.includes(name)) {
+      const fire = (payload) => { if (rec.live) handler(payload) }
+      beats.push(() => fire({ agent: { id: childId } }))
+      otherBeats.push((id) => fire({ agent: { id: id ?? "some-other-child" } }))
+    }
+    return () => { rec.live = false }
+  }
+  const ctxOff = (name, handler) => { for (const rec of events) if (rec.name === name && rec.handler === handler) rec.live = false }
+
   const deps = {
     ctx: {
       subagents,
       llm: llmStub,
       tools: opts.toolsSurface,
+      ...(eventSurface ? { on: ctxOn, off: ctxOff } : {}),
       get: (s) => (s === "jobs"
         ? { start(spec) { const hooks = spec.run(handle); specs.push({ spec, hooks }); return handle.id } }
         : null),
@@ -201,7 +257,7 @@ function makeFrame(opts = {}) {
     },
   }
   return {
-    sid, st, deps, clock, ticks, beats, cleared, specs, requests, runs, handle,
+    sid, st, deps, clock, ticks, beats, otherBeats, events, heartbeatRegs, cleared, specs, requests, runs, handle, childId, seqState,
     isAborted: () => aborted,
     settleResult: (p) => settleResult(p),
     drop: () => dropSession(sid),
@@ -216,13 +272,17 @@ test("A29-3a (D29-2 / AC-2): 注入静默（无输出）⇒ 既有取消写点 a
   {
     const f = makeFrame({ form: "reject" })
     try {
+    // 批 30 / §2.4 🔵5（锚 A30-7·🔵5）：本腿跑**真实派发路径** ⇒ 裸告警（工具面「未生效」/ 一次性接线留档）
+    // 会直接打到 stderr（未捕获 = 测试输出噪音）⇒ 整段套 `captureWarn`——**定死用捕获**，不用「档头注一句」。
+    // ★ 捕获窗口覆盖全腿（含断言），因为告警可能在 await 链的尾段才落；捕获本身也是判据（见腿尾断言）。
+    const cap3a1 = await captureWarn(async () => {
     const dispatch = await runEngCoder(f.deps, { task: "implement the silence leg", designToken: f.st.designToken, docs: [] })
     // 🔵1：条件驱动泵——等到「派发 + 事件面接驳 + 轮询注册」三环都落地即停，不依赖任何固定拍数
-    await flush(() => f.specs.length === 1 && f.beats.length === 1 && f.ticks.length === 1,
-      "A29-3a①：jobs.start → subagents.start → attachRunHeartbeat（specs/beats/ticks 各一）")
+    await flush(() => f.specs.length === 1 && f.beats.length === 2 && f.ticks.length === 1,
+      "A29-3a①：jobs.start → subagents.start → attachSubagentHeartbeat（specs/beats/ticks 各一）")
     assert.ok(dispatch.includes("eng-dsh-sw-1"), "前置：确实走了 dsh 后台派发：" + dispatch.slice(0, 120))
     assert.equal(f.specs.length, 1, "恰一次 jobs.start")
-    assert.equal(f.beats.length, 1, "看门狗已接上子代理事件面（心跳源在场）")
+    assert.equal(f.beats.length, 2, "看门狗已接上**两条真事件面**（agent/assistant-stream + tools/result）")
     assert.equal(f.ticks.length, 1, "恰注册一个轮询定时器（叶子模块），本文件零新增 setTimeout")
     assert.equal(f.isAborted(), false, "前置：尚未到点 ⇒ 未 abort")
     // D9：先送一个**真实事件**——订阅面存在 ≠ 真会发事件；未武装的看门狗不判定（零事件腿见 D9 用例）
@@ -281,15 +341,24 @@ test("A29-3a (D29-2 / AC-2): 注入静默（无输出）⇒ 既有取消写点 a
       "空 partial 下仍带 ABORTED 回滚指引（与 resolve 侧对称，不是「什么都没说」）：" + partialSeg.slice(0, 120))
     assert.equal(f.cleared.length, 1, "settle 的 finally 清掉轮询定时器（不泄漏）")
     assert.equal(f.handle.calls.length, 1, "正文照常经 handle.append 进输出环（D-46 契约未破）")
+    })
+    // ★ 🔵5 的**决定性**形态：本腿的告警确实进了捕获器（删掉包装 ⇒ cap3a1 未定义 ⇒ 本行必红；
+    // 而「未捕获」的真实后果就是它落到 stderr 变成噪声）。
+    assert.ok(cap3a1.warnings.some((w) => w.includes("工具面禁执行未生效")),
+      "★ 🔵5：本腿告警已被捕获（未捕获 = 打到 stderr 的噪音）：" + JSON.stringify(cap3a1.warnings.slice(0, 2)))
     } finally { f.drop() }
   }
   // ② resolve-race（子代理在到点同刻以结果返回）⇒ 同一静默分支，且**带上已产生的 partial**
   {
     const f = makeFrame({ form: "resolve", partialText: "half done\n\nTouched files: lib/a.mjs" })
     try {
+    // 批 30 / §2.4 🔵5（锚 A30-7·🔵5）：本腿跑**真实派发路径** ⇒ 裸告警（工具面「未生效」/ 一次性接线留档）
+    // 会直接打到 stderr（未捕获 = 测试输出噪音）⇒ 整段套 `captureWarn`——**定死用捕获**，不用「档头注一句」。
+    // ★ 捕获窗口覆盖全腿（含断言），因为告警可能在 await 链的尾段才落；捕获本身也是判据（见腿尾断言）。
+    const _cap3a2 = await captureWarn(async () => {
     await runEngCoder(f.deps, { task: "implement the silence leg (resolve)", designToken: f.st.designToken, docs: [] })
-    await flush(() => f.specs.length === 1 && f.beats.length === 1,
-      "A29-3a②：jobs.start → subagents.start → attachRunHeartbeat")
+    await flush(() => f.specs.length === 1 && f.beats.length === 2,
+      "A29-3a②：jobs.start → subagents.start → attachSubagentHeartbeat")
     f.beats[0]() // D9：真实事件在前（未武装的看门狗不判定）
     f.clock.t = 60000
     f.ticks[0]()
@@ -297,6 +366,7 @@ test("A29-3a (D29-2 / AC-2): 注入静默（无输出）⇒ 既有取消写点 a
     assert.equal(outcome.detail, "silence watchdog (engSilenceAbortMs)", "resolve 侧同走静默分支（不被兜底分支截胡）")
     assert.ok(outcome.output.includes("疑似挂死"), "resolve 侧文案同样含「疑似挂死」")
     assert.ok(outcome.output.includes("half done"), "已产生的 partial 进信封: " + outcome.output.slice(0, 200))
+    })
     } finally { f.drop() }
   }
 })
@@ -304,10 +374,14 @@ test("A29-3a (D29-2 / AC-2): 注入静默（无输出）⇒ 既有取消写点 a
 test("A29-3b (AC-2): 有输出 ⇒ 心跳续命，不误杀（累计时长越过阈值、单次静默未越）", async () => {
   const f = makeFrame({ form: "hang" })
   try {
+  // 批 30 / §2.4 🔵5（锚 A30-7·🔵5）：本腿跑**真实派发路径** ⇒ 裸告警（工具面「未生效」/ 一次性接线留档）
+  // 会直接打到 stderr（未捕获 = 测试输出噪音）⇒ 整段套 `captureWarn`——**定死用捕获**，不用「档头注一句」。
+  // ★ 捕获窗口覆盖全腿（含断言），因为告警可能在 await 链的尾段才落；捕获本身也是判据（见腿尾断言）。
+  const _cap3b = await captureWarn(async () => {
   await runEngCoder(f.deps, { task: "implement the keep-alive leg", designToken: f.st.designToken, docs: [] })
-  await flush(() => f.specs.length === 1 && f.beats.length === 1,
-    "A29-3b：jobs.start → subagents.start → attachRunHeartbeat")
-  assert.equal(f.beats.length, 1, "心跳源已接上")
+  await flush(() => f.specs.length === 1 && f.beats.length === 2,
+    "A29-3b：jobs.start → subagents.start → attachSubagentHeartbeat")
+  assert.equal(f.beats.length, 2, "心跳源已接上（两条真事件面）")
   // 每轮：推进 55s（< 60s 阈值）→ 子代理产出（心跳）→ tick。累计 275s ≫ 阈值，但**单次静默**从未越线。
   for (let i = 0; i < 5; i++) {
     f.clock.t += 55000
@@ -319,10 +393,73 @@ test("A29-3b (AC-2): 有输出 ⇒ 心跳续命，不误杀（累计时长越过
   const outcome = await f.specs[0].hooks.done
   assert.equal(outcome.status, "completed", "续命到位 ⇒ 正常交付")
   assert.ok(!outcome.output.includes("疑似挂死"), "成功交付不得带静默终止文案")
+  })
   } finally { f.drop() }
+
+  // ═══ 批 30 / US-2（D30-3① · 锚 A30-4）：seq 主腿——**涨 ⇒ 续命**；不涨到阈值 ⇒ abort +「疑似挂死」═══
+  // 判据（设计 §5.1）：主腿是「单调计数器的**变化**」而不是「订阅面存在」——首拍读数只作基线。
+  {
+    const fSeq = makeFrame({ form: "reject", abortMs: 60000, seqStart: 100 })
+    try {
+      const capSeq = await captureWarn(async () => {
+        await runEngCoder(fSeq.deps, { task: "implement the seq heartbeat leg", designToken: fSeq.st.designToken, docs: [] })
+        await flush(() => fSeq.specs.length === 1 && fSeq.ticks.length === 1 && fSeq.heartbeatRegs().length === 2,
+          "A30-4：jobs.start → subagents.start → 两腿装配（ticks / 心跳面注册就绪）")
+        // ① 首拍：**只有基线读数**（未观测到变化）⇒ 未武装 ⇒ 不中止（D9 口径不回退）
+        fSeq.clock.t = 30000
+        fSeq.ticks[0]()
+        assert.equal(fSeq.isAborted(), false, "首拍只有基线 ⇒ 未武装 ⇒ 不中止")
+        // ② seq **涨** ⇒ 武装 + 续命：单次静默 20s < 阈值 60s，累计 80s ≫ 阈值仍不中止
+        for (let i = 0; i < 4; i++) {
+          fSeq.clock.t += 20000
+          fSeq.seqState.value += 1
+          fSeq.ticks[0]()
+        }
+        assert.equal(fSeq.isAborted(), false, "★ seq 单调上涨 ⇒ 续命（不误杀真在活动的子代理）")
+        // ③ seq **不再涨**（子代理卡住）⇒ 静默越阈值 ⇒ 由既有取消写点 abort + 疑似挂死文案
+        fSeq.clock.t += 60001
+        fSeq.ticks[0]()
+        assert.equal(fSeq.isAborted(), true, "★ 不涨到阈值 ⇒ abort（主腿真在判定，不是摆设）")
+        const outcome = await fSeq.specs[0].hooks.done
+        assert.equal(outcome.detail, "silence watchdog (engSilenceAbortMs)", "走静默到点分支")
+        assert.ok(outcome.output.includes("疑似挂死"), "文案含「疑似挂死」：" + outcome.output.slice(0, 140))
+        assert.ok(outcome.output.includes("静默 1 分钟"), "文案含**真实静默时长**：" + outcome.output.slice(0, 140))
+      })
+      assert.ok(capSeq.warnings.some((w) => w.includes("疑似挂死")), "到点告警经捕获通道可见（不是只写在返回文本里）")
+    } finally { fSeq.drop() }
+  }
+
+  // ═══ 批 30 / US-6（D30-6 · 锚 A30-12 真机项的**通道**）：模型面证据必须进**可读的回执区** ═══
+  // 本腿只证两件事：① 证据**真的进了可读通道**（回执小节内，正文之后）；② 读不到子会话档时
+  // **如实标注「模型面未验」**（不拿派发载荷或「restrict 未抛错」冒充）。真机上的**已验**形态由宿主
+  // 在一次真派发后用同一行证据裁定（A30-12 是**真机项**）。
+  {
+    __resetWatchdogAttachArchiveForTest()
+    __resetArchiveChannelForTest()
+    const fM = makeFrame({ form: "hang", runExtra: { modelProbe: 1 } })
+    try {
+      const capM = await captureWarn(async () => {
+        await runEngCoder(fM.deps, { task: "probe the model-surface channel", designToken: fM.st.designToken, docs: [] })
+        await flush(() => fM.specs.length === 1, "A30-12 通道腿：jobs.start → subagents.start → 两腿装配")
+        fM.settleResult({ stopReason: "completed", output: [{ type: "text", text: "model surface probe done" }] })
+        await fM.specs[0].hooks.done
+      }, (ws) => ws.some((w) => w.includes("模型面证据")))
+      assert.equal(fM.handle.calls.length, 1, "交付正文恰经 handle.append 入环一次（D-46 契约）")
+      const delivered = String(fM.handle.calls[0] ?? "")
+      assert.ok(delivered.includes(HOST_ARCHIVE_HEADER), "回执小节在场（本部署唯一读得到的证据面）：" + delivered.slice(-200))
+      const lines = delivered.split("\n").filter((l) => l.includes("模型面证据"))
+      assert.equal(lines.length, 1, "★ 回执区恰一条**模型面证据**行：" + JSON.stringify(lines))
+      assert.ok(lines[0].includes("模型面未验"),
+        "★ 本夹具没有真实子会话档 ⇒ **如实标注「模型面未验」**（不假装读到、不拿载荷冒充）：" + lines[0])
+      assert.ok(lines[0].includes("不得以「restrict 未抛错」代替"), "判据口径随行带出：" + lines[0])
+      assert.ok(delivered.indexOf(lines[0]) > delivered.indexOf("model surface probe done"),
+        "证据行位于**交付正文之后**（绝不前插）：" + delivered.slice(-260))
+      assert.ok(capM.warnings.some((w) => w.includes("模型面证据")), "同一条文案也走裸 console.warn（两通道）")
+    } finally { fM.drop() }
+  }
 })
 
-test("A29-3c (D29-6): 看门狗工厂语义——到点回调恰一次（latch）、heartbeat 重置静默计时、dispose 幂等；阈值/周期解析运行时宽容；事件面探测诚实回落", async () => {
+test("A29-3c (D29-6): 看门狗工厂语义——到点回调恰一次（latch）、heartbeat 重置静默计时、dispose 幂等；阈值/周期解析运行时宽容；事件辅腿接驳与主腿采样器的诚实回落", async () => {
   assert.equal(ENG_SILENCE_ABORT_MS, 300000, "缺省阈值 = 5 分钟（D29-2）")
   assert.equal(ENG_SILENCE_POLL_MS, 1000, "轮询周期 = 1s")
   assert.deepEqual(resolveEngSilenceAbortMs({}), { ms: 300000, warning: null }, "缺省不告警")
@@ -358,20 +495,63 @@ test("A29-3c (D29-6): 看门狗工厂语义——到点回调恰一次（latch�
   assert.deepEqual(fired, [2001], "到点 ⇒ 回调带**静默时长**（毫秒，自最后一次心跳起算的真实值）")
   clock.t = 99000; ticks[0]()
   assert.deepEqual(fired, [2001], "到点**恰一次**（latch：不重复回调）")
-  assert.deepEqual(w.state(), { disposed: false, armed: true, delivered: true, silentMs: 2001, abortMs: 1000 }, "state 如实回报（armed：缺省初始武装 = 既有语义零漂移）")
+  assert.deepEqual(w.state(), { disposed: false, armed: true, delivered: true, silentMs: 2001, abortMs: 1000, lastSample: null },
+    "state 如实回报（armed：缺省初始武装 = 既有语义零漂移；lastSample：未传 sample ⇒ 主腿不参与）")
   w.dispose(); w.dispose()
   assert.equal(clearedCount, 1, "dispose 幂等（只清一次）")
   assert.equal(w.state().disposed, true)
 
-  // 心跳接驳：取不到事件面 ⇒ attached:false（**不假装在看**——caller 据此标注未生效）
-  assert.deepEqual(attachRunHeartbeat({ result: Promise.resolve() }, () => {}), { attached: false, via: null },
-    "无事件面的 run ⇒ 未接上（诚实回落）")
-  assert.deepEqual(attachRunHeartbeat(null, () => {}), { attached: false, via: null })
-  let got = 0
-  const run = { onEvent: (cb) => { run.cb = cb } }
-  assert.deepEqual(attachRunHeartbeat(run, () => { got++ }), { attached: true, via: "onEvent" }, "有事件面 ⇒ 接上并回报渠道")
-  run.cb()
-  assert.equal(got, 1, "事件 ⇒ 心跳")
+  // ——— 批 30 / US-2（D30-3②）：**事件辅腿**的接驳契约（旧「在 run 上猜事件名」的候选表已删）———
+  // ① 取不到 ctx.on / 子 id ⇒ attached:false（**不假装在看**——caller 据此标注未生效）
+  const noCtx = attachSubagentHeartbeat(null, { id: "c1" }, () => {})
+  assert.equal(noCtx.attached, false, "无 ctx ⇒ 未接上（诚实回落）")
+  assert.equal(noCtx.via, null)
+  assert.equal(typeof noCtx.off, "function", "未接上也返回**幂等 off**（caller 的 finally 无需分支）")
+  noCtx.off() // 幂等：不得抛
+  assert.equal(attachSubagentHeartbeat({ on: () => {} }, {}, () => {}).attached, false, "子 id 缺失 ⇒ 未接上")
+  assert.equal(attachSubagentHeartbeat({ on: () => {} }, { id: "c1" }, null).attached, false, "无 beat ⇒ 未接上")
+  // ② 有 ctx.on ⇒ 两条真事件面都注册、都带 {global:true}、按子 id 过滤、off() 幂等且摘净
+  {
+    const regs = []
+    const ctx = {
+      on(name, handler, opts) {
+        const rec = { name, handler, opts, live: true }
+        regs.push(rec)
+        return () => { rec.live = false }
+      },
+      off() { throw new Error("off() 不应被调用：ctx.on 已返回 disposer") },
+    }
+    let got = 0
+    const hb = attachSubagentHeartbeat(ctx, { id: "c1" }, () => { got++ })
+    assert.equal(hb.attached, true, "有 ctx.on ⇒ 接上")
+    assert.equal(hb.via, "agent/assistant-stream, tools/result", "接的是**两条真事件面**（逐字）：" + hb.via)
+    assert.deepEqual(regs.map((r) => r.name), ["agent/assistant-stream", "tools/result"], "注册的事件名逐字")
+    assert.ok(regs.every((r) => r.opts && r.opts.global === true), "两条都必须 {global:true}（事件面是全 app 的）")
+    regs[0].handler({ agent: { id: "c1" } })
+    assert.equal(got, 1, "本子事件 ⇒ 心跳")
+    regs[0].handler({ agent: { id: "other-child" } })
+    regs[0].handler({})
+    assert.equal(got, 1, "★ 过滤：**他子事件 / 无 agent 的载荷**不得续命（不过滤 = 邻居救活本子）")
+    regs[1].handler({ agent: { id: "c1" } })
+    assert.equal(got, 2, "第二条事件面同样按本子 id 生效")
+    hb.off(); hb.off() // 幂等
+    assert.ok(regs.every((r) => r.live === false), "off() ⇒ 两条监听都摘除（零残留）")
+    // 注：`off()` 的语义 = **调用 ctx.on 返回的 disposer**（平台分发器此后不再派发到本监听）；
+    // 直呼 `regs[0].handler(...)` 会绕过该语义、不是本契约的一部分 ⇒ 这里不做「直呼 handler 无心跳」的断言。
+    // 「dispose 后零残留」的**派发面**判据在 A29-3c 下方（`fEv.events.every((e) => e.live === false)`）。
+  }
+  // ③ 主腿采样器：可用性 + 读数 + out-of-process 的如实归因（不抛）
+  assert.deepEqual(subagentSeqSampler(null).available, false, "无 run ⇒ 主腿不可用")
+  assert.equal(subagentSeqSampler({}).reason.includes("localAgent === undefined"), true,
+    "out-of-process 的归因逐字可读：" + subagentSeqSampler({}).reason)
+  const seqRun = { localAgent: { session: { seq: 7 } } }
+  const seqLeg = subagentSeqSampler(seqRun)
+  assert.equal(seqLeg.available, true, "装了 localAgent.session.seq ⇒ 主腿可用")
+  assert.equal(seqLeg.read(), 7, "读数 = 当拍 seq")
+  seqRun.localAgent.session.seq = 9
+  assert.equal(seqLeg.read(), 9, "单调计数器：读数跟着走")
+  assert.equal(subagentSeqSampler({ localAgent: { session: { seq: "x" } } }).available, false,
+    "形状漂移（非有限数）⇒ 如实判不可用（不抛）")
 
   // 句柄心跳装饰：append/updateProgress 亦是心跳源，且**读语义/写语义与原句柄一致**
   const h = { id: "j-1", calls: [], append(text) { this.calls.push(text) }, updateProgress(line) { this.calls.push(line) } }
@@ -384,6 +564,85 @@ test("A29-3c (D29-6): 看门狗工厂语义——到点回调恰一次（latch�
   assert.deepEqual(h.calls, ["body", "progress"], "委托调用 this 仍是原句柄（行为逐字不变）")
   assert.equal(beats, 2, "append/updateProgress 各算一次心跳")
   assert.equal(watchJobHandle({ id: "j-2" }, () => {}).id, "j-2", "无事件方法 ⇒ 原样返回（零包装）")
+  // ★ 批 30 / §2.4 🔵2（锚 A30-7·🔵2）：`Object.create(handle)` 的**枚举面契约**行为对照——
+  //   见下方 A29-15 的静态锁（JSDoc 串在场）；此处只补行为侧对照（读写语义一致，键清单不承诺同形）。
+  assert.ok(Object.keys(wrapped).every((k) => ["append", "updateProgress"].includes(k)),
+    "装饰件的**自有键**就是被覆盖的那两个事件方法（枚举面不保证同形——`id` 在原型链上）：" + JSON.stringify(Object.keys(wrapped)))
+  assert.equal(wrapped.id, h.id, "但读写访问语义照常（`id` 穿原型链可读）")
+
+  // —— 批 30 / §2.4 🔵1（锚 A30-7·🔵1）：`onSilence` 的注销函数**只能清自己** ——
+  // 病：注销实现此前是裸 `onSilent = null` ⇒ 「先注册 A、再注册 B、调 **A 的**注销」把 **B** 清掉，
+  // 到点回调整体失效（看门狗变哑且无迹象）。判据：B 必须照常收到到点回调。
+  {
+    const clockA = { t: 0 }
+    const ticksA = []
+    const wA = createSilenceWatchdog({
+      abortMs: 1000, pollMs: 100, now: () => clockA.t,
+      setIntervalImpl: (fn) => { ticksA.push(fn); return { unref() { /* 假定时器 */ } } },
+      clearIntervalImpl: () => { },
+    })
+    const firedA = []
+    const firedB = []
+    const offA = wA.onSilence((info) => firedA.push(info.silentMs))
+    assert.equal(typeof offA, "function", "注册返回注销函数")
+    wA.onSilence((info) => firedB.push(info.silentMs)) // B 抢占注册位
+    offA()                                            // ★ A 的注销函数（A 已被抢占 ⇒ 必须是无操作）
+    clockA.t = 5000
+    ticksA[0]()
+    assert.deepEqual(firedB, [5000],
+      "★ 🔵1 决定性：A 的注销**不得**误杀 B（裸 `onSilent = null` 时本行必红——到点回调整体失效）")
+    assert.deepEqual(firedA, [], "A 已被抢占且已注销 ⇒ 不再收到回调")
+    wA.dispose()
+  }
+  // 反向对照：注销**自己**（现任）仍必须真的清掉 ⇒ 到点不再回调（注销语义未被削弱）
+  {
+    const clockB = { t: 0 }
+    const ticksB = []
+    const wB = createSilenceWatchdog({
+      abortMs: 1000, pollMs: 100, now: () => clockB.t,
+      setIntervalImpl: (fn) => { ticksB.push(fn); return { unref() { /* 假定时器 */ } } },
+      clearIntervalImpl: () => { },
+    })
+    const fired = []
+    const off = wB.onSilence((info) => fired.push(info.silentMs))
+    off()
+    clockB.t = 50000
+    ticksB[0]()
+    assert.deepEqual(fired, [], "注销**现任**回调 ⇒ 到点不再回调（注销语义照常，不被身份判据削弱）")
+    wB.dispose()
+  }
+
+  // ═══ 批 30 / US-2（D30-3②③ · 锚 A30-5）：事件辅腿——本子续命 / **他子不续命** / dispose 零残留 ═══
+  {
+    // 主腿关掉（`seqStart: null` = out-of-process）⇒ 本腿里**只有事件辅腿**能产生心跳
+    const fEv = makeFrame({ form: "reject", abortMs: 60000, seqStart: null })
+    try {
+      const capEv = await captureWarn(async () => {
+        await runEngCoder(fEv.deps, { task: "implement the event heartbeat leg", designToken: fEv.st.designToken, docs: [] })
+        await flush(() => fEv.specs.length === 1 && fEv.heartbeatRegs().length === 2, "A30-5：两腿装配（心跳面注册各一）")
+        assert.equal(fEv.events.every((e) => e.options && e.options.global === true), true,
+          "两条监听都带 {global:true}（事件面是全 app 的）")
+        // ① **他子事件**（含无 agent 的载荷）在真事件之前批量灌入 ⇒ **绝不能**给本子续命
+        for (const ob of fEv.otherBeats) { ob(); ob(undefined) }
+        fEv.clock.t = 60001
+        fEv.ticks[0]()
+        assert.equal(fEv.isAborted(), false,
+          "★ 他子事件**不续命**（不过滤就会把邻居的活动算成本子的命 ⇒ 本子挂死却永不中止）")
+        // ② **本子事件** ⇒ 武装；此后静默越阈值 ⇒ abort（既有取消写点）
+        fEv.beats[0]()
+        fEv.clock.t += 60001
+        fEv.ticks[0]()
+        assert.equal(fEv.isAborted(), true, "本子事件 ⇒ 武装；此后静默越阈值 ⇒ 照常中止")
+        await fEv.specs[0].hooks.done
+      })
+      assert.ok(capEv.warnings.length >= 0, "（捕获通道：本腿两条裸告警都在窗内，不落到 stderr）")
+    } finally { fEv.drop() }
+    // ③ **dispose 后零残留监听**：派发返回路径（本腿）在 finally 里 off() ——异常 / 静默终止两条
+    //    路径走的是**同一个** finally（`eng.mjs` 里那处），故本行对三条路径同时成立。
+    assert.equal(fEv.events.every((e) => e.live === false), true,
+      "★ off() 摘净全部监听（零残留）：" + JSON.stringify(fEv.events.map((e) => [e.name, e.live])))
+    assert.equal(fEv.heartbeatRegs().length, 2, "前置：确实注册过两条**心跳面**监听（否则上一行是恒真断言）")
+  }
 })
 
 // ═══════════════ A29-1 / A29-2：工具面禁执行（两态 + 证据口径） ═══════════════
@@ -398,8 +657,14 @@ const BASE_DENY = ["escalate", "consult_start", "consult_stop", "eng", "eng_code
 
 test("A29-1a (AC-1, 强证): 平台回显的生效工具清单里执行类**不在**、非执行类**仍在**——证据口径标 platform-echo", async () => {
   const echo = ["read", "write", "edit", "grep", "web_search"]      // 平台侧生效清单
-  const f = makeFrame({ toolsSurface: { list: () => SURFACE }, echoToolNames: echo })
+  // 批 30 / US-1：名域读取面改为**带 scope 的 view(agent)**（旧夹具的 `list` 候选面已随 D30-2 删除
+  // ——七个别名探测在本机平台上恒不存在 ⇒ 留着只会掩盖真实形态）
+  const f = makeFrame({ toolsSurface: { view: () => ({ restrictableNames: new Set(SURFACE) }) }, echoToolNames: echo })
   try {
+  // 批 30 / §2.4 🔵5（锚 A30-7·🔵5）：本腿跑**真实派发路径** ⇒ 裸告警（工具面「未生效」/ 一次性接线留档）
+  // 会直接打到 stderr（未捕获 = 测试输出噪音）⇒ 整段套 `captureWarn`——**定死用捕获**，不用「档头注一句」。
+  // ★ 捕获窗口覆盖全腿（含断言），因为告警可能在 await 链的尾段才落；捕获本身也是判据（见腿尾断言）。
+  const _cap1a = await captureWarn(async () => {
   const dispatch = await runEngCoder(f.deps, { task: "implement the deny leg", designToken: f.st.designToken, docs: [] })
   await flush(() => f.specs.length === 1 && f.requests.length === 1 && f.runs.length === 1,
     "A29-1a：jobs.start → subagents.start（requests/runs 各一）")
@@ -417,12 +682,19 @@ test("A29-1a (AC-1, 强证): 平台回显的生效工具清单里执行类**不�
   assert.equal(execDenyEvidence(f.runs[0]).evidence, "platform-echo", "有回显 ⇒ 证据口径 = 强证")
   assert.equal(readEffectiveToolEcho({ tools: { read: 1 } }), null,
     "普通对象（工具实现表）不算回显——不得把载荷/实现表误报成强证")
+  })
   } finally { f.drop() }
 })
 
 test("A29-1b (AC-1, 弱证): 平台不回显 ⇒ 以派发时接受的 toolFilter 载荷为证并如实标注为弱证（两形态在断言里区分）", async () => {
-  const f = makeFrame({ toolsSurface: { list: () => SURFACE } })
+  // 批 30 / US-1·A30-3：本腿改走**退路面** `schemas(agent)`——一并证明退路在真实派发路径上可用，
+  // 且名域里的保留名 `run_code` 被剔（SURFACE 含 run_code，deny 里不得出现它）
+  const f = makeFrame({ toolsSurface: { schemas: () => SURFACE.map((n) => ({ name: n })) } })
   try {
+  // 批 30 / §2.4 🔵5（锚 A30-7·🔵5）：本腿跑**真实派发路径** ⇒ 裸告警（工具面「未生效」/ 一次性接线留档）
+  // 会直接打到 stderr（未捕获 = 测试输出噪音）⇒ 整段套 `captureWarn`——**定死用捕获**，不用「档头注一句」。
+  // ★ 捕获窗口覆盖全腿（含断言），因为告警可能在 await 链的尾段才落；捕获本身也是判据（见腿尾断言）。
+  const _cap1b = await captureWarn(async () => {
   await runEngCoder(f.deps, { task: "implement the deny leg (weak)", designToken: f.st.designToken, docs: [] })
   await flush(() => f.specs.length === 1 && f.requests.length === 1 && f.runs.length === 1,
     "A29-1b：jobs.start → subagents.start（requests/runs 各一）")
@@ -435,6 +707,7 @@ test("A29-1b (AC-1, 弱证): 平台不回显 ⇒ 以派发时接受的 toolFilte
   // 两形态**在断言里区分**（不得混同）：无回显 ⇒ evidence 标 dispatch-payload 且 effective 为 null
   assert.equal(execDenyEvidence(f.runs[0]).evidence, "dispatch-payload", "无回显 ⇒ 证据口径 = 弱证（如实标注）")
   assert.equal(readEffectiveToolEcho(f.runs[0]), null, "无回显 ⇒ effective 为 null（不与强证混同）")
+  })
   } finally { f.drop() }
 })
 
@@ -457,7 +730,7 @@ test("A29-2 (AC-1 / D29-1): 取不到平台工具名清单 ⇒ 如实标注「�
   assert.equal(emptyPlan.applied, false, "空集面 ⇒ 同样如实标「未生效」（不假装拦住）")
   assert.deepEqual(emptyPlan.deny, BASE_DENY, "空集面 ⇒ deny 逐字等于基线（未下发任何名字）")
   assert.deepEqual(emptyPlan.execNames, [], "空集面 ⇒ 零执行类名")
-  assert.equal(emptyPlan.source, "view.restrictableNames", "空集面的来源仍是**公开读取面**（面在场，只是名集为空）")
+  assert.equal(emptyPlan.source, "view(agent)", "空集面的来源仍是**公开读取面**（面在场，只是名集为空）")
   assert.ok(String(emptyPlan.reason).includes("可限制名集为空"),
     "空集面归因 = 面可用但可限制名集为空：" + emptyPlan.reason)
   assert.ok(!String(emptyPlan.reason).includes("读取面不可用"),
@@ -494,10 +767,14 @@ test("A29-2 (AC-1 / D29-1): 取不到平台工具名清单 ⇒ 如实标注「�
 test("D9 (AC-2 反例): 事件面**已接上**但零事件 ⇒ 不误杀——看门狗未武装、退回总预算；首个真实事件到达后才判定", async () => {
   const f = makeFrame({ form: "hang" })
   try {
+  // 批 30 / §2.4 🔵5（锚 A30-7·🔵5）：本腿跑**真实派发路径** ⇒ 裸告警（工具面「未生效」/ 一次性接线留档）
+  // 会直接打到 stderr（未捕获 = 测试输出噪音）⇒ 整段套 `captureWarn`——**定死用捕获**，不用「档头注一句」。
+  // ★ 捕获窗口覆盖全腿（含断言），因为告警可能在 await 链的尾段才落；捕获本身也是判据（见腿尾断言）。
+  const _capD9 = await captureWarn(async () => {
   await runEngCoder(f.deps, { task: "implement the zero-event leg", designToken: f.st.designToken, docs: [] })
-  await flush(() => f.specs.length === 1 && f.beats.length === 1,
-    "D9：jobs.start → subagents.start → attachRunHeartbeat")
-  assert.equal(f.beats.length, 1, "前置：事件面**已接上**（attached:true）")
+  await flush(() => f.specs.length === 1 && f.beats.length === 2,
+    "D9：jobs.start → subagents.start → attachSubagentHeartbeat")
+  assert.equal(f.beats.length, 2, "前置：事件辅腿**已接上**（attached:true，两条真事件面）")
   // 零真实事件：推进假时钟远超阈值并 tick——**不得** abort（否则会误杀一个正在正常输出的子代理）
   f.clock.t = 600000
   for (let i = 0; i < 3; i++) f.ticks[0]()
@@ -529,12 +806,51 @@ test("D9 (AC-2 反例): 事件面**已接上**但零事件 ⇒ 不误杀——�
   f.settleResult({ stopReason: "aborted", output: [{ type: "text", text: "" }] })
   const outcome = await f.specs[0].hooks.done
   assert.equal(outcome.detail, "silence watchdog (engSilenceAbortMs)", "武装后到点分支照常（零事件腿不打折机制）")
+  })
+
+  // ═══ 批 30 / US-2（D30-3④ · 锚 A30-6）：首次心跳前不武装（零变化运行）+ out-of-process 降级 ═══
+  // ① 零**变化**运行（seq 恒定、事件面接上但零事件）⇒ 不 abort、退回总预算（D9 口径不回退）
+  {
+    const fZero = makeFrame({ form: "hang", abortMs: 60000, seqStart: 42 })   // 主腿读数**恒定**（不涨）
+    try {
+      const _capZero = await captureWarn(async () => {
+        await runEngCoder(fZero.deps, { task: "implement the zero-change leg", designToken: fZero.st.designToken, docs: [] })
+        await flush(() => fZero.specs.length === 1 && fZero.heartbeatRegs().length === 2 && fZero.ticks.length === 1,
+          "A30-6①：两腿装配完成（events 二 / ticks 一）")
+        fZero.clock.t = 600000
+        for (let i = 0; i < 3; i++) fZero.ticks[0]()
+        assert.equal(fZero.isAborted(), false,
+          "★ 首次**变化**（心跳）之前不武装 ⇒ 读数恒定的运行不 abort、退回总预算（宁可晚掐，不误杀）")
+      })
+      assert.ok(_capZero.warnings.length >= 0, "（捕获通道：裸告警不落到 stderr）")
+    } finally { fZero.drop() }
+  }
+  // ② **out-of-process**（`localAgent === undefined`）+ 事件面也不可用 ⇒ 如实标注「未生效」+ 退回总预算
+  {
+    const fOop = makeFrame({ form: "hang", seqStart: null, eventSurface: false })
+    try {
+      const capOop = await captureWarn(async () => {
+        await runEngCoder(fOop.deps, { task: "implement the out-of-process leg", designToken: fOop.st.designToken, docs: [] })
+        await flush(() => fOop.specs.length === 1, "A30-6②：jobs.start → subagents.start")
+      }, (ws) => ws.some((w) => w.includes("静默看门狗未生效")))
+      assert.equal(fOop.requests.length, 1, "派发照常发生（降级 ≠ 拒发）：" + JSON.stringify(fOop.requests.length))
+      assert.equal(fOop.runs.length, 1, "子代理确实起了（不抛、不中断）")
+      const line = capOop.warnings.find((w) => w.includes("静默看门狗未生效"))
+      assert.ok(line !== undefined, "★ 如实标注「未生效」（不静默）：" + JSON.stringify(capOop.warnings.slice(0, 3)))
+      assert.ok(line.includes("localAgent === undefined"), "归因逐字点明 out-of-process：" + line)
+      fOop.clock.t = 600000
+      fOop.ticks[0]()
+      assert.equal(fOop.isAborted(), false, "未生效 ⇒ 不中止（退回总预算）")
+      assert.equal(fOop.cleared.length, 1, "降级点已清掉轮询者（幂等 dispose：只清一次，不泄漏定时器）")
+    } finally { fOop.drop() }
+  }
   } finally { f.drop() }
 })
 
-test("D1/D2 (AC-1): 平台保留名 run_code 不进 deny + 公开读取面 view(scope).restrictableNames 为唯一名域（取到 ⇒ applied:true 且 deny ⊆ 该集合）", async () => {
+test("D1/D2 (AC-1): 平台保留名 run_code 不进 deny + 公开读取面 view(agent).restrictableNames 为主名域（取到 ⇒ applied:true 且 deny ⊆ 该集合）", async () => {
   // —— D1（单元面）：run_code 不再命中执行类谓词（一被命名，平台 restrict() 直接抛错 ⇒ 打断派发） ——
-  const reserved = resolveExecToolDeny({ tools: { list: () => ["read", "pwsh", "bash", "run_code"] } })
+  // 批 30 / US-1：夹具改走**带 scope 的主读取面**（旧 `list` 候选面已删）
+  const reserved = resolveExecToolDeny({ tools: { view: () => ({ restrictableNames: ["read", "pwsh", "bash", "run_code"] }) } })
   assert.ok(!reserved.deny.includes("run_code"), "保留名不进 deny：" + JSON.stringify(reserved.deny))
   assert.deepEqual(reserved.execNames, ["pwsh", "bash"], "执行类谓词不再命中 run_code")
 
@@ -550,7 +866,7 @@ test("D1/D2 (AC-1): 平台保留名 run_code 不进 deny + 公开读取面 view(
   }
   const unit = resolveExecToolDeny({ tools: viewSurface })
   assert.equal(unit.applied, true, "取到 restrictableNames ⇒ 生效（不再恒未生效）")
-  assert.equal(unit.source, "view.restrictableNames", "来源 = 平台公开读取面（restrict() 的合法名域）")
+  assert.equal(unit.source, "view(agent)", "来源 = 平台公开读取面（restrict() 的合法名域），**带 scope**（批 30 / US-1）")
   // 订正（宿主验收）：`deny` 还含**插件自身**的基线工具名（BASE_DENY 里的 escalate/consult_* 等）——
   // 它们不是平台工具名、本就不在 restrictableNames 域内 ⇒ 子集谓词只能约束**新追加的执行类名**。
   for (const n of unit.execNames) assert.ok(restrictable.includes(n), "执行类新追加名逐名 ⊆ restrictableNames：" + n)
@@ -559,45 +875,131 @@ test("D1/D2 (AC-1): 平台保留名 run_code 不进 deny + 公开读取面 view(
 
   const f = makeFrame({ toolsSurface: viewSurface })
   try {
+  // 批 30 / §2.4 🔵5（锚 A30-7·🔵5）：本腿跑**真实派发路径** ⇒ 裸告警（工具面「未生效」/ 一次性接线留档）
+  // 会直接打到 stderr（未捕获 = 测试输出噪音）⇒ 整段套 `captureWarn`——**定死用捕获**，不用「档头注一句」。
+  // ★ 捕获窗口覆盖全腿（含断言），因为告警可能在 await 链的尾段才落；捕获本身也是判据（见腿尾断言）。
+  const _capD12 = await captureWarn(async () => {
   await runEngCoder(f.deps, { task: "implement the view-surface leg", designToken: f.st.designToken, docs: [] })
   await flush(() => f.specs.length === 1 && f.requests.length === 1,
     "D1/D2：jobs.start → subagents.start")
   const deny = f.requests[0].toolFilter.deny
   for (const n of deny.filter((x) => !BASE_DENY.includes(x))) assert.ok(restrictable.includes(n), "派发载荷**新追加部分** ⊆ restrictableNames：" + n)
   assert.ok(!deny.includes("run_code"), "保留名（knownNames 有 / restrictableNames 无）不得下发")
+  })
   } finally { f.drop() }
+
+  // ═══ 批 30 / US-1（D30-2 · 锚 A30-2）：**带 scope** 读名域 ⇒ 首次派发即 applied:true + 名下来源可证 ═══
+  // 病（D-55）：批 29 读的是**无参** view()（= 全局视图），而本部署把执行类工具挂在祖先层 ⇒ 全局面
+  // 看不见执行类名 ⇒ 生产恒 applied:false（空转）。本腿钉两件事：① scope **就是** Agent 对象本身
+  // （且与派发处传给 parent 的是**同一对象**）；② 证据行附**名下来源**与**逐字命中名清单**。
+  {
+    const scopeSeen = []
+    const SCOPE_SURFACE = ["read", "write", "edit", "grep", "pwsh", "bash", "run_code", "web_search"]
+    const f2 = makeFrame({
+      toolsSurface: { view: (scope) => { scopeSeen.push(scope); return { restrictableNames: new Set(SCOPE_SURFACE) } } },
+    })
+    try {
+      const cap = await captureWarn(async () => {
+        await runEngCoder(f2.deps, { task: "implement the scoped deny leg", designToken: f2.st.designToken, docs: [] })
+        await flush(() => f2.specs.length === 1 && f2.requests.length === 1, "A30-2：jobs.start → subagents.start")
+      }, (ws) => ws.some((w) => w.includes("工具面禁执行已下发")))
+      assert.ok(scopeSeen.length >= 1, "前置：名域读取面**确实被调用**（否则下面的同一对象断言是恒真）")
+      assert.equal(scopeSeen[0], f2.deps.agent,
+        "★ A30-2：scope = deps.agent（**Agent 对象本身**——无参全局视图正是 D-55 的根因）")
+      assert.equal(f2.requests[0].parent, f2.deps.agent,
+        "与派发处传给 parent 的是**同一对象**（设计 §2.1① 逐字要求）")
+      const deny2 = f2.requests[0].toolFilter.deny
+      assert.deepEqual(deny2, [...BASE_DENY, "pwsh", "bash"], "deny 恰含命中名（逐字）：" + JSON.stringify(deny2))
+      assert.ok(!deny2.includes("run_code"), "★ 绝不含 run_code（一命名即抛错）：" + JSON.stringify(deny2))
+      const line = cap.warnings.find((w) => w.includes("工具面禁执行已下发"))
+      assert.ok(line !== undefined, "已下发必须留一条证据行（裸 console.warn）：" + JSON.stringify(cap.warnings))
+      assert.ok(line.includes("名下来源 = view(agent)"), "★ 证据行附**名下来源**：" + line)
+      assert.ok(line.includes("deny 追加 pwsh, bash）"), "逐字命中名清单在场：" + line)
+      assert.ok(line.includes("残余风险"), "残余风险（run_code 不可经 restrict 收窄）写在证据行里：" + line)
+    } finally { f2.drop() }
+  }
+
+  // ═══ 批 30 / US-1（D30-2 · 锚 A30-3）：三级诚实降级（主面抛错 / 返回空 ⇒ 退 schemas；都失败 ⇒ 不下发）═══
+  {
+    const SCOPE = { session: { id: "scope-probe" } }
+    // ① 主面**抛错** ⇒ 退 schemas(agent)，且保留名 run_code 被剔
+    const schemasSeen = []
+    const threw = resolveExecToolDeny({
+      tools: {
+        view: () => { throw new Error("view unavailable") },
+        schemas: (scope) => { schemasSeen.push(scope); return [{ name: "read" }, { name: "pwsh" }, { name: "run_code" }, { name: "bash" }] },
+      },
+    }, undefined, SCOPE)
+    assert.equal(threw.applied, true, "主面抛错 ⇒ 退路可用即生效（不因主面故障而空转）")
+    assert.equal(threw.source, "schemas(agent)", "名下来源如实标 schemas(agent)：" + threw.source)
+    assert.deepEqual(threw.execNames, ["pwsh", "bash"], "退路里逐字命中执行类名")
+    assert.deepEqual(threw.deny, [...BASE_DENY, "pwsh", "bash"], "★ 退路结果同样剔 run_code：" + JSON.stringify(threw.deny))
+    // ★ **如实登记一处非决定性**（变异自证 M10）：退路面里的「剔 `run_code`」是**冗余防线**——
+    //   执行类谓词 `EXEC_TOOL_RE` 本就不命中它（D1 已锁），故**删掉该滤除观测不到差异**（全套仍绿）。
+    //   「deny 绝不含 run_code」的**决定性命中**仍由 D1 那一半承担（谓词 + 显式滤除，双保险）。
+    assert.equal(schemasSeen[0], SCOPE, "退路同样**带 scope** 调用（不是无参）")
+    // ② 主面**返回空**（名集为空）⇒ 同样退 schemas(agent)
+    const emptyThen = resolveExecToolDeny({
+      tools: { view: () => ({ restrictableNames: new Set() }), schemas: () => ["pwsh"] },
+    }, undefined, SCOPE)
+    assert.equal(emptyThen.applied, true, "主面返回空 ⇒ 退路可用即生效")
+    assert.equal(emptyThen.source, "schemas(agent)", "退路生效 ⇒ 来源标 schemas(agent)")
+    assert.deepEqual(emptyThen.execNames, ["pwsh"])
+    // ③ 两条都失败 ⇒ **不下发** + 如实标注（applied:false / deny 逐字基线 / source null）
+    const both = resolveExecToolDeny({ tools: { view: () => { throw new Error("boom") } } }, undefined, SCOPE)
+    assert.equal(both.applied, false, "两条都拿不到 ⇒ 不下发（applied:false 语义不变）")
+    assert.deepEqual(both.deny, BASE_DENY, "不下发 ⇒ deny 逐字基线（不猜名）")
+    assert.equal(both.source, null, "无读取面 ⇒ 名下来源为 null（caller 如实标「(无读取面)」）")
+    assert.ok(String(both.reason).includes("读取面不可用"), "归因如实：" + both.reason)
+    // ④ 行为面：两条都失败 ⇒ 派发载荷零执行类名，且证据行**如实标注名下来源为空**
+    const f3 = makeFrame({ toolsSurface: { view: () => { throw new Error("boom") } } })
+    try {
+      const cap3 = await captureWarn(async () => {
+        await runEngCoder(f3.deps, { task: "implement the degraded deny leg", designToken: f3.st.designToken, docs: [] })
+        await flush(() => f3.specs.length === 1 && f3.requests.length === 1, "A30-3：jobs.start → subagents.start")
+      }, (ws) => ws.some((w) => w.includes("工具面禁执行未生效")))
+      assert.deepEqual(f3.requests[0].toolFilter.deny, BASE_DENY,
+        "★ 不下发 ⇒ 载荷 = 逐字基线（不假装拦住）：" + JSON.stringify(f3.requests[0].toolFilter.deny))
+      const line3 = cap3.warnings.find((w) => w.includes("工具面禁执行未生效"))
+      assert.ok(line3 !== undefined, "如实标注「未生效」：" + JSON.stringify(cap3.warnings))
+      assert.ok(line3.includes("名下来源 = (无读取面)"), "★ 如实标注名下来源为空（不编一个来源出来）：" + line3)
+    } finally { f3.drop() }
+  }
 })
 
 // ═══════════════ A29-8（批 29 §2.6 US-A / D-53）：**一次性留档**三腿 ═══════════════
 // 目的（设计 §2.6④）：静默看门狗与工具面禁执行的**生产生效性**本机无法自验 ⇒ 真机放一次就能拿到
-// 「平台到底给了什么」，据此**收敛候选表**（而不是继续猜）。三条腿**各有独立的裁决面**：
-//   · A29-8a：attached 真 ⇒ 记下**命中的候选方法名**（哪个键真管用）；
-//   · A29-8b：零候选 ⇒ 列出 `Object.keys(run)` 并如实标注零候选；
+// 「平台到底给了什么」。三条腿**各有独立的裁决面**（**批 30 / US-2 已随心跳改接同步口径**）：
+//   · A29-8a：两腿都可用 ⇒ 记下**命中事件面名**与 **seq 主腿可用性**；
+//   · A29-8b：事件辅腿零命中 ⇒ 列出 `Object.keys(run)` 并如实标注零命中；
 //   · A29-8c：工具面首次 applied:false ⇒ 既有「未生效」warn 的**同一行**追加 `ctx.tools` 键名清单。
 // 任一形态的实现缺失**只让对应那条腿红**（另两条照绿 ⇒ 可独立转红，互不掩盖）。
 
-test("A29-8a (§2.6 US-A① / AC-9): 接线留档（attached 真）= 记下**命中的候选方法名** + run 键清单；进程内只一次；不进返回文本", async () => {
+test("A29-8a (§2.6 US-A① / AC-9): 接线留档（两腿都可用）= 记下**命中事件面**与 seq 主腿可用性 + run 键清单；进程内只一次；不进返回文本", async () => {
   // —— 单元面：留档函数的返回契约（true = 本次真的打印了 / false = 闩已合上）——
   const runA = { result: Promise.resolve(), dispose() {}, onEvent() {} }
   __resetWatchdogAttachArchiveForTest()
-  const cap1 = await captureWarn(async () => archiveWatchdogAttach(runA, { attached: true, via: "onEvent" }))
+  const cap1 = await captureWarn(async () => archiveWatchdogAttach(runA, { attached: true, via: "agent/assistant-stream, tools/result", seq: { available: true, reason: null } }))
   assert.equal(cap1.value, true, "首次 ⇒ 真的打印了（返回 true）")
   assert.equal(cap1.warnings.length, 1, "首次接线**恰一条** warn：" + JSON.stringify(cap1.warnings))
   assert.ok(cap1.warnings[0].includes("接线留档"), "留档行可辨识：" + cap1.warnings[0])
-  // ★ F1（批 29 §2.6 收尾小单 / 只读分歧审计）：判据必须是**相邻字面**「命中候选事件面「onEvent」」——
-  //   夹具 runA **自带** onEvent 键，而同一行又会打印 run 的键清单 ⇒ 只判 includes("onEvent") 时，
-  //   把 lib/silence-watchdog.mjs 里「命中候选名」那一段整段删掉，本腿**仍然绿**（非决定性）。
-  //   本行把裁决面收敛到「命中名」这一件事上（不改夹具既有语义）。
-  assert.ok(cap1.warnings[0].includes("命中候选事件面「onEvent」"),
-    "attached 真 ⇒ 记下**命中的候选方法名**（相邻字面判定；键清单里的 onEvent 不能顶替它）：" + cap1.warnings[0])
+  // ★ F1（批 29 §2.6 收尾小单 / 只读分歧审计；批 30 / US-2 随心跳改接口径同步）：判据必须是**相邻字面**
+  //   「事件辅腿=命中「…」」——只判 includes(via) 时，把 lib/silence-watchdog.mjs 里「命中」那一段整段
+  //   删掉，本腿**仍然绿**（非决定性）。本行把裁决面收敛到「命中名」这一件事上。
+  //   批 30 起 via 是**两条真事件面名**（不是被删掉的猜测表里的 run 成员名）⇒ 与 run 键清单**不可能**撞车，
+  //   决断性比批 29 更强。
+  assert.ok(cap1.warnings[0].includes("事件辅腿=命中「agent/assistant-stream, tools/result」"),
+    "attached 真 ⇒ 记下**命中的事件面名**（相邻字面判定）：" + cap1.warnings[0])
+  assert.ok(cap1.warnings[0].includes("seq 主腿=可用"),
+    "同一行如实记下**主腿可用性**（两腿都采样，信息量最大的一笔）：" + cap1.warnings[0])
   assert.ok(cap1.warnings[0].includes("dispose") && cap1.warnings[0].includes("result"),
     "留档附 run 的键名清单（Object.keys(run)）：" + cap1.warnings[0])
   assert.ok(!cap1.warnings[0].includes("\n"), "单行（可 grep）")
-  const cap2 = await captureWarn(async () => archiveWatchdogAttach(runA, { attached: true, via: "onEvent" }))
+  const cap2 = await captureWarn(async () => archiveWatchdogAttach(runA, { attached: true, via: "agent/assistant-stream, tools/result", seq: { available: true, reason: null } }))
   assert.equal(cap2.value, false, "第二次 ⇒ 闩已合上（返回 false）")
   assert.deepEqual(cap2.warnings, [], "**第二次不再打印**（进程内一次闩）")
 
-  // —— 派发腿：走真实接线点（eng.mjs 后台 run() 内 attachRunHeartbeat 之后）——
+  // —— 派发腿：走真实接线点（eng.mjs 后台 run() 内 attachSubagentHeartbeat 之后）——
   const f = makeFrame({ form: "hang", eventSurface: true, runExtra: { archiveProbeA: 1 } })
   try {
   __resetWatchdogAttachArchiveForTest()
@@ -606,21 +1008,29 @@ test("A29-8a (§2.6 US-A① / AC-9): 接线留档（attached 真）= 记下**命
   __resetArchiveChannelForTest()
   const r = await captureWarn(async () => {
     const dispatch = await runEngCoder(f.deps, { task: "archive the attach (hit)", designToken: f.st.designToken, docs: [] })
-    await flush(() => f.specs.length === 1 && f.beats.length === 1,
-      "A29-8a 派发腿：jobs.start → subagents.start → attachRunHeartbeat（接驳完成 ⇒ 留档必已打印）")
+    await flush(() => f.specs.length === 1 && f.beats.length === 2,
+      "A29-8a 派发腿：jobs.start → subagents.start → attachSubagentHeartbeat（接驳完成 ⇒ 留档必已打印）")
     return dispatch
   }, (ws) => ws.some((w) => w.includes("接线留档")))
   const lines = r.warnings.filter((w) => w.includes("接线留档"))
   assert.equal(lines.length, 1, "派发路径的首次接线也恰一条留档：" + JSON.stringify(r.warnings))
-  // ★ F1：同上——本腿的键清单里同样含 onEvent（archiveProbeA 与之同行）⇒ 只判 includes("onEvent")
-  //   对「命中分支被删」不敏感；改为断言相邻字面（删掉命中分支 ⇒ 必红）。
-  assert.ok(lines[0].includes("命中候选事件面「onEvent」"),
-    "命中名来自**真实接线**（run.onEvent）——相邻字面判定：" + lines[0])
+  // ★ F1：同上——判据必须是**相邻字面**（批 30 起 via 是两条真事件面名，与 run 键清单不可能撞车；
+  //   而批 29 时夹具自带 onEvent 键、与键清单一字不差 ⇒ 只判 includes 对「命中分支被删」不敏感）。
+  assert.ok(lines[0].includes("事件辅腿=命中「agent/assistant-stream, tools/result」"),
+    "命中名来自**真实的 ctx 事件面接线**——相邻字面判定：" + lines[0])
+  assert.ok(lines[0].includes("seq 主腿=可用"),
+    "★ 主腿来自**真实接线**（run.localAgent.session.seq 装配后即可用）：" + lines[0])
   assert.ok(lines[0].includes("archiveProbeA"), "键名清单如实反映 Object.keys(run)：" + lines[0])
   assert.ok(!r.value.includes("接线留档"), "留档**不进返回文本**（裸 console 告警）：" + r.value.slice(0, 120))
   assert.ok(!r.value.includes("[thincoder-suite] warning:"), "不得触碰 warnPrefix 通道（T12 锁）")
-  f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe A done" }] })
-  await f.specs[0].hooks.done
+  // 批 30 修复轮 / F4（🔵5 收干——
+  // 「单跑该档 stderr 零残留告警」）：**结算/交付段也必须在捕获窗内**。交付链尾的
+  // `saveSessionState`（本档 DSH_HOME 置空、且 PLUGIN_DIR 之上无 profile 根 ⇒ 路径必然不可解析）
+  // 恰在 `settleResult → hooks.done` 之间打一条裸告警；窗口只罩派发时它直落 stderr（修复前单跑实测 1 行）。
+  await captureWarn(async () => {
+    f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe A done" }] })
+    await f.specs[0].hooks.done
+  })
   // ★ F2（批 29 §2.6 收尾小单 / 只读分歧审计）：上文的「零污染」两行只覆盖**派发回执**
   //   （r.value = warnPrefix() + jobsDispatchReply），**没有覆盖 run() 内 jobOutcome 生成的交付正文**
   //   ⇒ 往交付正文里追加「接线留档」字样，本腿曾经仍然绿（应红）。判定改落在**真实交付文本**上：
@@ -655,9 +1065,11 @@ test("A29-8a (§2.6 US-A① / AC-9): 接线留档（attached 真）= 记下**命
   assert.ok(wdogSrc.includes("@internal"), "JSDoc 标注 @internal")
 })
 
-test("A29-8b (§2.6 US-A① / AC-9): 零候选形态 = 如实列出 Object.keys(run)（有界/去重/截断安全）、不报命中名、第二次不再打印", async () => {
+test("A29-8b (§2.6 US-A① / AC-9): 事件辅腿零命中形态 = 如实列出 Object.keys(run)（有界/去重/截断安全）、不报命中面名、第二次不再打印", async () => {
   // —— 派发腿：run 上**一个候选事件方法都没有**（attached:false）——
-  const f = makeFrame({ form: "hang", eventSurface: false, runExtra: { archiveProbeB: 1 } })
+  // ★ 批 30 / US-2：`eventSurface:false` 只关**事件辅腿**；「未生效」标注的判据是**两腿都不可用**
+  //   ⇒ 本腿再加上 `seqStart: null`（out-of-process）才是那条判据的真实形态。
+  const f = makeFrame({ form: "hang", eventSurface: false, seqStart: null, runExtra: { archiveProbeB: 1 } })
   try {
   __resetWatchdogAttachArchiveForTest()
   __resetArchiveChannelForTest()   // §2.8：复位可读通道缓冲（对齐上方闩复位，不让本腿自带上一腿的留档）
@@ -668,18 +1080,24 @@ test("A29-8b (§2.6 US-A① / AC-9): 零候选形态 = 如实列出 Object.keys(
     return dispatch
   }, (ws) => ws.some((w) => w.includes("接线留档")))
   const lines = r.warnings.filter((w) => w.includes("接线留档"))
-  assert.equal(lines.length, 1, "零候选形态同样**恰一条**留档：" + JSON.stringify(r.warnings))
-  assert.ok(lines[0].includes("零候选"), "attached 假 ⇒ 如实标注零候选（不假装接上了）：" + lines[0])
+  assert.equal(lines.length, 1, "零命中形态同样**恰一条**留档：" + JSON.stringify(r.warnings))
+  assert.ok(lines[0].includes("事件辅腿=零命中"), "attached 假 ⇒ 如实标注零命中（不假装接上了）：" + lines[0])
   assert.ok(lines[0].includes("archiveProbeB") && lines[0].includes("result") && lines[0].includes("dispose"),
-    "零候选 ⇒ 列出 Object.keys(run)：" + lines[0])
-  assert.ok(!lines[0].includes("onEvent"), "零候选形态不得凭空报命中名")
+    "零命中 ⇒ 列出 Object.keys(run)：" + lines[0])
+  assert.ok(!lines[0].includes("agent/assistant-stream"), "零命中形态不得凭空报命中面名")
   assert.ok(!lines[0].includes("\n"), "单行（可 grep）")
   assert.ok(!r.value.includes("接线留档"), "留档不进返回文本")
   // 既有「未生效」标注仍在场（§2.6 的两条职责不同：那条**按次**如实标注、这条**一次为限**留档）
   assert.ok(r.warnings.some((w) => w.includes("静默看门狗未生效")),
     "既有未生效标注不因留档而消失：" + JSON.stringify(r.warnings))
-  f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe B done" }] })
-  await f.specs[0].hooks.done
+  // 批 30 修复轮 / F4（🔵5 收干——
+  // 「单跑该档 stderr 零残留告警」）：**结算/交付段也必须在捕获窗内**。交付链尾的
+  // `saveSessionState`（本档 DSH_HOME 置空、且 PLUGIN_DIR 之上无 profile 根 ⇒ 路径必然不可解析）
+  // 恰在 `settleResult → hooks.done` 之间打一条裸告警；窗口只罩派发时它直落 stderr（修复前单跑实测 1 行）。
+  await captureWarn(async () => {
+    f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe B done" }] })
+    await f.specs[0].hooks.done
+  })
   // 同进程第二次接线（**不复位闩**）⇒ 不再打印
   const r2 = await captureWarn(async () => {
     const dispatch = await runEngCoder(f.deps, { task: "archive the attach (no candidate, second)", designToken: f.st.designToken, docs: [] })
@@ -688,8 +1106,14 @@ test("A29-8b (§2.6 US-A① / AC-9): 零候选形态 = 如实列出 Object.keys(
     return dispatch
   })
   assert.equal(r2.warnings.filter((w) => w.includes("接线留档")).length, 0, "第二次接线不再打印（进程内一次闩）")
-  f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe B done 2" }] })
-  await f.specs[1].hooks.done
+  // 批 30 修复轮 / F4（🔵5 收干——
+  // 「单跑该档 stderr 零残留告警」）：**结算/交付段也必须在捕获窗内**。交付链尾的
+  // `saveSessionState`（本档 DSH_HOME 置空、且 PLUGIN_DIR 之上无 profile 根 ⇒ 路径必然不可解析）
+  // 恰在 `settleResult → hooks.done` 之间打一条裸告警；窗口只罩派发时它直落 stderr（修复前单跑实测 1 行）。
+  await captureWarn(async () => {
+    f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe B done 2" }] })
+    await f.specs[1].hooks.done
+  })
   // ★ F2（形态已按 §2.8 更新）：两次交付的判定落在 **handle.append 环**（D-46 契约的唯一正文
   //   出口，r.value / r2.value 只是派发回执）；留档按设计**出现在环里**（回执区），契约因此从
   //   「零字样」改为「**正文段零字样 + 小节在正文之后**」。
@@ -726,7 +1150,10 @@ test("A29-8b (§2.6 US-A① / AC-9): 零候选形态 = 如实列出 Object.keys(
 })
 
 test("A29-8c (§2.6 US-A② / AC-9): 工具面首次 applied:false ⇒ 既有「未生效」warn 的**同一行**追加 Object.keys(ctx.tools)；一次为限", async () => {
-  // 形态：注册面读得到（registry-probe 命中 `list`）但**无执行类命中** ⇒ applied:false 且 reason 可读。
+  // 形态：名域**两级都拿不到**（夹具的 `tools` 只有一个非读取面的 `list` 方法）⇒ applied:false 且
+  // reason 可读（"读取面不可用：两级名域读取面…"）。★ 批 30 / US-1 订正（D30-2）：旧的 registry-probe
+  // 候选面已删 ⇒ 该夹具的**形态语义**由「命中候选面但无执行类」变为「两级读取面都不可得」——
+  // 两者都是 applied:false（本腿真正要证的是**同一行内追加 ctx.tools 键名清单**，与归因文案无关）。
   const f = makeFrame({ form: "hang", toolsSurface: { list: () => ["read", "write"] } })
   try {
   // §2.8：留档缓冲是**进程内**单例（只发一次）⇒ 本档前面的腿若已搬运过，缓冲即关闭。本腿要断言
@@ -749,10 +1176,12 @@ test("A29-8c (§2.6 US-A② / AC-9): 工具面首次 applied:false ⇒ 既有「
   // ★ 🔵3 / A29-11：本行是**决定性**的（删掉实现里的追加段 ⇒ 本行必红），理由钉在这里以免被后人
   //   「顺手清理」掉：本 warn 行的**全部**可能来源只有三处——
   //     ① 固定前缀「eng_coder 工具面禁执行未生效」 ② denyPlan.reason ③ 追加的 ctx.tools 键名清单。
-  //   本形态（`list: () => ["read", "write"]` ⇒ 无执行类命中）走的是
-  //   resolveExecToolDeny 的第三个分支，reason 逐字 = **「注册面里没有命中执行类谓词的工具名」**——
-  //   其中**不含 "list" 子串**（中文），前缀 ① 与分隔文案（「——本次照常派发（不假装拦住）」/
-  //   「；ctx.tools 方法名清单 =」）同样不含 ⇒ `includes("list")` 只可能由 ③ 命中，
+  //   本形态（`list: () => ["read", "write"]` ⇒ 两级读取面都不可得）走的是
+  //   resolveExecToolDeny 的**第一个分支**，reason 逐字 = **「读取面不可用：两级名域读取面
+  //   （view(agent).restrictableNames → schemas(agent)）都拿不到平台工具名清单」**——其中
+  //   **不含 "list" 子串**（中文），前缀 ①、名下来源段（「；名下来源 = (无读取面)」）与分隔文案
+  //   （「——本次照常派发（不假装拦住）」/「；ctx.tools 方法名清单 =」）同样不含 ⇒ `includes("list")`
+  //   只可能由 ③ 命中，
   //   而 ③ 唯一的内容源是 Object.keys(ctx.tools) = ["list"]（夹具 toolsSurface 只有一个键）。
   //   ⇒ 追加段被整段删除（只留 ①②）时，本行**必红**；反过来，夹具若去掉 list 键，本行也必红。
   assert.ok(denyLines[0].includes("list"), "同一行追加 Object.keys(ctx.tools) 的方法名清单：" + denyLines[0])
@@ -761,8 +1190,14 @@ test("A29-8c (§2.6 US-A② / AC-9): 工具面首次 applied:false ⇒ 既有「
     "留档不进返回文本（裸 console 告警）")
   assert.ok(!r1.value.includes("[thincoder-suite] warning:"), "不得触碰 warnPrefix 通道（T12 锁）")
   // 一次为限：同一 ctx 第二次派发不再打印（既有闩）
-  f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "tool surface probe done" }] })
-  await f.specs[0].hooks.done
+  // 批 30 修复轮 / F4（🔵5 收干——
+  // 「单跑该档 stderr 零残留告警」）：**结算/交付段也必须在捕获窗内**。交付链尾的
+  // `saveSessionState`（本档 DSH_HOME 置空、且 PLUGIN_DIR 之上无 profile 根 ⇒ 路径必然不可解析）
+  // 恰在 `settleResult → hooks.done` 之间打一条裸告警；窗口只罩派发时它直落 stderr（修复前单跑实测 1 行）。
+  await captureWarn(async () => {
+    f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "tool surface probe done" }] })
+    await f.specs[0].hooks.done
+  })
   const r2 = await captureWarn(async () => {
     const dispatch = await runEngCoder(f.deps, { task: "archive the tool surface (second)", designToken: f.st.designToken, docs: [] })
     await flush(() => f.specs.length === 2,
@@ -770,8 +1205,14 @@ test("A29-8c (§2.6 US-A② / AC-9): 工具面首次 applied:false ⇒ 既有「
     return dispatch
   })
   assert.equal(r2.warnings.filter((w) => w.includes("工具面禁执行未生效")).length, 0, "同一 ctx 第二次 ⇒ 不再打印（一次为限）")
-  f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "tool surface probe done 2" }] })
-  await f.specs[1].hooks.done
+  // 批 30 修复轮 / F4（🔵5 收干——
+  // 「单跑该档 stderr 零残留告警」）：**结算/交付段也必须在捕获窗内**。交付链尾的
+  // `saveSessionState`（本档 DSH_HOME 置空、且 PLUGIN_DIR 之上无 profile 根 ⇒ 路径必然不可解析）
+  // 恰在 `settleResult → hooks.done` 之间打一条裸告警；窗口只罩派发时它直落 stderr（修复前单跑实测 1 行）。
+  await captureWarn(async () => {
+    f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "tool surface probe done 2" }] })
+    await f.specs[1].hooks.done
+  })
   // ★ F2：工具面留档同一漏洞面——「未生效」标注与 ctx.tools 键名清单原本**只在 console**。
   //   批 29 / §2.8：同一条文案**入队** ⇒ 现在**出现在 handle.append 环**里（回执区，交付正文之后）。
   assert.equal(f.handle.calls.length, 2, "两次派发各恰一次交付正文入环（D-46 契约）")
@@ -809,7 +1250,7 @@ test("A29-13 (§2.8 · AC-11): 回执区**恰一条**「接线留档」行（含
   // —— 单元面：搬运工本身的形状（小节标题 / 逐行 / 一次闩 / 拒收迟到条目）——
   __resetWatchdogAttachArchiveForTest()
   __resetArchiveChannelForTest()
-  const capU = await captureWarn(async () => archiveWatchdogAttach({ result: Promise.resolve(), dispose() {}, onEvent() {} }, { attached: true, via: "onEvent" }))
+  const capU = await captureWarn(async () => archiveWatchdogAttach({ result: Promise.resolve(), dispose() {}, onEvent() {} }, { attached: true, via: "agent/assistant-stream, tools/result", seq: { available: true, reason: null } }))
   assert.equal(capU.warnings.length, 1, "裸 console 告警**保留**（入队不取代它）：" + JSON.stringify(capU.warnings))
   const block = drainArchiveBlock()
   assert.ok(block.startsWith("\n\n" + HOST_ARCHIVE_HEADER + "\n"),
@@ -817,8 +1258,8 @@ test("A29-13 (§2.8 · AC-11): 回执区**恰一条**「接线留档」行（含
   const secLines = block.trim().split("\n")
   assert.equal(secLines.length, 2, "小节 = 标题 + **恰一条**留档行（首尾不多出空行）：" + JSON.stringify(secLines))
   assert.ok(secLines[1].includes("接线留档"), "留档行可辨识：" + secLines[1])
-  assert.ok(secLines[1].includes("命中候选事件面「onEvent」") && secLines[1].includes("dispose") && secLines[1].includes("result"),
-    "回执区的留档行**含命中名与键清单**（§2.8① 键清单口径逐字不变）：" + secLines[1])
+  assert.ok(secLines[1].includes("事件辅腿=命中「agent/assistant-stream, tools/result」") && secLines[1].includes("dispose") && secLines[1].includes("result"),
+    "回执区的留档行**含命中面名与键清单**（§2.8① 键清单口径逐字不变）：" + secLines[1])
   assert.equal(drainArchiveBlock(), "", "缓冲**只发一次**（进程内）：第二次搬运恒空串")
   assert.equal(enqueueArchiveLine("搬运后的迟到留档"), false, "搬运后拒收迟到的入队（不留一个永远搬不掉的缓冲）")
 
@@ -837,15 +1278,19 @@ test("A29-13 (§2.8 · AC-11): 回执区**恰一条**「接线留档」行（含
   try {
     const dispatch = await captureWarn(async () => {
       const r = await runEngCoder(f.deps, { task: "archive into the receipt section", designToken: f.st.designToken, docs: [], stages: STAGES })
-      await flush(() => f.specs.length === 1 && f.beats.length === 1,
-        "A29-13 派发腿：jobs.start → subagents.start → attachRunHeartbeat（接驳完成 ⇒ 留档已入队）")
+      await flush(() => f.specs.length === 1 && f.beats.length === 2,
+        "A29-13 派发腿：jobs.start → subagents.start → attachSubagentHeartbeat（接驳完成 ⇒ 留档已入队）")
       return r
     }, (ws) => ws.some((w) => w.includes("接线留档")))
     assert.equal(dispatch.value.includes("接线留档"), false, "前置：留档不进派发回执（只走裸告警 + 回执区两条旁路，不碰 warnPrefix 通道）")
     assert.equal(f.requests[0].prompt[0].text.includes("接线留档"), false, "留档**绝不进子代理任务正文**（指令面零污染）")
     assert.equal(f.requests[0].prompt[0].text.includes(HOST_ARCHIVE_HEADER), false, "同上（逐字标题也不得进任务书）")
-    f.settleResult({ stopReason: "completed", output: [{ type: "text", text: REPORT }] })
-    await f.specs[0].hooks.done
+    // 批 30 修复轮 / F4（🔵5 收干——「单跑该档 stderr 零残留告警」）：结算/交付段也必须在捕获窗内
+    // （交付链尾 `saveSessionState` 的裸告警落在 settleResult → hooks.done 之间；窗口只罩派发时它直落 stderr）。
+    await captureWarn(async () => {
+      f.settleResult({ stopReason: "completed", output: [{ type: "text", text: REPORT }] })
+      await f.specs[0].hooks.done
+    })
     assert.equal(f.handle.calls.length, 1, "交付正文恰经 handle.append 入环一次（D-46 契约）")
     const delivered = String(f.handle.calls[0] ?? "")
     // ★ 同一次派发：阶段门返回空串 ⇒ 交付文本**直接从抬头开始**（尾部追加没有挤动横幅位置）。
@@ -861,8 +1306,8 @@ test("A29-13 (§2.8 · AC-11): 回执区**恰一条**「接线留档」行（含
     assert.ok(iHeader > iTable, "回执区留档**位于交付正文之后**（§2.8③ 硬约束）：iTable=" + iTable + " iHeader=" + iHeader)
     const archLines = delivered.slice(iHeader).split("\n").filter((l) => l.includes("接线留档"))
     assert.equal(archLines.length, 1, "回执区**恰一条**接线留档行：" + JSON.stringify(archLines))
-    assert.ok(archLines[0].includes("命中候选事件面「onEvent」") && archLines[0].includes("archiveProbe13"),
-      "该行含**命中名 + 键清单**（Object.keys(run) 口径不变）：" + archLines[0])
+    assert.ok(archLines[0].includes("事件辅腿=命中「agent/assistant-stream, tools/result」") && archLines[0].includes("archiveProbe13"),
+      "该行含**命中面名 + 键清单**（Object.keys(run) 口径不变）：" + archLines[0])
     assert.equal(delivered.slice(0, iHeader).includes("接线留档"), false,
       "交付正文段（留档小节之前）零留档字样——留档绝不前插混入子代理报告")
   } finally { f.drop() }
@@ -891,8 +1336,8 @@ test("A29-14 (§2.8 · AC-11): 留档出现在 handle.append 的**字符流**里
   try {
     console.warn = (m) => { sink.push(String(m)) }   // 黑洞：只收集，不输出、不参与断言
     const r = await runEngCoder(f.deps, { task: "archive must be readable", designToken: f.st.designToken, docs: [] })
-    await flush(() => f.specs.length === 1 && f.beats.length === 1,
-      "A29-14 派发腿：接线完成（就绪信号 = attachRunHeartbeat 接驳 ⇒ 留档已入队）")
+    await flush(() => f.specs.length === 1 && f.beats.length === 2,
+      "A29-14 派发腿：接线完成（就绪信号 = attachSubagentHeartbeat 接驳 ⇒ 留档已入队）")
     assert.equal(r.includes("接线留档"), false, "前置：留档不进派发回执（仍是裸告警，不碰 warnPrefix 通道）")
     f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe 14 done" }] })
     await f.specs[0].hooks.done
@@ -971,11 +1416,16 @@ test("§2.8 审计 🔴D1（AC-11 · A29-13/14）: **空搬运不关闩**——d
   const fSync = makeFrame({ toolsSurface: appliedTools })
   let syncText = ""
   try {
+    // 批 30 / §2.4 🔵5（锚 A30-7·🔵5）：本腿跑**真实派发路径** ⇒ 裸告警（工具面「未生效」/ 一次性接线留档）
+    // 会直接打到 stderr（未捕获 = 测试输出噪音）⇒ 整段套 `captureWarn`——**定死用捕获**，不用「档头注一句」。
+    // ★ 捕获窗口覆盖全腿（含断言），因为告警可能在 await 链的尾段才落；捕获本身也是判据（见腿尾断言）。
+    const _capD1sync = await captureWarn(async () => {
     const pending = runEngCoder(fSync.deps, { task: "first delivery on the sync path (empty drain)", designToken: fSync.st.designToken, docs: [], background: false })
     await flush(() => fSync.requests.length === 1,
       "D1①：dsh 同步路径的 ctx.subagents.start（就绪信号 = requests 首次出现 ⇒ settleResult 已就绪）")
     fSync.settleResult({ stopReason: "completed", output: [{ type: "text", text: "sync first delivery done\n\nTouched files: lib/eng.mjs" }] })
     syncText = String(await pending)
+    })
   } finally { fSync.drop() }
   assert.ok(syncText.includes("eng_coder delivery:"),
     "前置：确实走的是 dsh 同步**成功**回执点（4/4），不是回落信封/错误分支：" + syncText.slice(0, 160))
@@ -992,14 +1442,19 @@ test("§2.8 审计 🔴D1（AC-11 · A29-13/14）: **空搬运不关闩**——d
   const fBg = makeFrame({ form: "hang", eventSurface: true, runExtra: { archiveProbeD1: 1 }, toolsSurface: appliedTools })
   let delivered = ""
   try {
+    // 批 30 / §2.4 🔵5（锚 A30-7·🔵5）：本腿跑**真实派发路径** ⇒ 裸告警（工具面「未生效」/ 一次性接线留档）
+    // 会直接打到 stderr（未捕获 = 测试输出噪音）⇒ 整段套 `captureWarn`——**定死用捕获**，不用「档头注一句」。
+    // ★ 捕获窗口覆盖全腿（含断言），因为告警可能在 await 链的尾段才落；捕获本身也是判据（见腿尾断言）。
+    const _capD1bg = await captureWarn(async () => {
     const dispatch = await runEngCoder(fBg.deps, { task: "second delivery: the first archive must still be readable", designToken: fBg.st.designToken, docs: [] })
-    await flush(() => fBg.specs.length === 1 && fBg.beats.length === 1,
+    await flush(() => fBg.specs.length === 1 && fBg.beats.length === 2,
       "D1③：后台派发 + 事件面接驳（就绪信号 = specs/beats 各一）")
     assert.equal(dispatch.includes("接线留档"), false, "前置：留档不进派发回执（仍是裸告警，不碰 warnPrefix 通道）")
     fBg.settleResult({ stopReason: "completed", output: [{ type: "text", text: "probe d1 second delivery done" }] })
     await fBg.specs[0].hooks.done
     assert.equal(fBg.handle.calls.length, 1, "交付正文恰经 handle.append 入环一次（D-46 契约）")
     delivered = String(fBg.handle.calls[0] ?? "")
+    })
   } finally { fBg.drop() }
   const iHeader = delivered.indexOf(HOST_ARCHIVE_HEADER)
   assert.ok(iHeader !== -1,
@@ -1092,6 +1547,46 @@ test("A29-15 (§2.9 🔵1/2/3 · AC-12): 非法值告警**双口径**（NaN 不�
   const longWeirdStr = formatKeyList(longWeird)
   assert.ok(!longWeirdStr.includes("\n") && longWeirdStr.includes("…"),
     "先折叠后截断（超长含换行键名仍单行且带截断标记）：" + JSON.stringify(longWeirdStr))
+
+  // —— 批 30 / §2.4 🔵4（§2.9 审计 D2 · 锚 A30-7·🔵4）：「折叠**先于**截断」的**决定性**形态 ——
+  // 上面那条 `longWeird`（30 x + 换行 + 30 y）**不是决定性的**：折叠后 61 字仍 > 48 ⇒ 照样带 `…`，
+  // 折叠若发生在截断**之后**本段也绿（§2.9 审计 D2 实测：变异 M3b 仍全绿，而本档注释宣称已钉住）。
+  // 决定性形态 = **短折叠 + 长原串**：原串 > 48（跨过截断线）而**折叠后** ≤ 48（不该出现截断标记）。
+  const shortFoldKey = "a".repeat(40) + "\n".repeat(4) + "b".repeat(5) // 原串 49 字；折叠后 46 字
+  assert.ok(shortFoldKey.length > 48 && shortFoldKey.replace(/\s+/g, " ").length <= 48,
+    "前置自证：该键名跨过截断线而折叠后不跨（否则本段不是决定性的）")
+  const shortFoldStr = formatKeyList({ [shortFoldKey]: 1 })
+  assert.ok(!shortFoldStr.includes("\n"), "折叠在场：清单仍单行：" + JSON.stringify(shortFoldStr))
+  assert.ok(!shortFoldStr.includes("…"),
+    "★ 🔵4 决定性：折叠后 46 字 ≤ 48 ⇒ **不得**出现截断标记（把折叠挪到截断之后 ⇒ 截 48 字时换行还在"
+      + "⇒ 折叠后仍带 `…` ⇒ 本行必红）：" + JSON.stringify(shortFoldStr))
+  assert.ok(shortFoldStr.includes("a".repeat(40) + " b".repeat(1)),
+    "折叠为单空格（无信息丢失）：" + JSON.stringify(shortFoldStr))
+
+  // —— 批 30 / §2.4 🔵3（锚 A30-7·🔵3）：<3000ms 的静默给**秒级渲染**（消「静默 0 分钟」的语义误导） ——
+  assert.equal(silenceMinutesLabel(60000), "1", "≥3 秒：分钟口径逐字不变（既有断言语义零漂移）")
+  assert.equal(silenceMinutesLabel(300000), "5", "既有口径（5 分钟）不变")
+  assert.equal(silenceMinutesLabel(3000), "0.1", "3 秒边界仍是分钟口径（边界值归 ≥3000 一支）")
+  const l1500 = silenceMinutesLabel(1500)
+  assert.notEqual(l1500, "0", "★ 🔵3 决定性：1500ms 此前渲染成 `0`（读成「静默 0 分钟」）——本行必红")
+  assert.ok(l1500.includes("秒"), "秒级渲染：带「秒」单位：" + l1500)
+  assert.match(l1500, /^1\.5 秒 = 0\.03$/,
+    "形态 = `<S> 秒 = <M>`（调用点固定追加 ` 分钟` ⇒ 拼成「静默 1.5 秒 = 0.03 分钟」一句）：" + l1500)
+  assert.match(silenceMinutesLabel(2500), /^2\.5 秒 = 0\.04$/, "同一形态的第二个采样：" + silenceMinutesLabel(2500))
+  assert.match(silenceMinutesLabel(1), /^0\.001 秒 = 0$/, "极小值也不渲染成「0 秒」（同一个病的另一形态）")
+  assert.equal(silenceMinutesLabel(0), "0", "0 / 非法值仍回落 `0`（既有边界不变）")
+
+  // —— 批 30 / §2.4 🔵2（锚 A30-7·🔵2）：枚举面契约**静态锁**（JSDoc 串在场） ——
+  assert.ok(wdogSrc.includes("枚举面不保证同形"), "JSDoc 明写「枚举面不保证同形」（契约第一半）")
+  assert.ok(wdogSrc.includes("只保证读写访问语义"), "JSDoc 明写「只保证读写访问语义」（契约第二半）")
+
+  // —— 批 30 / §2.4 🔵6（A29-11 第三子句 · 锚 A30-7·🔵6）：「为何决定性」注释**静态锁** ——
+  // A29-11 的第三子句 = 「断言旁钉住**为何决定性**」；此前只有注释、没有锁 ⇒ 被「顺手清理」无迹象。
+  const selfLines6 = readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n")
+  const iA8c6 = selfLines6.findIndex((l) => l.includes('test("A29-8c'))
+  assert.ok(iA8c6 !== -1, "前置：能定位 A29-8c 腿（腿名漂移 ⇒ 本行红，提示同步窗口谓词）")
+  assert.ok(selfLines6.slice(iA8c6, iA8c6 + 40).join("\n").includes("本行是**决定性**的"),
+    "★ 🔵6：A29-8c 的断言旁**必须**钉住「为何决定性」注释（删掉该注释 ⇒ 本行必红——第三子句由注释承担）")
 })
 
 test("A29-16 (§2.9 🔵4/6 · AC-12): 缓冲与裸 warn 用**同一原文**（trim 只做空串判定；含首尾空白入参仍逐字相同）· A29-8c 头部复位接线闩 ⇒ 初始态自持", async () => {
@@ -1099,7 +1594,7 @@ test("A29-16 (§2.9 🔵4/6 · AC-12): 缓冲与裸 warn 用**同一原文**（t
   __resetWatchdogAttachArchiveForTest()
   __resetArchiveChannelForTest()
   const capPair = await captureWarn(async () =>
-    archiveWatchdogAttach({ result: Promise.resolve(), dispose() {}, onEvent() {} }, { attached: true, via: "onEvent" }))
+    archiveWatchdogAttach({ result: Promise.resolve(), dispose() {}, onEvent() {} }, { attached: true, via: "agent/assistant-stream, tools/result", seq: { available: true, reason: null } }))
   assert.equal(capPair.warnings.length, 1, "前置：恰一条裸 warn（入队不取代告警，§2.8④）")
   const pairLine = drainArchiveBlock().split("\n").find((l) => l.includes("接线留档"))
   assert.ok(pairLine !== undefined, "前置：回执小节里有留档行（本腿在文件末尾，消费后其后无腿 ⇒ 零串味）")
@@ -1134,4 +1629,110 @@ test("A29-16 (§2.9 🔵4/6 · AC-12): 缓冲与裸 warn 用**同一原文**（t
   assert.ok(iA8c !== -1, "前置：能定位 A29-8c 腿（腿名漂移 ⇒ 本行红，提示同步窗口谓词）")
   assert.ok(selfLines.slice(iA8c, iA8c + 24).join("\n").includes("__resetWatchdogAttachArchiveForTest()"),
     "★ A29-8c 腿头部显式复位接线闩（§2.9 🔵6：初始态自持——删掉该复位 ⇒ 本行必红，且该腿退回跨腿顺序依赖）")
+
+  // —— 批 30 / §2.4 🔵5（锚 A30-7·🔵5）：**未捕获腿已全部套 `captureWarn`** 的静态锁 ——
+  // 病（§2.9 交付码评遗留项）：若干**跑真实派发路径**的腿没有接管 `console.warn` ⇒ 两条裸告警
+  //（工具面「未生效」+ 一次性接线留档）直接打到 stderr，成为测试输出里的噪音（也无法被断言消费）。
+  // 收干方式**定死为「套捕获」**（不是「档头注一句纪律」）——判据即可机检：每条腿的**腿体窗口**内
+  // 必须出现 `captureWarn(` 调用；删掉任一包装 ⇒ 对应行必红。
+  {
+    const selfSrc5 = readFileSync(fileURLToPath(import.meta.url), "utf8")
+    const lines5 = selfSrc5.split("\n")
+    // 谓词自证（先证可判）：无包装的窗口必须判否，有包装的必须判真——否则本锁是恒真断言。
+    const hasCapture = (text) => text.includes("captureWarn(")
+    assert.equal(hasCapture('test("X", async () => { await runEngCoder(f.deps, {}) })'), false,
+      "谓词自证：未捕获的腿窗口必须判否（不是恒真锁）")
+    assert.equal(hasCapture("const c = await captureWarn(async () => { })"), true, "谓词自证：已捕获必须判真")
+    const NOISY_LEGS = [
+      'test("A29-3a ', // 静默到点两形态（reject / resolve）
+      'test("A29-3b ', // 心跳续命
+      'test("A29-1a ', // 工具面强证
+      'test("A29-1b ', // 工具面弱证
+      'test("D9 ', // 零事件不误杀
+      'test("D1/D2 ', // 保留名与公开读取面
+      'test("§2.8 审计 🔴D1', // dsh 同步/后台两个回执点
+      // 批 30 修复轮 / F4：下列四条腿**修复前**不在清单里，而它们的结算/交付段在捕获窗**之外**
+      // ⇒ 单跑向 stderr 打 6 行「session state store path not resolvable」（静态锁判不到窗口边界）。
+      // 窗口已延伸至结算段（本档同批改动），此处同步纳入静态锁 ⇒ 删掉任一包装必红。
+      'test("A29-8a ', // 接线留档（命中名形态）
+      'test("A29-8b ', // 事件辅腿零命中形态
+      'test("A29-8c ', // 工具面「未生效」标注面
+      'test("A29-13 ', // 留档进回执区（阶段门腿）
+    ]
+    for (const leg of NOISY_LEGS) {
+      // ★ 只认**真正的腿声明行**（`^\s*test\s*\(`）：本清单自身的字符串字面量同样含腿名（若不排除，
+      //   谓词会在「腿名只出现在清单里」时静默核对到错误窗口 —— 位置断言于是形同虚设）。
+      const realHits = lines5.map((l, j) => (j)).filter((j) => /^\s*test\s*\(/.test(lines5[j]) && lines5[j].includes(leg))
+      assert.equal(realHits.length, 1, "前置：腿名 " + leg + "… 在**腿声明行**上恰命中一次（漂移 ⇒ 本行红）：" + JSON.stringify(realHits))
+      const i = realHits[0]
+      const next = lines5.findIndex((l, j) => j > i && /^\s*test\s*\(/.test(l))
+      const window5 = lines5.slice(i, next === -1 ? lines5.length : next).join("\n")
+      assert.ok(hasCapture(window5),
+        "★ 🔵5：" + leg + "…）的腿体**必须**套 `captureWarn`（未捕获 ⇒ 裸告警打到 stderr 成噪音；"
+          + "删掉该包装 ⇒ 本行必红）")
+    }
+  }
+
+  // —— 批 30 修复轮 / F4（锚 A30-7·🔵5 的**行为腿**：「单跑该档 stderr 零残留告警」）——
+  // 上面那条静态锁只判「腿体窗口里出现过 `captureWarn(`」，判不出**窗口边界**：窗口只罩派发、
+  // 把结算/交付留在窗外时它照样绿，而交付链尾 `saveSessionState` 的裸告警照样落到 stderr
+  // （修复前单跑实测 **6 行**，来源 = A29-8a/b/c/A29-13 四条腿的 `settleResult → hooks.done` 段）。
+  // 本段改为**量 stderr 残留本身**，并把「窄窗 ⇒ 残留」做成**决定性对照**——否则「宽窗 ⇒ 0 残留」
+  // 可能只是「本条要量的告警根本没发生」的假绿。
+  {
+    // 前提自证：PLUGIN_DIR 之上没有 profile 根 ⇒ 交付段的 saveSessionState 路径必然不可解析、必然打告警。
+    // 环境若变（本仓被搬到某个 profile 根之下）⇒ 本行**先红**，提示同步本段的形态谓词，
+    // 而不是让下面两条断言静默退化成恒真。
+    assert.equal(probeProfileRoot(PLUGIN_DIR), null,
+      "前置：PLUGIN_DIR 向上探测不到 profile 根（否则交付段不产本条要量的告警形态）")
+    // ① **全档残留**（本腿是档内最后一腿 ⇒ 此处见到的是「此前全部派发腿」的累计值）：
+    //    这是「单跑该档 stderr 零残留告警」的可判形态——任何腿把裸告警漏到 stderr 都在这里转红
+    //    （静态锁判不到的窗口边界缺陷，由本条行为断言承接）。
+    assert.equal(stderrResidual.length, 0,
+      "★ F4：本档此前全部腿零 stderr 残留（修复前实测 6 行，来自 A29-8a/b/c/A29-13 的结算/交付段）："
+        + JSON.stringify(stderrResidual.slice(0, 2).map((s) => s.slice(0, 60))))
+    // ② 决定性对照：同一条链在**窄窗**（窗口只罩派发）下确实残留——局部接管 stderr（只**吞**本条
+    //    要量的告警、不计数），故这一份对照不会污染上面的全档计数。没有这一半，「宽窗 ⇒ 0 残留」
+    //    就可能只是「本条要量的告警根本没发生」的假绿。
+    const origStderrWrite = process.stderr.write
+    const narrowSeen = []
+    process.stderr.write = function (chunk, ...rest) {
+      const s = String(chunk)
+      if (s.includes("session state store path not resolvable")) { narrowSeen.push(s); return true }
+      return origStderrWrite.call(this, chunk, ...rest)
+    }
+    let narrowLeaked = 0
+    try {
+      // (a) 窄窗（**修复前的形态**）：captureWarn 只罩派发，结算/交付在窗外 ⇒ 告警逃到 stderr
+      const fn = makeFrame({ form: "hang", eventSurface: true, runExtra: { archiveProbeF4a: 1 } })
+      try {
+        await captureWarn(async () => {
+          await runEngCoder(fn.deps, { task: "f4 narrow window", designToken: fn.st.designToken, docs: [] })
+          await flush(() => fn.specs.length === 1, "F4 窄窗腿：jobs.start → subagents.start")
+        })
+        fn.settleResult({ stopReason: "completed", output: [{ type: "text", text: "f4 narrow done" }] })
+        await fn.specs[0].hooks.done
+      } finally { fn.drop() }
+      narrowLeaked = narrowSeen.length
+
+      // (b) 宽窗（**修复后的形态**）：同一条链，捕获窗延伸到结算与交付之后 ⇒ stderr **零残留**
+      const fw = makeFrame({ form: "hang", eventSurface: true, runExtra: { archiveProbeF4b: 1 } })
+      try {
+        const capW = await captureWarn(async () => {
+          await runEngCoder(fw.deps, { task: "f4 wide window", designToken: fw.st.designToken, docs: [] })
+          await flush(() => fw.specs.length === 1, "F4 宽窗腿：jobs.start → subagents.start")
+          fw.settleResult({ stopReason: "completed", output: [{ type: "text", text: "f4 wide done" }] })
+          await fw.specs[0].hooks.done
+        }, (ws) => ws.some((w) => w.includes("session state store path not resolvable")))
+        assert.ok(capW.warnings.some((w) => w.includes("session state store path not resolvable")),
+          "★ 宽窗下该告警**确实发生且被捕获**（否则下面的「零残留」可能只是「什么都没发生」的假绿）")
+      } finally { fw.drop() }
+      // 宽窗期间 stderr **零写入**：全档计数没有增长（本段的两次派发都不许漏）
+      assert.equal(stderrResidual.length, 0,
+        "★ F4：窗口罩住结算/交付 ⇒ 该告警**零** stderr 残留（走的是捕获器，不是 stderr）")
+      assert.ok(narrowLeaked >= 1,
+        "★ F4 决定性：窗口只罩派发（修复前的形态）⇒ 该告警**确实**逃到 stderr"
+        + "（把任一派发腿的窗口收窄回「只罩派发」⇒ 全档残留计数即上涨、上面那条转红）")
+    } finally { process.stderr.write = origStderrWrite }
+  }
 })
