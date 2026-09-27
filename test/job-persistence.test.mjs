@@ -3,7 +3,9 @@
 // 覆盖：US-1 清扫/轮转（A27-1 超龄 · A27-2 条数+缺省上限 · A27-3 负控「只清自己的」）·
 // US-2 非法 pathForm warn（A27-6）· US-5 cwdHint 透传（A27-8 静态 7 处 + 收口点直喂行为腿 +
 // eng 真实派发行为腿——批 27 分歧修复 D5）·
-// US-6 零落盘回归锚（A27-4：home 不可解析 ⇒ 零文件落盘 + 进程内只 warn 一次）。
+// US-6 零落盘回归锚（A27-4：home 不可解析 ⇒ 零文件落盘 + 进程内只 warn 一次）·
+// 批 29 §2.6 **US-B**（A29-9：`maxFiles` 与 `maxAgeDays` **同向**收紧为 `> 0`——0 被拒 ⇒ 回落
+// 缺省 200 · 缺省 200 不变 · **正有限小数仍生效**）。
 //
 // 全部用例走 dshHomeOverride / cwdHint 注入缝 + 临时目录（对齐 dsh017-compat / write-atomic 先例），
 // **不写真实 $DSH_HOME**；A27-4 的「只 warn 一次」判据此前**依赖用例顺序**（只有本进程第一个触发
@@ -416,6 +418,48 @@ test("A29-6②③ (US-4 🔵②③): kept 口径注释在场（stat 失败不计
   } finally {
     console.warn = origWarn
     rmSync(hintDir, { recursive: true, force: true })
+  }
+})
+
+test("A29-9 (§2.6 US-B / AC-9): maxFiles 与 maxAgeDays **同向**收紧——0 被拒（回落缺省 200）、缺省 200 不变、正有限小数仍生效", () => {
+  // 方向一致性（本条判据）：maxAgeDays 已在 A29-6① 收紧为 `> 0`；maxFiles 此前仍收 `0`（= 保留
+  // 0 个 = 全删）——同一函数里两把方向**相反**的「清空」脚枪。源级 + 行为面各锁一遍：
+  const src = readFileSync(new URL("../lib/job-outcome.mjs", import.meta.url), "utf8")
+  assert.match(src, /o\.maxFiles > 0/, "maxFiles 谓词必须逐字为 `> 0`（与 maxAgeDays 同向）")
+  assert.ok(!/o\.maxFiles >= 0/.test(src), "旧的 `>= 0` 谓词必须已删（0 = 保留 0 个 = 全删）")
+  assert.ok(!/Number\.isInteger\(o\.maxFiles\)/.test(src), "「只认整数」的旧谓词必须已删（正有限小数须生效）")
+  assert.match(src, /Number\.isFinite\(o\.maxFiles\) && o\.maxFiles > 0 \? o\.maxFiles : 200/,
+    "缺省 200 不变（谓词与缺省在同一表达式内可核）")
+  assert.ok(src.includes("方向相反"), "JSDoc 写明理由：与 maxAgeDays 同向——同一函数不得有两把方向相反的「清空」脚枪")
+
+  const home = makeHome("a29-9")
+  try {
+    // 5 个文件，第三参是**年龄**（天）⇒ i 越大**越旧** ⇒ 最新的是 mf-1、最旧的是 mf-5
+    // （宿主验收订正：初版注释写成「i 越大越新」并把期望写成 mf-4/5，与实际方向相反——**实现是对的**）。
+    // 年龄轴显式放大到 30 天以隔离条数轴。
+    for (let i = 1; i <= 5; i++) plant(home, "eng-mf-" + i + ".txt", 0.001 * i)
+    writeIndex(home, Array.from({ length: 5 }, (_, k) => indexLine("eng-mf-" + (k + 1), "eng")))
+    // ① `maxFiles: 0` 被拒 ⇒ 回落缺省 200 ⇒ 条数轴零删除（5 个全活）
+    const r0 = sweepJobReports({ dshHomeOverride: home, maxAgeDays: 30, maxFiles: 0 })
+    assert.ok(r0 && r0.deletedAge === 0 && r0.deletedCount === 0 && r0.kept === 5,
+      "maxFiles:0 ⇒ 非法 ⇒ 回落缺省 200：条数轴零删除（0 生效 = 保留 0 个 ⇒ 5 个全删）：" + JSON.stringify(r0))
+    for (let i = 1; i <= 5; i++) {
+      assert.equal(existsSync(join(jobsDir(home), "eng-mf-" + i + ".txt")), true,
+        "★ 5 个文件必须全活——0 被拒的直接行为证据：eng-mf-" + i)
+    }
+    // ③ **正有限小数**仍生效：1.5 ⇒ 保留 2 个（`i < 1.5` 的 i=0/1）、截断其余 3 个。
+    //    旧谓词（Number.isInteger）会把 1.5 静默降级成缺省 200 ⇒ deletedCount=0 / kept=5 ⇒ 本段必红。
+    const r15 = sweepJobReports({ dshHomeOverride: home, maxAgeDays: 30, maxFiles: 1.5 })
+    assert.ok(r15 && r15.deletedCount === 3 && r15.kept === 2,
+      "正有限小数 1.5 必须生效（保留 2 个 / 截断 3 个）：" + JSON.stringify(r15))
+    assert.deepEqual(readdirSync(jobsDir(home)).filter((n) => n.endsWith(".txt")).sort(),
+      ["eng-mf-1.txt", "eng-mf-2.txt"], "小数阈值按 mtime 从新到旧保留 2 个（最旧 3 个被截断；最新 = 年龄最小 = mf-1/2）")
+    // ② 缺省 200 的行为面：不传 maxFiles ⇒ 远未触顶 ⇒ 零截断（精确的 200 条腿见 A27-2 缺省上限用例）
+    const rDefault = sweepJobReports({ dshHomeOverride: home, maxAgeDays: 30 })
+    assert.ok(rDefault && rDefault.deletedCount === 0 && rDefault.kept === 2,
+      "不传 maxFiles ⇒ 缺省 200（2 个 ≪ 200 ⇒ 零截断）：" + JSON.stringify(rDefault))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
   }
 })
 

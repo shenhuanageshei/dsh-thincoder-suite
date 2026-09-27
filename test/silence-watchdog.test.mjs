@@ -9,6 +9,11 @@
 //   · **A29-2**：取不到平台工具名清单 ⇒ **如实标注「未生效」**（deny 保持逐字基线，不假装拦住）；
 //     applied:false 的**两条归因各一条腿且可判**：**读取面不可用**（读取函数返回 null）vs
 //     **面可用但可限制名集为空**（返回 []——公开面在场，只是名集为空）。
+//   · **A29-8a / A29-8b**（批 29 §2.6 US-A① / D-53 一次性留档，**两态各自成腿 ⇒ 可独立转红**）：
+//     看门狗**接线结果的首次留档**——attached 真 ⇒ 记下**命中的候选方法名**；假 ⇒ 列出
+//     `Object.keys(run)`（有界 / 去重 / 截断安全）；进程内**只一次**；返回文本零污染。
+//   · **A29-8c**（§2.6 US-A②）：工具面「未生效」warn 的**同一行**追加 `Object.keys(ctx.tools)`
+//     键名清单（一次为限；仍不进返回文本）。
 //
 // ★ 纪律（本档自持）：
 //   ① **全部用注入缝，零真实等待**——假时钟（now）+ 假 setInterval/clearInterval（手动 tick，
@@ -21,6 +26,7 @@
 //      （台账行 docs/test-lifecycle.md 由主代理同批登记）。
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync, readdirSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
@@ -29,6 +35,7 @@ import { sessionState, dropSession } from "../lib/state.mjs"
 import {
   ENG_SILENCE_ABORT_MS, ENG_SILENCE_POLL_MS, resolveEngSilenceAbortMs,
   createSilenceWatchdog, attachRunHeartbeat, watchJobHandle, silenceMinutesLabel,
+  formatKeyList, KEY_LIST_MAX, archiveWatchdogAttach, __resetWatchdogAttachArchiveForTest,
 } from "../lib/silence-watchdog.mjs"
 
 // 与既有档同款隔离：DSH_HOME 置空 ⇒ home 不可解析 ⇒ 不碰真实盘（本档只测机制，不测落盘面）
@@ -59,8 +66,11 @@ const llmStub = {
  *   · 假 jobs（0.1.7：带参 spec.run(handle)）· 句柄（id + append 记录）
  *   · 桩子代理的结果形态由 form 决定（reject-race / resolve-race / 永不 settle）
  *   · 假时钟 + 假 setInterval（手动 tick）· 采到的 spec 请求与子代理 run 对象
+ *   · `runExtra`：往 run 对象上**追加**键（A29-8 的留档探针——验证键名清单如实反映
+ *     `Object.keys(run)`；刻意用与平台无关的假键名，避免与候选方法名混淆）
  * @param {{form?: "reject"|"resolve"|"hang", eventSurface?: boolean, echoToolNames?: string[]|null,
- *   toolsSurface?: object, abortMs?: number, backstopMs?: number, partialText?: string}} [opts]
+ *   toolsSurface?: object, abortMs?: number, backstopMs?: number, partialText?: string,
+ *   runExtra?: object}} [opts]
  */
 function makeFrame(opts = {}) {
   const form = opts.form ?? "reject"
@@ -103,6 +113,7 @@ function makeFrame(opts = {}) {
       }
       if (eventSurface) run.onEvent = (cb) => { beats.push(cb) }
       if (opts.echoToolNames) run.toolNames = opts.echoToolNames
+      if (opts.runExtra && typeof opts.runExtra === "object") Object.assign(run, opts.runExtra)
       runs.push(run)
       return run
     },
@@ -446,5 +457,170 @@ test("D1/D2 (AC-1): 平台保留名 run_code 不进 deny + 公开读取面 view(
   const deny = f.requests[0].toolFilter.deny
   for (const n of deny.filter((x) => !BASE_DENY.includes(x))) assert.ok(restrictable.includes(n), "派发载荷**新追加部分** ⊆ restrictableNames：" + n)
   assert.ok(!deny.includes("run_code"), "保留名（knownNames 有 / restrictableNames 无）不得下发")
+  f.drop()
+})
+
+// ═══════════════ A29-8（批 29 §2.6 US-A / D-53）：**一次性留档**三腿 ═══════════════
+// 目的（设计 §2.6④）：静默看门狗与工具面禁执行的**生产生效性**本机无法自验 ⇒ 真机放一次就能拿到
+// 「平台到底给了什么」，据此**收敛候选表**（而不是继续猜）。三条腿**各有独立的裁决面**：
+//   · A29-8a：attached 真 ⇒ 记下**命中的候选方法名**（哪个键真管用）；
+//   · A29-8b：零候选 ⇒ 列出 `Object.keys(run)` 并如实标注零候选；
+//   · A29-8c：工具面首次 applied:false ⇒ 既有「未生效」warn 的**同一行**追加 `ctx.tools` 键名清单。
+// 任一形态的实现缺失**只让对应那条腿红**（另两条照绿 ⇒ 可独立转红，互不掩盖）。
+
+test("A29-8a (§2.6 US-A① / AC-9): 接线留档（attached 真）= 记下**命中的候选方法名** + run 键清单；进程内只一次；不进返回文本", async () => {
+  // —— 单元面：留档函数的返回契约（true = 本次真的打印了 / false = 闩已合上）——
+  const runA = { result: Promise.resolve(), dispose() {}, onEvent() {} }
+  __resetWatchdogAttachArchiveForTest()
+  const cap1 = await captureWarn(async () => archiveWatchdogAttach(runA, { attached: true, via: "onEvent" }))
+  assert.equal(cap1.value, true, "首次 ⇒ 真的打印了（返回 true）")
+  assert.equal(cap1.warnings.length, 1, "首次接线**恰一条** warn：" + JSON.stringify(cap1.warnings))
+  assert.ok(cap1.warnings[0].includes("接线留档"), "留档行可辨识：" + cap1.warnings[0])
+  // ★ F1（批 29 §2.6 收尾小单 / 只读分歧审计）：判据必须是**相邻字面**「命中候选事件面「onEvent」」——
+  //   夹具 runA **自带** onEvent 键，而同一行又会打印 run 的键清单 ⇒ 只判 includes("onEvent") 时，
+  //   把 lib/silence-watchdog.mjs 里「命中候选名」那一段整段删掉，本腿**仍然绿**（非决定性）。
+  //   本行把裁决面收敛到「命中名」这一件事上（不改夹具既有语义）。
+  assert.ok(cap1.warnings[0].includes("命中候选事件面「onEvent」"),
+    "attached 真 ⇒ 记下**命中的候选方法名**（相邻字面判定；键清单里的 onEvent 不能顶替它）：" + cap1.warnings[0])
+  assert.ok(cap1.warnings[0].includes("dispose") && cap1.warnings[0].includes("result"),
+    "留档附 run 的键名清单（Object.keys(run)）：" + cap1.warnings[0])
+  assert.ok(!cap1.warnings[0].includes("\n"), "单行（可 grep）")
+  const cap2 = await captureWarn(async () => archiveWatchdogAttach(runA, { attached: true, via: "onEvent" }))
+  assert.equal(cap2.value, false, "第二次 ⇒ 闩已合上（返回 false）")
+  assert.deepEqual(cap2.warnings, [], "**第二次不再打印**（进程内一次闩）")
+
+  // —— 派发腿：走真实接线点（eng.mjs 后台 run() 内 attachRunHeartbeat 之后）——
+  const f = makeFrame({ form: "hang", eventSurface: true, runExtra: { archiveProbeA: 1 } })
+  __resetWatchdogAttachArchiveForTest()
+  const r = await captureWarn(async () => {
+    const dispatch = await runEngCoder(f.deps, { task: "archive the attach (hit)", designToken: f.st.designToken, docs: [] })
+    await flush()
+    return dispatch
+  })
+  const lines = r.warnings.filter((w) => w.includes("接线留档"))
+  assert.equal(lines.length, 1, "派发路径的首次接线也恰一条留档：" + JSON.stringify(r.warnings))
+  // ★ F1：同上——本腿的键清单里同样含 onEvent（archiveProbeA 与之同行）⇒ 只判 includes("onEvent")
+  //   对「命中分支被删」不敏感；改为断言相邻字面（删掉命中分支 ⇒ 必红）。
+  assert.ok(lines[0].includes("命中候选事件面「onEvent」"),
+    "命中名来自**真实接线**（run.onEvent）——相邻字面判定：" + lines[0])
+  assert.ok(lines[0].includes("archiveProbeA"), "键名清单如实反映 Object.keys(run)：" + lines[0])
+  assert.ok(!r.value.includes("接线留档"), "留档**不进返回文本**（裸 console 告警）：" + r.value.slice(0, 120))
+  assert.ok(!r.value.includes("[thincoder-suite] warning:"), "不得触碰 warnPrefix 通道（T12 锁）")
+  f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe A done" }] })
+  await f.specs[0].hooks.done
+  // ★ F2（批 29 §2.6 收尾小单 / 只读分歧审计）：上文的「零污染」两行只覆盖**派发回执**
+  //   （r.value = warnPrefix() + jobsDispatchReply），**没有覆盖 run() 内 jobOutcome 生成的交付正文**
+  //   ⇒ 往交付正文里追加「接线留档」字样，本腿曾经仍然绿（应红）。判定改落在**真实交付文本**上：
+  //   jobOutcome 的唯一正文出口 = handle.append 环（D-46 契约），故读该环，不读回执。
+  assert.equal(f.handle.calls.length, 1, "交付正文恰经 handle.append 入环一次（D-46 契约）")
+  const delivered = String(f.handle.calls[0] ?? "")
+  assert.ok(delivered.includes("archive probe A done"), "前置：环里确实是本次交付正文：" + delivered.slice(0, 120))
+  assert.ok(!delivered.includes("接线留档"),
+    "交付正文（handle.append 环）零留档字样——零污染判定不得只覆盖回执：" + delivered.slice(0, 200))
+  f.drop()
+
+  // —— 静态锁：测试缝（命名约定 + @internal）在**生产路径零引用**（镜像 job-outcome 同款锁）——
+  const libUrl = new URL("../lib/", import.meta.url)
+  const seam = "__resetWatchdogAttachArchiveForTest"
+  const refsSeam = (text) => text.includes(seam)
+  assert.equal(refsSeam("const x = " + seam + "()"), true, "谓词自证：命中即真（不是恒假断言）")
+  assert.equal(refsSeam("const x = 1"), false, "谓词自证：不命中即假")
+  const hits = readdirSync(libUrl)
+    .filter((name) => name.endsWith(".mjs") && name !== "silence-watchdog.mjs")
+    .filter((name) => refsSeam(readFileSync(new URL(name, libUrl), "utf8")))
+  assert.deepEqual(hits, [], "生产路径零引用测试缝：" + JSON.stringify(hits))
+  const wdogSrc = readFileSync(new URL("../lib/silence-watchdog.mjs", import.meta.url), "utf8")
+  assert.ok(wdogSrc.includes("export function " + seam + "("), "命名约定：__ 前缀 + ForTest 后缀")
+  assert.ok(wdogSrc.includes("@internal"), "JSDoc 标注 @internal")
+})
+
+test("A29-8b (§2.6 US-A① / AC-9): 零候选形态 = 如实列出 Object.keys(run)（有界/去重/截断安全）、不报命中名、第二次不再打印", async () => {
+  // —— 派发腿：run 上**一个候选事件方法都没有**（attached:false）——
+  const f = makeFrame({ form: "hang", eventSurface: false, runExtra: { archiveProbeB: 1 } })
+  __resetWatchdogAttachArchiveForTest()
+  const r = await captureWarn(async () => {
+    const dispatch = await runEngCoder(f.deps, { task: "archive the attach (no candidate)", designToken: f.st.designToken, docs: [] })
+    await flush()
+    return dispatch
+  })
+  const lines = r.warnings.filter((w) => w.includes("接线留档"))
+  assert.equal(lines.length, 1, "零候选形态同样**恰一条**留档：" + JSON.stringify(r.warnings))
+  assert.ok(lines[0].includes("零候选"), "attached 假 ⇒ 如实标注零候选（不假装接上了）：" + lines[0])
+  assert.ok(lines[0].includes("archiveProbeB") && lines[0].includes("result") && lines[0].includes("dispose"),
+    "零候选 ⇒ 列出 Object.keys(run)：" + lines[0])
+  assert.ok(!lines[0].includes("onEvent"), "零候选形态不得凭空报命中名")
+  assert.ok(!lines[0].includes("\n"), "单行（可 grep）")
+  assert.ok(!r.value.includes("接线留档"), "留档不进返回文本")
+  // 既有「未生效」标注仍在场（§2.6 的两条职责不同：那条**按次**如实标注、这条**一次为限**留档）
+  assert.ok(r.warnings.some((w) => w.includes("静默看门狗未生效")),
+    "既有未生效标注不因留档而消失：" + JSON.stringify(r.warnings))
+  f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe B done" }] })
+  await f.specs[0].hooks.done
+  // 同进程第二次接线（**不复位闩**）⇒ 不再打印
+  const r2 = await captureWarn(async () => {
+    const dispatch = await runEngCoder(f.deps, { task: "archive the attach (no candidate, second)", designToken: f.st.designToken, docs: [] })
+    await flush()
+    return dispatch
+  })
+  assert.equal(r2.warnings.filter((w) => w.includes("接线留档")).length, 0, "第二次接线不再打印（进程内一次闩）")
+  f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe B done 2" }] })
+  await f.specs[1].hooks.done
+  // ★ F2：与 A29-8a 同一条洞——两次交付的**正文**（handle.append 环）里都不得出现留档字样
+  //   （r.value / r2.value 是派发回执，不是交付正文）。
+  assert.equal(f.handle.calls.length, 2, "两次派发各恰一次交付正文入环（D-46 契约）")
+  assert.ok(f.handle.calls.every((t) => !String(t).includes("接线留档")),
+    "两次交付正文（handle.append 环）均零留档字样：" + JSON.stringify(f.handle.calls.map((t) => String(t).slice(0, 60))))
+  f.drop()
+
+  // —— 键名清单渲染：US-A③ 的三条硬要求（**有界 / 去重 / 截断安全**）——
+  assert.equal(formatKeyList({ a: 1, b: 2 }), "a, b (共 2 项)", "基本形态（逐字）")
+  assert.equal(formatKeyList({ "": 1, a: 2 }), "a (共 1 项)", "空键名不进清单（零诊断价值）")
+  assert.equal(formatKeyList(null), "(零键) (共 0 项)", "null ⇒ 零键（不抛）")
+  assert.equal(formatKeyList(7), "(零键) (共 0 项)", "原始值 ⇒ 零键（不抛）")
+  const throwing = new Proxy({}, { ownKeys() { throw new Error("boom") } })
+  assert.equal(formatKeyList(throwing), "(零键) (共 0 项)",
+    "属性枚举抛错 ⇒ 仍只返回字符串（截断安全：留档自身永不成为故障源）")
+  const many = {}
+  for (let i = 0; i < KEY_LIST_MAX + 6; i++) many["k" + i] = i
+  const manyStr = formatKeyList(many)
+  assert.ok(manyStr.includes("截断，共 " + (KEY_LIST_MAX + 6) + " 项"), "超出上界 ⇒ 只报总数（有界）：" + manyStr.slice(-30))
+  assert.ok(!manyStr.includes("k" + (KEY_LIST_MAX + 1)), "超出上界的键名不进清单（有界）")
+  assert.ok(manyStr.includes("k0") && manyStr.includes("k" + (KEY_LIST_MAX - 1)), "上界内的键名逐字在场")
+  const longKey = {}
+  longKey["x".repeat(80)] = 1
+  assert.ok(formatKeyList(longKey).includes("x".repeat(48) + "…"), "超长键名被截断（截断安全）")
+})
+
+test("A29-8c (§2.6 US-A② / AC-9): 工具面首次 applied:false ⇒ 既有「未生效」warn 的**同一行**追加 Object.keys(ctx.tools)；一次为限", async () => {
+  // 形态：注册面读得到（registry-probe 命中 `list`）但**无执行类命中** ⇒ applied:false 且 reason 可读。
+  const f = makeFrame({ form: "hang", toolsSurface: { list: () => ["read", "write"] } })
+  const r1 = await captureWarn(async () => {
+    const dispatch = await runEngCoder(f.deps, { task: "archive the tool surface", designToken: f.st.designToken, docs: [] })
+    await flush()
+    return dispatch
+  })
+  const denyLines = r1.warnings.filter((w) => w.includes("工具面禁执行未生效"))
+  assert.equal(denyLines.length, 1, "「未生效」标注**恰一行**（键名清单追加在同一行内，不新起一行）：" + JSON.stringify(r1.warnings))
+  assert.ok(denyLines[0].includes("list"), "同一行追加 Object.keys(ctx.tools) 的方法名清单：" + denyLines[0])
+  assert.ok(!denyLines[0].includes("\n"), "仍是单行（可 grep）")
+  assert.ok(!r1.value.includes("工具面禁执行未生效") && !r1.value.includes("ctx.tools 方法名清单"),
+    "留档不进返回文本（裸 console 告警）")
+  assert.ok(!r1.value.includes("[thincoder-suite] warning:"), "不得触碰 warnPrefix 通道（T12 锁）")
+  // 一次为限：同一 ctx 第二次派发不再打印（既有闩）
+  f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "tool surface probe done" }] })
+  await f.specs[0].hooks.done
+  const r2 = await captureWarn(async () => {
+    const dispatch = await runEngCoder(f.deps, { task: "archive the tool surface (second)", designToken: f.st.designToken, docs: [] })
+    await flush()
+    return dispatch
+  })
+  assert.equal(r2.warnings.filter((w) => w.includes("工具面禁执行未生效")).length, 0, "同一 ctx 第二次 ⇒ 不再打印（一次为限）")
+  f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "tool surface probe done 2" }] })
+  await f.specs[1].hooks.done
+  // ★ F2：工具面留档同一漏洞面——「未生效」标注与 ctx.tools 键名清单同样**只在 console**，
+  //   判定必须落在真实交付正文（handle.append 环），不得只看派发回执。
+  assert.equal(f.handle.calls.length, 2, "两次派发各恰一次交付正文入环（D-46 契约）")
+  assert.ok(f.handle.calls.every((t) => !String(t).includes("工具面禁执行未生效") && !String(t).includes("ctx.tools 方法名清单")),
+    "两次交付正文（handle.append 环）均零工具面留档字样：" + JSON.stringify(f.handle.calls.map((t) => String(t).slice(0, 60))))
   f.drop()
 })
