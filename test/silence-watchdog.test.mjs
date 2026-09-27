@@ -14,6 +14,16 @@
 //     `Object.keys(run)`（有界 / 去重 / 截断安全）；进程内**只一次**；返回文本零污染。
 //   · **A29-8c**（§2.6 US-A②）：工具面「未生效」warn 的**同一行**追加 `Object.keys(ctx.tools)`
 //     键名清单（一次为限；仍不进返回文本）。
+//   · **A29-13**（§2.8 · AC-11 · D-53 可读通道）：留档搬进**回执区**——恰一条「接线留档」行（含键清单
+//     与命中名）且**位于交付正文之后**；**同一次派发**里阶段门对合规报告**仍返回空串**（尾部追加不破门禁）。
+//   · **A29-14**（§2.8 · AC-11）：留档出现在 `handle.append` 的**字符流**里（**不只是 console 告警**——
+//     腿体把 console 告警打成黑洞，仍能在字符流里取到留档）；缓冲区**进程内只发一次**。
+//   · **§2.8 审计 🔴D1**（合并修复轮 2026-09-27 · AC-11）：**空搬运不关闩**——dsh 同步回执点
+//     零入队地搬运一次后，首派证据**仍**进得了回执区（同时是 🔵D3 的第二个行为腿）。
+//   · **§2.8 审计 🔵D3**（AC-11）：四个**回执书写点**逐一含搬运调用的**静态**逐点覆盖（行为腿只
+//     覆盖 3/4 与 4/4；codex 两点只有静态覆盖，如实登记、不冒充行为覆盖）。
+//   · **§2.8 审计 🔵D4**：第二次搬运不重复追加在**派发面**也由**闩**决定（复位接线留档的闩后再派
+//     一次 ⇒ 仍不得追加小节）——「删闩」类变异在派发面**必红**。
 //
 // ★ 纪律（本档自持）：
 //   ① **全部用注入缝，零真实等待**——假时钟（now）+ 假 setInterval/clearInterval（手动 tick，
@@ -24,18 +34,33 @@
 //      clearIntervalImpl }；生产路径不传 ⇒ 缺省 Date.now + 全局 setInterval）；
 //   ④ 本档是**新增测试档** ⇒ 同批登记在 test/guard-e.test.mjs 的 T-E19 existing 清单
 //      （台账行 docs/test-lifecycle.md 由主代理同批登记）。
+//   ⑤ **批 29 §2.7（🔵1–🔵4 · A29-11 / A29-12 · AC-10）**：微任务泵**条件驱动**（见 flush 注释，
+//      点名它覆盖的 await 链与对应就绪信号，不再有「恰 8 拍」的隐式契约）；**各派发腿包
+//      try { … } finally { f.drop() }** ⇒ 中途断言失败也不残留注册表条目（故本档**不需要**
+//      「失败运行会残留注册表条目」这条既有约定）；A29-8c 的 `includes("list")` 补「为何决定性」
+//      注释；partial 空契约改**归一形态**断言（`Partial output:` 之后**不得有**非空行（partial 体
+//      为空）+ 其后**全部行**去标签前缀、去空白后**逐字以** advisory 文本**开头**；抗 advisory
+//      **内部折行**，partial 被填充必红——§2.7 审计 D-1/D-2 修复轮，2026-09-27）。
+//   ⑥ **批 29 §2.9（🔵1–🔵4 / 🔵6 · A29-15 / A29-16 · AC-12）**：§2.8 修复轮交付码评的 6 条 🔵
+//      收干——非法值告警**双口径**（NaN/Infinity 不再串成孤零零的 null）· 显式 null 视同缺失（口径
+//      写进 JSDoc 并被静态钉死）· 键名内嵌换行折叠为单行（单行可 grep）· 缓冲与裸 warn **同一
+//      原文**（trim 只做空串判定）· A29-8c 头部复位接线闩（初始态自持，见该腿与文末静态锁）；
+//      🔵5 是**登记边界**（零行为改动、不设腿——边界注释一行落在 `drainArchiveBlock` 的 JSDoc）。
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync, readdirSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
-import { runEngCoder, resolveExecToolDeny, readEffectiveToolEcho, execDenyEvidence, collectRegisteredToolNames } from "../lib/eng.mjs"
+import { runEngCoder, resolveExecToolDeny, readEffectiveToolEcho, execDenyEvidence, collectRegisteredToolNames, stageGateNote } from "../lib/eng.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 import {
   ENG_SILENCE_ABORT_MS, ENG_SILENCE_POLL_MS, resolveEngSilenceAbortMs,
   createSilenceWatchdog, attachRunHeartbeat, watchJobHandle, silenceMinutesLabel,
   formatKeyList, KEY_LIST_MAX, archiveWatchdogAttach, __resetWatchdogAttachArchiveForTest,
+  // 批 29 / §2.8：留档**搬运工**的可读通道面（入队 / 搬运 / 小节标题 / 缓冲上界 / 复位缝）
+  enqueueArchiveLine, drainArchiveBlock, HOST_ARCHIVE_HEADER, ARCHIVE_BUFFER_MAX,
+  __resetArchiveChannelForTest,
 } from "../lib/silence-watchdog.mjs"
 
 // 与既有档同款隔离：DSH_HOME 置空 ⇒ home 不可解析 ⇒ 不碰真实盘（本档只测机制，不测落盘面）
@@ -43,15 +68,51 @@ process.env.DSH_HOME = ""
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
-/** 让作业 run() 体里的 await 链（start → 心跳接驳）跑到底——**微任务级**，不是真实等待。 */
-const flush = async (n = 8) => { for (let i = 0; i < n; i++) await null }
+/**
+ * 条件驱动微任务泵（批 29 §2.7 / 🔵1 · A29-11 · AC-10）：**不再依赖固定拍数**。
+ * 泵到 `ready()` 为真**即停**；最多 FLUSH_MAX 拍仍未就绪 ⇒ 抛**点名式**错误（点名缺的就绪信号），
+ * 而不是让下游断言以「恰一条不符」的形态红、看不出根因。
+ * ★ 本泵覆盖的 await 链（就绪信号逐环对应，将来多一个 await 只需换/加一个就绪条件）：
+ *   · `jobs.start` → 假服务 `spec.run(handle)`  ⇒ `f.specs.length`
+ *   · `ctx.subagents.start`（挂 abort 监听）        ⇒ `f.requests.length` / `f.runs.length`
+ *   · `attachRunHeartbeat`（事件面接驳）              ⇒ `f.beats.length`（earlier 的 `f.ticks` 是轮询注册）
+ *   · `archiveWatchdogAttach`（一次性留档 warn）      ⇒ 只能在 `captureWarn` 的 `isReady(warnings)` 里观察
+ * 新增 await 会被 FLUSH_MAX 吸收，**不再**让「恰 N 拍」成为隐式契约。仍是**微任务级**，零真实等待。
+ */
+const FLUSH_MAX = 64
 
-/** console.warn 捕获（既有档同款：fail-open 响亮标注的断言用）。 */
-async function captureWarn(fn) {
+/**
+ * @param {() => boolean} [ready] 就绪条件（缺省 = 立即就绪，不泵）
+ * @param {string} [label] 泵不到时的点名文案（写清这一拍在等什么）
+ * @returns {Promise<number>} 实际拍数（0 = 一开始就已就绪）
+ */
+const flush = async (ready, label) => {
+  for (let i = 0; i <= FLUSH_MAX; i++) {
+    if (typeof ready !== "function" || ready()) return i
+    await null
+  }
+  assert.fail("微任务泵在 " + FLUSH_MAX + " 拍内未到达就绪条件【" + (label ?? "(未命名)") + "】"
+    + "——await 链又深了一环（见本档 flush 注释）；请核对该腿的就绪信号或调高 FLUSH_MAX，"
+    + "**不要**改实现去迁就拍数")
+}
+
+/**
+ * console.warn 捕获（既有档同款：fail-open 响亮标注的断言用）。
+ * @param {() => Promise<any>} fn 被包裹的腿体
+ * @param {(warnings: string[]) => boolean} [isReady] **条件驱动泵的就绪条件**（🔵1 / A29-11）——
+ *   留档 warn（`archiveWatchdogAttach` / 工具面「未生效」）发生在 `fn` resolve **之后**仍可能在途的
+ *   链尾上 ⇒ 这里在 `console.warn` **仍被接管**的窗口内继续泵到该条件成立，避免出现
+ *   「恰一条不符」式的红。省略 = 不额外泵（同步腿无需）。
+ */
+async function captureWarn(fn, isReady) {
   const warnings = []
   const orig = console.warn
   console.warn = (m) => { warnings.push(String(m)) }
-  try { return { value: await fn(), warnings } } finally { console.warn = orig }
+  try {
+    const value = await fn()
+    if (isReady) await flush(() => isReady(warnings), "console.warn 捕获窗内出现期望的告警/状态")
+    return { value, warnings }
+  } finally { console.warn = orig }
 }
 
 /** 最小 ctx.llm 桩（生产 LlmRuntime.resolveModelInfo 同形）——避免 effort 回落告警污染返回文本。 */
@@ -151,10 +212,14 @@ function makeFrame(opts = {}) {
 
 test("A29-3a (D29-2 / AC-2): 注入静默（无输出）⇒ 既有取消写点 abort，终止文案含「疑似挂死」+ 静默时长 + partial/菜单/取证指路；reject-race 与 resolve-race 两形态同判", async () => {
   // ① reject-race（生产形态：abort ⇒ 子代理 result 以 AbortError reject）
+  // 🔵2 / A29-11：腿体包 try { … } finally { f.drop() }——中途断言失败也**不留注册表条目**
   {
     const f = makeFrame({ form: "reject" })
+    try {
     const dispatch = await runEngCoder(f.deps, { task: "implement the silence leg", designToken: f.st.designToken, docs: [] })
-    await flush()
+    // 🔵1：条件驱动泵——等到「派发 + 事件面接驳 + 轮询注册」三环都落地即停，不依赖任何固定拍数
+    await flush(() => f.specs.length === 1 && f.beats.length === 1 && f.ticks.length === 1,
+      "A29-3a①：jobs.start → subagents.start → attachRunHeartbeat（specs/beats/ticks 各一）")
     assert.ok(dispatch.includes("eng-dsh-sw-1"), "前置：确实走了 dsh 后台派发：" + dispatch.slice(0, 120))
     assert.equal(f.specs.length, 1, "恰一次 jobs.start")
     assert.equal(f.beats.length, 1, "看门狗已接上子代理事件面（心跳源在场）")
@@ -180,20 +245,51 @@ test("A29-3a (D29-2 / AC-2): 注入静默（无输出）⇒ 既有取消写点 a
     //   outputText**（与既有 ABORTED 兜底信封同款：partial 记「无」）⇒ 静默信封的 partial 体
     //   **为空**。本断言把「空」从「碰巧」变成**契约**：将来若给 reject 面补上 partial，本行会红，
     //   提醒同批更新该限制的登记口径（不得静默放宽）。
+    // 🔵4 / A29-12：契约改钉在**归一形态**上——「`Partial output:` 之后的 advisory 段」
+    //   归一后逐字等于 advisory 文本。原写法（`split("\n")[1] === ""`）把契约钉在
+    //   codexFailureAdvisory 的**前导换行形状**上；其后的「只取第一条非空行」把契约钉在
+    //   **advisory 的首行**上——`codexFailureAdvisory` 用 "\n[thincoder-suite] " 续接多段
+    //   （lib/escalate.mjs:79），advisory **内部一旦折行**（一句话拆成两段/多行）本腿就会误红，
+    //   与「折行位置也被归一吃掉」的注释口径、A29-12 第二子句自相矛盾（§2.7 审计 🔵D-1）。
+    //   归一步骤：取 `Partial output:` 之后**全部行** → **逐行**去方括号标签前缀
+    //   （[thincoder-suite] 之类）→ 拼接 → **整体去空白** → 与 ADVISORY_TEXT 的去空白形态**前缀**比对。
+    //   为什么比**前缀**而不是等值：advisory 之后紧跟信封的**固定尾块**（D-48 取证指路段 +
+    //   失败后缀块），本腿下面已有**独立断言**钉住那两段，不在本腿重复钉它们的字面。
+    //   为什么是去**全部**空白而不是「折叠为单空格」：折行可以落在两个汉字**之间**（其间本无
+    //   空格），只折叠会把折行点变成一个**多出来的空格** ⇒ 仍然误红。
+    //   · **partial 被填充 ⇒ 必红**：partial 正文落在 advisory 段**之前**（非空行）⇒ 那条断言红，
+    //     且去空白后的整段**不再以**回滚指引开头 ⇒ 前缀比对同样红。
+    //   · **仅调 advisory 排版 ⇒ 不红**：前导换行数、空行、标签前缀、**内部折行**都被归一吃掉。
     const partialSeg = outcome.output.split("Partial output:")[1] ?? ""
-    assert.equal(partialSeg.split("\n")[1] ?? null, "",
-      "reject-race 下 partial 体为空（诚实限制：catch 作用域无 outputText）：" + JSON.stringify(partialSeg.slice(0, 80)))
+    const segLines = partialSeg.split("\n")
+    const isTagLine = (l) => /^\[[^\]]*\]/.test(String(l).trim())
+    const firstTagged = segLines.findIndex(isTagLine)   // advisory 段首行（信封尾部的 D-48 取证指路段在其后，故取**首个**）
+    const bodyNonEmpty = (firstTagged === -1 ? segLines : segLines.slice(0, firstTagged)).filter((l) => String(l).trim() !== "")
+    const flatSeg = segLines.map((l) => String(l).replace(/^\s*\[[^\]]*\]\s*/, "")).join("").replace(/\s+/g, "")
+    const ADVISORY_TEXT = "半途写入可能残留：对照 partial 输出与 Touched 提示检查工作区，必要时 git 回滚。"
+    const flatAdvisory = ADVISORY_TEXT.replace(/\s+/g, "")
+    assert.ok(firstTagged !== -1,
+      "reject-race 下 `Partial output:` 之后**必须存在**带标签的 advisory 段（不得什么都不说）："
+        + JSON.stringify(partialSeg.slice(0, 80)))
+    assert.deepEqual(bodyNonEmpty, [],
+      "reject-race 下 `Partial output:` 之后、advisory 段之前**不得有**任何非空行（partial 体为空；填上内容本行**必红**）："
+        + JSON.stringify(bodyNonEmpty))
+    assert.ok(flatSeg.startsWith(flatAdvisory),
+      "advisory 段**全部行**去标签前缀 + 去空白后**逐字以**回滚指引**开头**（抗排版微调：前导换行 / 空行 / 标签前缀 / **内部折行**都不影响本行；partial 若被填充本行**必红**）："
+        + JSON.stringify(flatSeg.slice(0, 120)))
     assert.ok(partialSeg.includes("半途写入可能残留"),
       "空 partial 下仍带 ABORTED 回滚指引（与 resolve 侧对称，不是「什么都没说」）：" + partialSeg.slice(0, 120))
     assert.equal(f.cleared.length, 1, "settle 的 finally 清掉轮询定时器（不泄漏）")
     assert.equal(f.handle.calls.length, 1, "正文照常经 handle.append 进输出环（D-46 契约未破）")
-    f.drop()
+    } finally { f.drop() }
   }
   // ② resolve-race（子代理在到点同刻以结果返回）⇒ 同一静默分支，且**带上已产生的 partial**
   {
     const f = makeFrame({ form: "resolve", partialText: "half done\n\nTouched files: lib/a.mjs" })
+    try {
     await runEngCoder(f.deps, { task: "implement the silence leg (resolve)", designToken: f.st.designToken, docs: [] })
-    await flush()
+    await flush(() => f.specs.length === 1 && f.beats.length === 1,
+      "A29-3a②：jobs.start → subagents.start → attachRunHeartbeat")
     f.beats[0]() // D9：真实事件在前（未武装的看门狗不判定）
     f.clock.t = 60000
     f.ticks[0]()
@@ -201,14 +297,16 @@ test("A29-3a (D29-2 / AC-2): 注入静默（无输出）⇒ 既有取消写点 a
     assert.equal(outcome.detail, "silence watchdog (engSilenceAbortMs)", "resolve 侧同走静默分支（不被兜底分支截胡）")
     assert.ok(outcome.output.includes("疑似挂死"), "resolve 侧文案同样含「疑似挂死」")
     assert.ok(outcome.output.includes("half done"), "已产生的 partial 进信封: " + outcome.output.slice(0, 200))
-    f.drop()
+    } finally { f.drop() }
   }
 })
 
 test("A29-3b (AC-2): 有输出 ⇒ 心跳续命，不误杀（累计时长越过阈值、单次静默未越）", async () => {
   const f = makeFrame({ form: "hang" })
+  try {
   await runEngCoder(f.deps, { task: "implement the keep-alive leg", designToken: f.st.designToken, docs: [] })
-  await flush()
+  await flush(() => f.specs.length === 1 && f.beats.length === 1,
+    "A29-3b：jobs.start → subagents.start → attachRunHeartbeat")
   assert.equal(f.beats.length, 1, "心跳源已接上")
   // 每轮：推进 55s（< 60s 阈值）→ 子代理产出（心跳）→ tick。累计 275s ≫ 阈值，但**单次静默**从未越线。
   for (let i = 0; i < 5; i++) {
@@ -221,7 +319,7 @@ test("A29-3b (AC-2): 有输出 ⇒ 心跳续命，不误杀（累计时长越过
   const outcome = await f.specs[0].hooks.done
   assert.equal(outcome.status, "completed", "续命到位 ⇒ 正常交付")
   assert.ok(!outcome.output.includes("疑似挂死"), "成功交付不得带静默终止文案")
-  f.drop()
+  } finally { f.drop() }
 })
 
 test("A29-3c (D29-6): 看门狗工厂语义——到点回调恰一次（latch）、heartbeat 重置静默计时、dispose 幂等；阈值/周期解析运行时宽容；事件面探测诚实回落", async () => {
@@ -301,8 +399,10 @@ const BASE_DENY = ["escalate", "consult_start", "consult_stop", "eng", "eng_code
 test("A29-1a (AC-1, 强证): 平台回显的生效工具清单里执行类**不在**、非执行类**仍在**——证据口径标 platform-echo", async () => {
   const echo = ["read", "write", "edit", "grep", "web_search"]      // 平台侧生效清单
   const f = makeFrame({ toolsSurface: { list: () => SURFACE }, echoToolNames: echo })
+  try {
   const dispatch = await runEngCoder(f.deps, { task: "implement the deny leg", designToken: f.st.designToken, docs: [] })
-  await flush()
+  await flush(() => f.specs.length === 1 && f.requests.length === 1 && f.runs.length === 1,
+    "A29-1a：jobs.start → subagents.start（requests/runs 各一）")
   assert.ok(dispatch.includes("eng-dsh-sw-1"), "前置：派发了后台作业")
   // 载荷侧（请求）：执行类确实被要求移除
   const payloadDeny = f.requests[0].toolFilter.deny
@@ -317,13 +417,15 @@ test("A29-1a (AC-1, 强证): 平台回显的生效工具清单里执行类**不�
   assert.equal(execDenyEvidence(f.runs[0]).evidence, "platform-echo", "有回显 ⇒ 证据口径 = 强证")
   assert.equal(readEffectiveToolEcho({ tools: { read: 1 } }), null,
     "普通对象（工具实现表）不算回显——不得把载荷/实现表误报成强证")
-  f.drop()
+  } finally { f.drop() }
 })
 
 test("A29-1b (AC-1, 弱证): 平台不回显 ⇒ 以派发时接受的 toolFilter 载荷为证并如实标注为弱证（两形态在断言里区分）", async () => {
   const f = makeFrame({ toolsSurface: { list: () => SURFACE } })
+  try {
   await runEngCoder(f.deps, { task: "implement the deny leg (weak)", designToken: f.st.designToken, docs: [] })
-  await flush()
+  await flush(() => f.specs.length === 1 && f.requests.length === 1 && f.runs.length === 1,
+    "A29-1b：jobs.start → subagents.start（requests/runs 各一）")
   const deny = f.requests[0].toolFilter.deny
   assert.deepEqual(deny, [...BASE_DENY, "pwsh", "bash"], "弱证：载荷 = 既有基线 + 在册执行类（逐项）")
   assert.ok(!deny.includes("run_code"), "D1：保留传输名不得出现在载荷 deny 里")
@@ -333,7 +435,7 @@ test("A29-1b (AC-1, 弱证): 平台不回显 ⇒ 以派发时接受的 toolFilte
   // 两形态**在断言里区分**（不得混同）：无回显 ⇒ evidence 标 dispatch-payload 且 effective 为 null
   assert.equal(execDenyEvidence(f.runs[0]).evidence, "dispatch-payload", "无回显 ⇒ 证据口径 = 弱证（如实标注）")
   assert.equal(readEffectiveToolEcho(f.runs[0]), null, "无回显 ⇒ effective 为 null（不与强证混同）")
-  f.drop()
+  } finally { f.drop() }
 })
 
 test("A29-2 (AC-1 / D29-1): 取不到平台工具名清单 ⇒ 如实标注「未生效」——deny 保持逐字基线（不假装拦住），且标注走裸 console.warn（不进返回文本）", async () => {
@@ -372,25 +474,29 @@ test("A29-2 (AC-1 / D29-1): 取不到平台工具名清单 ⇒ 如实标注「�
 
   // 行为面：无注册面 ⇒ 实派发的 deny 仍是逐字基线；标注是**裸 console.warn**（不在返回文本里）
   const f = makeFrame({})
+  try {
   const r = await captureWarn(async () => {
     const dispatch = await runEngCoder(f.deps, { task: "implement the not-effective leg", designToken: f.st.designToken, docs: [] })
-    await flush()
+    await flush(() => f.specs.length === 1 && f.requests.length === 1,
+      "A29-2：jobs.start → subagents.start")
     return dispatch
-  })
+  }, (ws) => ws.some((w) => w.includes("工具面禁执行未生效")))
   assert.deepEqual(f.requests[0].toolFilter.deny, BASE_DENY,
     "未生效 ⇒ 派发载荷不得出现执行类名（不假装拦住）：" + JSON.stringify(f.requests[0].toolFilter.deny))
   assert.ok(r.warnings.some((w) => w.includes("工具面禁执行未生效")), "如实标注走 console.warn：" + r.warnings.join(" | "))
   assert.ok(!r.value.includes("[thincoder-suite] warning:"), "标注**不进** warnPrefix 返回文本（T12 锁：干净路径零 warning 前缀）")
   assert.ok(!r.value.includes("未生效"), "返回文本里不出现机制标注")
-  f.drop()
+  } finally { f.drop() }
 })
 
 // ═══════════════ D9：心跳护栏（订阅面在 ≠ 会发事件）· D1/D2：保留名与公开读取面 ═══════════════
 
 test("D9 (AC-2 反例): 事件面**已接上**但零事件 ⇒ 不误杀——看门狗未武装、退回总预算；首个真实事件到达后才判定", async () => {
   const f = makeFrame({ form: "hang" })
+  try {
   await runEngCoder(f.deps, { task: "implement the zero-event leg", designToken: f.st.designToken, docs: [] })
-  await flush()
+  await flush(() => f.specs.length === 1 && f.beats.length === 1,
+    "D9：jobs.start → subagents.start → attachRunHeartbeat")
   assert.equal(f.beats.length, 1, "前置：事件面**已接上**（attached:true）")
   // 零真实事件：推进假时钟远超阈值并 tick——**不得** abort（否则会误杀一个正在正常输出的子代理）
   f.clock.t = 600000
@@ -423,7 +529,7 @@ test("D9 (AC-2 反例): 事件面**已接上**但零事件 ⇒ 不误杀——�
   f.settleResult({ stopReason: "aborted", output: [{ type: "text", text: "" }] })
   const outcome = await f.specs[0].hooks.done
   assert.equal(outcome.detail, "silence watchdog (engSilenceAbortMs)", "武装后到点分支照常（零事件腿不打折机制）")
-  f.drop()
+  } finally { f.drop() }
 })
 
 test("D1/D2 (AC-1): 平台保留名 run_code 不进 deny + 公开读取面 view(scope).restrictableNames 为唯一名域（取到 ⇒ applied:true 且 deny ⊆ 该集合）", async () => {
@@ -452,12 +558,14 @@ test("D1/D2 (AC-1): 平台保留名 run_code 不进 deny + 公开读取面 view(
   assert.deepEqual(unit.deny, [...BASE_DENY, "pwsh", "bash"], "deny = 基线 + 求交后的执行类")
 
   const f = makeFrame({ toolsSurface: viewSurface })
+  try {
   await runEngCoder(f.deps, { task: "implement the view-surface leg", designToken: f.st.designToken, docs: [] })
-  await flush()
+  await flush(() => f.specs.length === 1 && f.requests.length === 1,
+    "D1/D2：jobs.start → subagents.start")
   const deny = f.requests[0].toolFilter.deny
   for (const n of deny.filter((x) => !BASE_DENY.includes(x))) assert.ok(restrictable.includes(n), "派发载荷**新追加部分** ⊆ restrictableNames：" + n)
   assert.ok(!deny.includes("run_code"), "保留名（knownNames 有 / restrictableNames 无）不得下发")
-  f.drop()
+  } finally { f.drop() }
 })
 
 // ═══════════════ A29-8（批 29 §2.6 US-A / D-53）：**一次性留档**三腿 ═══════════════
@@ -491,12 +599,17 @@ test("A29-8a (§2.6 US-A① / AC-9): 接线留档（attached 真）= 记下**命
 
   // —— 派发腿：走真实接线点（eng.mjs 后台 run() 内 attachRunHeartbeat 之后）——
   const f = makeFrame({ form: "hang", eventSurface: true, runExtra: { archiveProbeA: 1 } })
+  try {
   __resetWatchdogAttachArchiveForTest()
+  // 批 29 / §2.8：上面单元面那条留档**已经入队**（告警不再是唯一通道）⇒ 派发腿之前必须复位
+  // 可读通道缓冲，否则本次派发的回执区会带上**单元面**那一条（跨腿串味，A29-13 的「恰一条」会红）。
+  __resetArchiveChannelForTest()
   const r = await captureWarn(async () => {
     const dispatch = await runEngCoder(f.deps, { task: "archive the attach (hit)", designToken: f.st.designToken, docs: [] })
-    await flush()
+    await flush(() => f.specs.length === 1 && f.beats.length === 1,
+      "A29-8a 派发腿：jobs.start → subagents.start → attachRunHeartbeat（接驳完成 ⇒ 留档必已打印）")
     return dispatch
-  })
+  }, (ws) => ws.some((w) => w.includes("接线留档")))
   const lines = r.warnings.filter((w) => w.includes("接线留档"))
   assert.equal(lines.length, 1, "派发路径的首次接线也恰一条留档：" + JSON.stringify(r.warnings))
   // ★ F1：同上——本腿的键清单里同样含 onEvent（archiveProbeA 与之同行）⇒ 只判 includes("onEvent")
@@ -515,9 +628,17 @@ test("A29-8a (§2.6 US-A① / AC-9): 接线留档（attached 真）= 记下**命
   assert.equal(f.handle.calls.length, 1, "交付正文恰经 handle.append 入环一次（D-46 契约）")
   const delivered = String(f.handle.calls[0] ?? "")
   assert.ok(delivered.includes("archive probe A done"), "前置：环里确实是本次交付正文：" + delivered.slice(0, 120))
-  assert.ok(!delivered.includes("接线留档"),
-    "交付正文（handle.append 环）零留档字样——零污染判定不得只覆盖回执：" + delivered.slice(0, 200))
-  f.drop()
+  // ★ 批 29 / §2.8②（**本条断言的形态已改**）：留档现在**按设计**进回执区 ⇒ 契约从「零字样」改成
+  //   「**正文之前零字样、正文之后恰一段**」。零污染的真正含义是**不混入子代理自己的报告**，
+  //   而不是「机器观测不得出现」——后者正是 §2.8 判定为按构造不可读的旧通道。
+  //   （前插才是危险方向：阶段门按前缀判表，见 A29-13。）
+  const iBody = delivered.indexOf("archive probe A done")
+  const iHeader = delivered.indexOf(HOST_ARCHIVE_HEADER)
+  assert.ok(iBody >= 0, "前置：环里确实是本次交付正文：" + delivered.slice(0, 120))
+  assert.ok(iHeader > iBody, "留档小节**追加在交付正文之后**（§2.8③ 硬约束）：iBody=" + iBody + " iHeader=" + iHeader)
+  assert.equal(delivered.slice(0, iHeader).includes("接线留档"), false,
+    "交付正文段（留档小节之前）零留档字样——留档绝不可前插混入子代理报告：" + delivered.slice(0, iHeader))
+  } finally { f.drop() }
 
   // —— 静态锁：测试缝（命名约定 + @internal）在**生产路径零引用**（镜像 job-outcome 同款锁）——
   const libUrl = new URL("../lib/", import.meta.url)
@@ -537,12 +658,15 @@ test("A29-8a (§2.6 US-A① / AC-9): 接线留档（attached 真）= 记下**命
 test("A29-8b (§2.6 US-A① / AC-9): 零候选形态 = 如实列出 Object.keys(run)（有界/去重/截断安全）、不报命中名、第二次不再打印", async () => {
   // —— 派发腿：run 上**一个候选事件方法都没有**（attached:false）——
   const f = makeFrame({ form: "hang", eventSurface: false, runExtra: { archiveProbeB: 1 } })
+  try {
   __resetWatchdogAttachArchiveForTest()
+  __resetArchiveChannelForTest()   // §2.8：复位可读通道缓冲（对齐上方闩复位，不让本腿自带上一腿的留档）
   const r = await captureWarn(async () => {
     const dispatch = await runEngCoder(f.deps, { task: "archive the attach (no candidate)", designToken: f.st.designToken, docs: [] })
-    await flush()
+    await flush(() => f.specs.length === 1 && f.runs.length === 1,
+      "A29-8b 派发腿：jobs.start → subagents.start（本形态零事件面 ⇒ 无 beats 信号，就绪锚在 subagents.start 返回）")
     return dispatch
-  })
+  }, (ws) => ws.some((w) => w.includes("接线留档")))
   const lines = r.warnings.filter((w) => w.includes("接线留档"))
   assert.equal(lines.length, 1, "零候选形态同样**恰一条**留档：" + JSON.stringify(r.warnings))
   assert.ok(lines[0].includes("零候选"), "attached 假 ⇒ 如实标注零候选（不假装接上了）：" + lines[0])
@@ -559,18 +683,28 @@ test("A29-8b (§2.6 US-A① / AC-9): 零候选形态 = 如实列出 Object.keys(
   // 同进程第二次接线（**不复位闩**）⇒ 不再打印
   const r2 = await captureWarn(async () => {
     const dispatch = await runEngCoder(f.deps, { task: "archive the attach (no candidate, second)", designToken: f.st.designToken, docs: [] })
-    await flush()
+    await flush(() => f.specs.length === 2,
+      "A29-8b 第二次派发：jobs.start 第二次发生（第二次**期望不再打印** ⇒ 就绪锚在 specs.length===2）")
     return dispatch
   })
   assert.equal(r2.warnings.filter((w) => w.includes("接线留档")).length, 0, "第二次接线不再打印（进程内一次闩）")
   f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe B done 2" }] })
   await f.specs[1].hooks.done
-  // ★ F2：与 A29-8a 同一条洞——两次交付的**正文**（handle.append 环）里都不得出现留档字样
-  //   （r.value / r2.value 是派发回执，不是交付正文）。
+  // ★ F2（形态已按 §2.8 更新）：两次交付的判定落在 **handle.append 环**（D-46 契约的唯一正文
+  //   出口，r.value / r2.value 只是派发回执）；留档按设计**出现在环里**（回执区），契约因此从
+  //   「零字样」改为「**正文段零字样 + 小节在正文之后**」。
   assert.equal(f.handle.calls.length, 2, "两次派发各恰一次交付正文入环（D-46 契约）")
-  assert.ok(f.handle.calls.every((t) => !String(t).includes("接线留档")),
-    "两次交付正文（handle.append 环）均零留档字样：" + JSON.stringify(f.handle.calls.map((t) => String(t).slice(0, 60))))
-  f.drop()
+  // §2.8：第一次派发**搬运**了留档（回执区可见），第二次（缓冲已空 ⇒ 只发一次）零留档。
+  const first = String(f.handle.calls[0] ?? "")
+  const second = String(f.handle.calls[1] ?? "")
+  assert.equal(first.includes(HOST_ARCHIVE_HEADER), true,
+    "第一次派发的交付正文尾部带留档小节（§2.8②）：" + first.slice(-160))
+  assert.equal(second.includes(HOST_ARCHIVE_HEADER), false,
+    "第二次派发**不重复追加**（缓冲只发一次，进程内）：" + second.slice(-160))
+  const bodyOnly = (t) => { const s = String(t ?? ""); const i = s.indexOf(HOST_ARCHIVE_HEADER); return i === -1 ? s : s.slice(0, i) }
+  assert.ok(f.handle.calls.every((t) => !bodyOnly(t).includes("接线留档")),
+    "两次交付的**正文段**（留档小节之前）均零留档字样——§2.8③ 绝不前插：" + JSON.stringify(f.handle.calls.map((t) => bodyOnly(t).slice(0, 60))))
+  } finally { f.drop() }
 
   // —— 键名清单渲染：US-A③ 的三条硬要求（**有界 / 去重 / 截断安全**）——
   assert.equal(formatKeyList({ a: 1, b: 2 }), "a, b (共 2 项)", "基本形态（逐字）")
@@ -594,13 +728,33 @@ test("A29-8b (§2.6 US-A① / AC-9): 零候选形态 = 如实列出 Object.keys(
 test("A29-8c (§2.6 US-A② / AC-9): 工具面首次 applied:false ⇒ 既有「未生效」warn 的**同一行**追加 Object.keys(ctx.tools)；一次为限", async () => {
   // 形态：注册面读得到（registry-probe 命中 `list`）但**无执行类命中** ⇒ applied:false 且 reason 可读。
   const f = makeFrame({ form: "hang", toolsSurface: { list: () => ["read", "write"] } })
+  try {
+  // §2.8：留档缓冲是**进程内**单例（只发一次）⇒ 本档前面的腿若已搬运过，缓冲即关闭。本腿要断言
+  // 「工具面留档进了字符流」，必须先复位缓冲（复位是**测试缝**，生产路径零引用）。
+  // §2.9 🔵6 / A29-16：再显式复位**接线闩**——此前本腿只复位缓冲不复位闩，「首次接线留档是否
+  //   在本腿发生」取决于前腿是否已把闩合上（正确性依赖跨腿顺序）。复位后**初始态自持**：无论
+  //   单跑还是全量顺序，首次派发都真的产生一条接线留档（与工具面留档同缓冲、同 warn 窗口）；
+  //   本腿既有断言都只按「工具面」字样过滤/定位，不因多出这一行留档而变化（文末 A29-16 的
+  //   静态锁钉住本复位在场，删掉它 ⇒ 该锁红）。
+  __resetWatchdogAttachArchiveForTest()
+  __resetArchiveChannelForTest()
   const r1 = await captureWarn(async () => {
     const dispatch = await runEngCoder(f.deps, { task: "archive the tool surface", designToken: f.st.designToken, docs: [] })
-    await flush()
+    await flush(() => f.specs.length === 1 && f.requests.length === 1,
+      "A29-8c 派发腿：jobs.start → subagents.start")
     return dispatch
-  })
+  }, (ws) => ws.some((w) => w.includes("工具面禁执行未生效")))
   const denyLines = r1.warnings.filter((w) => w.includes("工具面禁执行未生效"))
   assert.equal(denyLines.length, 1, "「未生效」标注**恰一行**（键名清单追加在同一行内，不新起一行）：" + JSON.stringify(r1.warnings))
+  // ★ 🔵3 / A29-11：本行是**决定性**的（删掉实现里的追加段 ⇒ 本行必红），理由钉在这里以免被后人
+  //   「顺手清理」掉：本 warn 行的**全部**可能来源只有三处——
+  //     ① 固定前缀「eng_coder 工具面禁执行未生效」 ② denyPlan.reason ③ 追加的 ctx.tools 键名清单。
+  //   本形态（`list: () => ["read", "write"]` ⇒ 无执行类命中）走的是
+  //   resolveExecToolDeny 的第三个分支，reason 逐字 = **「注册面里没有命中执行类谓词的工具名」**——
+  //   其中**不含 "list" 子串**（中文），前缀 ① 与分隔文案（「——本次照常派发（不假装拦住）」/
+  //   「；ctx.tools 方法名清单 =」）同样不含 ⇒ `includes("list")` 只可能由 ③ 命中，
+  //   而 ③ 唯一的内容源是 Object.keys(ctx.tools) = ["list"]（夹具 toolsSurface 只有一个键）。
+  //   ⇒ 追加段被整段删除（只留 ①②）时，本行**必红**；反过来，夹具若去掉 list 键，本行也必红。
   assert.ok(denyLines[0].includes("list"), "同一行追加 Object.keys(ctx.tools) 的方法名清单：" + denyLines[0])
   assert.ok(!denyLines[0].includes("\n"), "仍是单行（可 grep）")
   assert.ok(!r1.value.includes("工具面禁执行未生效") && !r1.value.includes("ctx.tools 方法名清单"),
@@ -611,16 +765,373 @@ test("A29-8c (§2.6 US-A② / AC-9): 工具面首次 applied:false ⇒ 既有「
   await f.specs[0].hooks.done
   const r2 = await captureWarn(async () => {
     const dispatch = await runEngCoder(f.deps, { task: "archive the tool surface (second)", designToken: f.st.designToken, docs: [] })
-    await flush()
+    await flush(() => f.specs.length === 2,
+      "A29-8c 第二次派发：jobs.start 第二次发生（第二次**期望不再打印** ⇒ 就绪锚在 specs.length===2）")
     return dispatch
   })
   assert.equal(r2.warnings.filter((w) => w.includes("工具面禁执行未生效")).length, 0, "同一 ctx 第二次 ⇒ 不再打印（一次为限）")
   f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "tool surface probe done 2" }] })
   await f.specs[1].hooks.done
-  // ★ F2：工具面留档同一漏洞面——「未生效」标注与 ctx.tools 键名清单同样**只在 console**，
-  //   判定必须落在真实交付正文（handle.append 环），不得只看派发回执。
+  // ★ F2：工具面留档同一漏洞面——「未生效」标注与 ctx.tools 键名清单原本**只在 console**。
+  //   批 29 / §2.8：同一条文案**入队** ⇒ 现在**出现在 handle.append 环**里（回执区，交付正文之后）。
   assert.equal(f.handle.calls.length, 2, "两次派发各恰一次交付正文入环（D-46 契约）")
-  assert.ok(f.handle.calls.every((t) => !String(t).includes("工具面禁执行未生效") && !String(t).includes("ctx.tools 方法名清单")),
-    "两次交付正文（handle.append 环）均零工具面留档字样：" + JSON.stringify(f.handle.calls.map((t) => String(t).slice(0, 60))))
-  f.drop()
+  const bodyOnly = (t) => { const s = String(t ?? ""); const i = s.indexOf(HOST_ARCHIVE_HEADER); return i === -1 ? s : s.slice(0, i) }
+  assert.ok(f.handle.calls.every((t) => !bodyOnly(t).includes("工具面禁执行未生效") && !bodyOnly(t).includes("ctx.tools 方法名清单")),
+    "两次交付的**正文段**均零工具面留档字样（留档只进回执小节，绝不前插）：" + JSON.stringify(f.handle.calls.map((t) => bodyOnly(t).slice(0, 60))))
+  assert.equal(String(f.handle.calls[0] ?? "").includes("ctx.tools 方法名清单"), true,
+    "★ §2.8 的正面证据：工具面留档**进了字符流**（回执小节里可见，不再是只在 console）：" + String(f.handle.calls[0] ?? "").slice(-200))
+  assert.equal(String(f.handle.calls[1] ?? "").includes(HOST_ARCHIVE_HEADER), false,
+    "第二次派发不重复追加（缓冲只发一次，进程内）：" + String(f.handle.calls[1] ?? "").slice(-120))
+  } finally { f.drop() }
+})
+// ——————————— 批 29 / §2.8（A29-13 · A29-14 · AC-11 · D-53 **可读通道**）———————————
+//
+// ★ 背景（**实测**，不是推断，故写进注释当证据记录）：§2.6 的两条留档原本**只走**裸 console 告警。
+//   本部署上 ① 死亡日志只在**进程死亡时**记 stderr 尾部（实测：全是历史条目，零「接线留档」）；
+//   ② 作业报告文件里**只有**经作业句柄 append 的字符（实测：真机区零插件告警，所有形似证据的行
+//   都在**宿主验收回执**区）⇒ **那个证据通道按构造不可读**，D-53 无法闭合。故 §2.8 改的是**通道**：
+//   入队 + 在**交付正文之后**追加到回执区。裸告警**保留**（人盯终端仍可见）但不再是唯一通道。
+//
+// ★ 两条跨腿纪律（本档自持）：
+//   ① 留档缓冲是**进程内单例**且**只发一次** ⇒ 凡要断言它的腿，开头必须复位缓冲（否则读到的是
+//      上一条腿的残留）。复位缝是**测试缝**（生产路径零引用，由 A29-14 腿尾的静态锁守住）。
+//   ② 本档既有 A29-8a/8b/8c 的「交付正文零留档」判定已按 §2.8 改为「**正文段零留档 + 小节在正文之后**」
+//      ——零污染的真正含义是**不混入子代理自己的报告**，而不是「机器观测不得出现」（后者正是 §2.8
+//      判定为按构造不可读的旧通道）。
+
+test("A29-13 (§2.8 · AC-11): 回执区**恰一条**「接线留档」行（含命中名与键清单）且**位于交付正文之后**；同一次派发里阶段门对合规报告**仍返回空串**（尾部追加不破门禁）", async () => {
+  // checkMode 显式 subagent ⇒ 宿主验收回执面**零执行**（runHostStageChecks 直接返回空串、零真实
+  // 进程）；本腿要验的是阶段门，故必须传结构化 stages（不传则门按 §9 边界 1 不核验）。
+  const STAGES = [{ goal: "留档进回执区", files: ["lib/eng.mjs"], acceptance: "回执区可见", check: "node --check lib/eng.mjs", checkMode: "subagent" }]
+  // 子代理交付报告 = 一张**全通过**的合规阶段表（阶段门据此应返回空串；中文表头亦钉住 D-54 的中文别名面）
+  const REPORT = ["| 阶段 | 状态 | 检查摘要 |", "| --- | --- | --- |", "| 1 | 通过 | 语法检查通过 |", "", "Touched files: lib/eng.mjs"].join("\n")
+
+  // —— 单元面：搬运工本身的形状（小节标题 / 逐行 / 一次闩 / 拒收迟到条目）——
+  __resetWatchdogAttachArchiveForTest()
+  __resetArchiveChannelForTest()
+  const capU = await captureWarn(async () => archiveWatchdogAttach({ result: Promise.resolve(), dispose() {}, onEvent() {} }, { attached: true, via: "onEvent" }))
+  assert.equal(capU.warnings.length, 1, "裸 console 告警**保留**（入队不取代它）：" + JSON.stringify(capU.warnings))
+  const block = drainArchiveBlock()
+  assert.ok(block.startsWith("\n\n" + HOST_ARCHIVE_HEADER + "\n"),
+    "回执小节：两换行起头 + 逐字标题（读者一眼看得出这是机器加的观测、不是交付内容）：" + JSON.stringify(block.slice(0, 60)))
+  const secLines = block.trim().split("\n")
+  assert.equal(secLines.length, 2, "小节 = 标题 + **恰一条**留档行（首尾不多出空行）：" + JSON.stringify(secLines))
+  assert.ok(secLines[1].includes("接线留档"), "留档行可辨识：" + secLines[1])
+  assert.ok(secLines[1].includes("命中候选事件面「onEvent」") && secLines[1].includes("dispose") && secLines[1].includes("result"),
+    "回执区的留档行**含命中名与键清单**（§2.8① 键清单口径逐字不变）：" + secLines[1])
+  assert.equal(drainArchiveBlock(), "", "缓冲**只发一次**（进程内）：第二次搬运恒空串")
+  assert.equal(enqueueArchiveLine("搬运后的迟到留档"), false, "搬运后拒收迟到的入队（不留一个永远搬不掉的缓冲）")
+
+  // —— 门禁面：同一条**真实**留档块 × **真实**阶段门 ——
+  assert.equal(stageGateNote(STAGES, REPORT), "", "前置：合规报告本身过门（空串）")
+  assert.equal(stageGateNote(STAGES, REPORT + block), "",
+    "★ 留档**追加在正文之后** ⇒ 阶段门对合规报告**仍返回空串**（尾部追加不破门禁）")
+  // ★ 如实标注一条边界（免得后人拿它当更强的保证）：阶段门扫的是**前 4000 字符**内的表头，
+  //   一段几百字的短留档**前插**未必立刻触发横幅（表仍在窗内）⇒ 本腿不拿「前插必红」冒充决定性；
+  //   「绝不前插」由下面派发面的**位置**判定独立承担（那条对前插必红）。
+
+  // —— 派发面：真实接线点（attach 留档入队 → 回执区尾部搬运），并**同一次派发**里过阶段门 ——
+  __resetWatchdogAttachArchiveForTest()
+  __resetArchiveChannelForTest()
+  const f = makeFrame({ form: "hang", eventSurface: true, runExtra: { archiveProbe13: 1 } })
+  try {
+    const dispatch = await captureWarn(async () => {
+      const r = await runEngCoder(f.deps, { task: "archive into the receipt section", designToken: f.st.designToken, docs: [], stages: STAGES })
+      await flush(() => f.specs.length === 1 && f.beats.length === 1,
+        "A29-13 派发腿：jobs.start → subagents.start → attachRunHeartbeat（接驳完成 ⇒ 留档已入队）")
+      return r
+    }, (ws) => ws.some((w) => w.includes("接线留档")))
+    assert.equal(dispatch.value.includes("接线留档"), false, "前置：留档不进派发回执（只走裸告警 + 回执区两条旁路，不碰 warnPrefix 通道）")
+    assert.equal(f.requests[0].prompt[0].text.includes("接线留档"), false, "留档**绝不进子代理任务正文**（指令面零污染）")
+    assert.equal(f.requests[0].prompt[0].text.includes(HOST_ARCHIVE_HEADER), false, "同上（逐字标题也不得进任务书）")
+    f.settleResult({ stopReason: "completed", output: [{ type: "text", text: REPORT }] })
+    await f.specs[0].hooks.done
+    assert.equal(f.handle.calls.length, 1, "交付正文恰经 handle.append 入环一次（D-46 契约）")
+    const delivered = String(f.handle.calls[0] ?? "")
+    // ★ 同一次派发：阶段门返回空串 ⇒ 交付文本**直接从抬头开始**（尾部追加没有挤动横幅位置）。
+    //   这条对「把留档前插」必红：前插后交付文本不再以交付抬头开头。
+    assert.equal(delivered.slice(0, 40).includes("[thincoder-suite] warning:"), false,
+      "前置：干净路径零告警前缀（与 A29-8a 同一前提；若此行红，先看 warnPrefix 侧）：" + delivered.slice(0, 80))
+    assert.ok(delivered.startsWith("eng_coder delivery:\n"),
+      "★ 同一次派发：阶段门对合规报告**返回空串**（横幅缺席 ⇒ 交付抬头即首行）：" + JSON.stringify(delivered.slice(0, 60)))
+    assert.equal(delivered.includes("UNDECLARED"), false, "阶段门未产横幅（报告合规）：" + delivered.slice(0, 200))
+    const iTable = delivered.indexOf("| 阶段 | 状态 | 检查摘要 |")
+    const iHeader = delivered.indexOf(HOST_ARCHIVE_HEADER)
+    assert.ok(iTable >= 0, "前置：交付正文里的合规阶段表在场（门禁读到的是它）：" + delivered.slice(0, 160))
+    assert.ok(iHeader > iTable, "回执区留档**位于交付正文之后**（§2.8③ 硬约束）：iTable=" + iTable + " iHeader=" + iHeader)
+    const archLines = delivered.slice(iHeader).split("\n").filter((l) => l.includes("接线留档"))
+    assert.equal(archLines.length, 1, "回执区**恰一条**接线留档行：" + JSON.stringify(archLines))
+    assert.ok(archLines[0].includes("命中候选事件面「onEvent」") && archLines[0].includes("archiveProbe13"),
+      "该行含**命中名 + 键清单**（Object.keys(run) 口径不变）：" + archLines[0])
+    assert.equal(delivered.slice(0, iHeader).includes("接线留档"), false,
+      "交付正文段（留档小节之前）零留档字样——留档绝不前插混入子代理报告")
+  } finally { f.drop() }
+})
+
+test("A29-14 (§2.8 · AC-11): 留档出现在 handle.append 的**字符流**里（**不只是 console 告警**——告警被打成黑洞仍能取到）；缓冲区进程内**只发一次**、有界", async () => {
+  // —— 有界：留档是诊断设施，不得刷屏、不得挤占交付正文（§2.8①「有界」）——
+  __resetArchiveChannelForTest()
+  let accepted = 0
+  for (let i = 0; i < ARCHIVE_BUFFER_MAX + 5; i++) if (enqueueArchiveLine("有界探针 " + i)) accepted++
+  assert.equal(accepted, ARCHIVE_BUFFER_MAX, "缓冲至多 ARCHIVE_BUFFER_MAX 条，超出即丢弃新条（有界、且先到先得）")
+  assert.equal(enqueueArchiveLine("   "), false, "空/纯空白行拒收（不产空留档行）")
+  const bounded = drainArchiveBlock()
+  assert.equal(bounded.split("\n").filter((l) => l.startsWith("有界探针")).length, ARCHIVE_BUFFER_MAX,
+    "搬运出来的是**有界**的那一批：" + bounded.split("\n").filter((l) => l.startsWith("有界探针")).length)
+  assert.equal(drainArchiveBlock(), "", "只发一次（进程内）")
+
+  // —— 决定性一腿：把 console 告警打成**黑洞**（收进数组但全程不参与任何断言），留档**仍**必须
+  //    出现在 handle.append 的**字符流**里 ⇒ 证明可读通道**不是** console（删掉入队、只留告警
+  //    的实现本腿必红）。告警侧只做「保留」的正向对照。
+  __resetWatchdogAttachArchiveForTest()
+  __resetArchiveChannelForTest()
+  const f = makeFrame({ form: "hang", eventSurface: true, runExtra: { archiveProbe14: 1 } })
+  const sink = []
+  const orig = console.warn
+  try {
+    console.warn = (m) => { sink.push(String(m)) }   // 黑洞：只收集，不输出、不参与断言
+    const r = await runEngCoder(f.deps, { task: "archive must be readable", designToken: f.st.designToken, docs: [] })
+    await flush(() => f.specs.length === 1 && f.beats.length === 1,
+      "A29-14 派发腿：接线完成（就绪信号 = attachRunHeartbeat 接驳 ⇒ 留档已入队）")
+    assert.equal(r.includes("接线留档"), false, "前置：留档不进派发回执（仍是裸告警，不碰 warnPrefix 通道）")
+    f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe 14 done" }] })
+    await f.specs[0].hooks.done
+  } finally { console.warn = orig }
+  try {
+    assert.equal(f.handle.calls.length, 1, "交付正文恰经 handle.append 入环一次（D-46 契约）")
+    const delivered = String(f.handle.calls[0] ?? "")
+    assert.ok(delivered.includes(HOST_ARCHIVE_HEADER),
+      "★ 决定性：console 告警已被打成黑洞，留档**仍**出现在 handle.append 的字符流里：" + delivered.slice(-200))
+    assert.ok(delivered.includes("接线留档") && delivered.includes("archiveProbe14"),
+      "字符流里的留档含键名清单（作业报告里读得到，这就是 D-53 的可读通道）：" + delivered.slice(-200))
+    assert.equal(sink.some((w) => w.includes("接线留档")), true, "裸告警**保留**（入队不取代它；人盯终端仍可见）")
+
+    // —— 只发一次：同进程第二次派发（不复位闩、不复位缓冲）⇒ 不重复追加 ——
+    console.warn = () => {}
+    try {
+      await runEngCoder(f.deps, { task: "archive must be readable (second)", designToken: f.st.designToken, docs: [] })
+      await flush(() => f.specs.length === 2, "A29-14 第二次派发：jobs.start 第二次发生")
+      f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe 14 done 2" }] })
+      await f.specs[1].hooks.done
+    } finally { console.warn = orig }
+    assert.equal(f.handle.calls.length, 2, "两次派发各恰一次交付正文入环")
+    const second = String(f.handle.calls[1] ?? "")
+    assert.equal(second.includes(HOST_ARCHIVE_HEADER), false, "第二次派发**不重复追加**（缓冲只发一次，进程内）：" + second.slice(-160))
+    assert.equal(second.includes("接线留档"), false, "同上（逐字判定，不用标题常量兜底）")
+    assert.equal(drainArchiveBlock(), "", "搬运过 ⇒ 通道已关闭（迟到的入队也拒收，无第二个出口）")
+
+    // —— 🔵D4（§2.8 审计 · 合并修复轮）：让「第二次搬运不重复追加」在**派发面**也由**闩**决定 ——
+    //   上面的第二次派发之所以不追加，是因为**接线留档自身的闩**让它零入队（缓冲本来就是空的）
+    //   ⇒ 「删闩」类变异（去掉 `archiveDrained = true`）在派发面**逮不住**。本段补齐：
+    //   **只复位接线留档的闩**（让第三次派发**真的会再入队一条**），**不动**搬运闩 ⇒
+    //   第三次交付**不得**带留档小节。删闩 ⇒ 入队成功 ⇒ 第三次交付带上小节 ⇒ 本段**必红**。
+    assert.equal(enqueueArchiveLine("闩合上后的迟到留档"), false, "闩合上 ⇒ 迟到入队被拒（通道没有第二个出口）")
+    __resetWatchdogAttachArchiveForTest()   // 只复位**接线**留档的闩：本次派发会重新入队
+    console.warn = () => {}
+    try {
+      await runEngCoder(f.deps, { task: "archive must be readable (third, latch probe)", designToken: f.st.designToken, docs: [] })
+      await flush(() => f.specs.length === 3, "D4 第三次派发：jobs.start 第三次发生")
+      f.settleResult({ stopReason: "completed", output: [{ type: "text", text: "archive probe 14 done 3" }] })
+      await f.specs[2].hooks.done
+    } finally { console.warn = orig }
+    assert.equal(f.handle.calls.length, 3, "三次派发各恰一次交付正文入环")
+    const third = String(f.handle.calls[2] ?? "")
+    assert.equal(third.includes(HOST_ARCHIVE_HEADER), false,
+      "★ D4 派发面：闩合上后第三次派发**仍不追加**留档小节（由闩决定，不是「恰好缓冲空」）：" + third.slice(-160))
+    assert.equal(third.includes("接线留档"), false, "同上（逐字判定，不用标题常量兜底）")
+  } finally { f.drop() }
+
+  // —— 静态锁：留档通道的测试缝（命名约定 + @internal）在**生产路径零引用**（镜像 A29-8a 同款锁）——
+  const libUrl = new URL("../lib/", import.meta.url)
+  const seam = "__resetArchiveChannelForTest"
+  const hits = readdirSync(libUrl)
+    .filter((name) => name.endsWith(".mjs") && name !== "silence-watchdog.mjs")
+    .filter((name) => readFileSync(new URL(name, libUrl), "utf8").includes(seam))
+  assert.deepEqual(hits, [], "生产路径零引用留档通道测试缝：" + JSON.stringify(hits))
+  const wdogSrc = readFileSync(new URL("../lib/silence-watchdog.mjs", import.meta.url), "utf8")
+  assert.ok(wdogSrc.includes("export function " + seam + "("), "命名约定：__ 前缀 + ForTest 后缀")
+  assert.ok(wdogSrc.includes("export function " + seam + "(") && wdogSrc.includes("@internal"), "JSDoc 标注 @internal（三者同时在场才构成测试缝）")
+})
+
+// ═══════════════ §2.8 审计（合并修复轮 · 2026-09-27）：🔴D1 · 🔵D3 · 🔵D4 ═══════════════
+
+test("§2.8 审计 🔴D1（AC-11 · A29-13/14）: **空搬运不关闩**——dsh 同步回执点零入队地搬运一次后，首派证据**仍**进得了回执区（同时承担 🔵D3 的第二个行为腿：dsh 同步回执点）", async () => {
+  // ★ 这条腿钉的是 §2.8 审计 🔴D1 的**可达路径**，不是假想：`drainArchiveBlock` 曾在**判空之前**就
+  //   置闩 ⇒ 一次「本进程暂无留档」的空搬运就把可读通道**永久关死**（此后 `enqueueArchiveLine` 恒
+  //   false）。dsh 同步回执点（`background:false` 的主返回点）在工具面 `applied:true` 时**零入队**
+  //   却**照常搬运** ⇒ **首次交付**即触发关死 ⇒ 此后首派证据永远进不了回执区（§2.8 要消灭的
+  //   「证据按构造不可读」形态）。单元面最小复现：reset → drain() === "" → enqueue() === false。
+  const appliedTools = {
+    view: () => ({ visible: true, knownNames: ["read", "pwsh"], restrictableNames: ["read", "pwsh"] }),
+  }
+  __resetWatchdogAttachArchiveForTest()
+  __resetArchiveChannelForTest()
+
+  // ① 首次交付走 **dsh 同步回执点**：工具面已 applied ⇒ 本次**零入队** ⇒ 该点搬运的是**空缓冲**。
+  const fSync = makeFrame({ toolsSurface: appliedTools })
+  let syncText = ""
+  try {
+    const pending = runEngCoder(fSync.deps, { task: "first delivery on the sync path (empty drain)", designToken: fSync.st.designToken, docs: [], background: false })
+    await flush(() => fSync.requests.length === 1,
+      "D1①：dsh 同步路径的 ctx.subagents.start（就绪信号 = requests 首次出现 ⇒ settleResult 已就绪）")
+    fSync.settleResult({ stopReason: "completed", output: [{ type: "text", text: "sync first delivery done\n\nTouched files: lib/eng.mjs" }] })
+    syncText = String(await pending)
+  } finally { fSync.drop() }
+  assert.ok(syncText.includes("eng_coder delivery:"),
+    "前置：确实走的是 dsh 同步**成功**回执点（4/4），不是回落信封/错误分支：" + syncText.slice(0, 160))
+  assert.equal(syncText.includes(HOST_ARCHIVE_HEADER), false,
+    "dsh 同步回执点：工具面已 applied ⇒ 本次零入队 ⇒ 搬运返回空串（回执区**没有**留档小节，行为逐字节不变）")
+
+  // ② 决定性：空搬运**不得**关闩——首派证据此刻仍能入队。
+  const PROBE = "[thincoder-suite] 首派证据探针（D1：空搬运后仍应入队）"
+  assert.equal(enqueueArchiveLine(PROBE), true,
+    "★ 🔴D1 决定性：空搬运**不关闩** ⇒ 后续首派证据仍能入队（把 archiveDrained = true 挪回判空之前本行**必红**）")
+
+  // ③ 该行**仍出现在某个回执区**：随后的 dsh 后台派发把缓冲搬进交付正文（dsh 后台回执点 3/4）。
+  __resetWatchdogAttachArchiveForTest()   // 复位**接线**留档的闩：本次派发会再产出一条真实首派证据
+  const fBg = makeFrame({ form: "hang", eventSurface: true, runExtra: { archiveProbeD1: 1 }, toolsSurface: appliedTools })
+  let delivered = ""
+  try {
+    const dispatch = await runEngCoder(fBg.deps, { task: "second delivery: the first archive must still be readable", designToken: fBg.st.designToken, docs: [] })
+    await flush(() => fBg.specs.length === 1 && fBg.beats.length === 1,
+      "D1③：后台派发 + 事件面接驳（就绪信号 = specs/beats 各一）")
+    assert.equal(dispatch.includes("接线留档"), false, "前置：留档不进派发回执（仍是裸告警，不碰 warnPrefix 通道）")
+    fBg.settleResult({ stopReason: "completed", output: [{ type: "text", text: "probe d1 second delivery done" }] })
+    await fBg.specs[0].hooks.done
+    assert.equal(fBg.handle.calls.length, 1, "交付正文恰经 handle.append 入环一次（D-46 契约）")
+    delivered = String(fBg.handle.calls[0] ?? "")
+  } finally { fBg.drop() }
+  const iHeader = delivered.indexOf(HOST_ARCHIVE_HEADER)
+  assert.ok(iHeader !== -1,
+    "★ 通道没被空搬运关死：首派证据（探针 + 接线留档）随第二次派发进了回执区：" + delivered.slice(-240))
+  assert.ok(delivered.includes(PROBE), "探针行逐字在回执区（首派证据没丢）：" + delivered.slice(-240))
+  assert.ok(delivered.includes("接线留档") && delivered.includes("archiveProbeD1"),
+    "同时到达的**真实**首派证据（接线留档 + 键名清单）也在回执区：" + delivered.slice(-240))
+  assert.ok(iHeader > delivered.indexOf("probe d1 second delivery done"),
+    "留档小节**位于交付正文之后**（绝不前插，阶段门是前缀式判定）")
+  assert.equal(enqueueArchiveLine("搬运后的迟到留档"), false, "**真搬到了行** ⇒ 此后闩合上、拒收迟到入队（只发一次的既有语义不变）")
+})
+
+test("§2.8 审计 🔵D3（AC-11 · D48-2 接线点 1/4…4/4）: 四个**回执书写点**逐一含 drainArchiveBlock 调用（静态逐点覆盖；行为腿覆盖 3/4 与 4/4，另两点由本腿承担——**不冒充行为覆盖**）", () => {
+  // ★ 为什么要静态腿（§2.8 审计 🔵D3）：`lib/eng.mjs:917` 自称「四个成功返回点，缺一不可」，而
+  //   行为腿原先**只覆盖 dsh 后台那一点**（:1518）⇒ 删掉 :1304 / :1361 / :1688 三处搬运调用全绿。
+  //   本腿逐点核「搬运调用在该返回语句本体里」；**行为面**由 D1 腿（4/4 dsh 同步）+ A29-14 腿
+  //   （3/4 dsh 后台）承担。codex 两点（1/4 :1304 后台、2/4 :1361 同步）**只有静态覆盖**——
+  //   如实登记为覆盖边界，不冒充行为覆盖（本档既不新增 codex 夹具，也不改 `lib/eng.mjs`）。
+  const src = readFileSync(new URL("../lib/eng.mjs", import.meta.url), "utf8")
+  const lines = src.split("\n")
+  const CALL = "drainArchiveBlock("
+  // 窗口 = 锚点所在行 + 其后 WINDOW-1 行（覆盖「表达式折行到下一行」的写法，如 4/4 的 :1687+:1688）。
+  const WINDOW = 3
+  const points = [
+    { id: "1/4 codex 后台", anchor: "output: stageGateNote(stages, env.text) + deliveryText(env.text) + hostReceipt" },
+    { id: "2/4 codex 同步", anchor: "return stageGateNote(stages, env.text) + deliveryText(env.text) + capNote" },
+    { id: "3/4 dsh 后台", anchor: "output: stageGateNote(stages, outputText) + warnPrefix()" },
+    { id: "4/4 dsh 同步", anchor: "return stageGateNote(stages, outputText) + warnPrefix()" },
+  ]
+  // 「四个」这句声明本身也要有断言——点数漂了（增/减返回点）本腿必红，而不是静默少核一个点。
+  assert.equal(lines.filter((l) => l.includes(CALL)).length, points.length,
+    "lib/eng.mjs 里搬运调用恰四处（与「四个回执书写点」一一对应）：" + points.length)
+  for (const p of points) {
+    const hits = []
+    for (let i = 0; i < lines.length; i++) if (lines[i].includes(p.anchor)) hits.push(i)
+    assert.equal(hits.length, 1, p.id + "：锚点在 lib/eng.mjs 里**恰命中一行**（锚点失真 ⇒ 本腿会核错位置）：" + JSON.stringify(hits))
+    const region = lines.slice(hits[0], hits[0] + WINDOW).join("\n")
+    assert.ok(region.includes(CALL),
+      p.id + "（行 " + (hits[0] + 1) + "）：回执书写点**含搬运调用**（删掉这一点 ⇒ 本行必红）")
+  }
+  // 「为何决定性」钉在断言旁以免被后人「顺手清理」：窗口谓词对**没有**搬运调用的返回语句必须为假。
+  assert.equal(lines.slice(0, 3).join("\n").includes(CALL), false,
+    "窗口谓词自证：同样宽度的窗口若落在无关行上必须**判否**（否则本腿退化成恒真断言）")
+})
+
+// ═══════════════ 批 29 / §2.9（收尾四 · 2026-09-27）：交付码评 6 条 🔵 收干（A29-15 · A29-16 · AC-12）═══════════════
+// 来源：§2.8 修复轮的交付码评（PASS，6 条 🔵）。逐条对位：🔵1 双口径渲染 · 🔵2 null 视同缺失（口径写进
+// JSDoc）· 🔵3 键名清洗 · 🔵4 缓冲与 warn 同一原文——前四条落在 A29-15 / A29-16 两条腿；🔵6 = A29-8c 腿头部
+// 复位接线闩（见该腿；本节 A29-16 的静态锁钉住复位在场）；🔵5 是**登记边界**（零行为改动 ⇒ 不设腿，边界
+// 注释一行落在 lib/silence-watchdog.mjs 的 drainArchiveBlock JSDoc 里）。
+// ★ 纪律：这两条腿放**文件末尾**——它们会消费留档闩/缓冲（各腿自带复位），其后无腿 ⇒ 零串味；A29-15
+//   只碰纯函数与源码静态读，不触碰任何进程内单例状态。
+
+test("A29-15 (§2.9 🔵1/2/3 · AC-12): 非法值告警**双口径**（NaN 不再串成孤零零的 null）· 显式 null 视同缺失且口径写进 JSDoc · 键名内部换行被折叠为单行", async () => {
+  // —— 🔵1：双口径渲染。决定性形态 = NaN：JSON.stringify(NaN) === "null" 而 String(NaN) === "NaN"
+  //   ⇒ 旧实现（单 JSON 口径）的告警读成「invalid engSilenceAbortMs null」，把排障引向「谁配了
+  //   null」的错方向（本仓真实码评形态）。双口径并列 ⇒ 两种读法都对得上账。
+  const wNaN = resolveEngSilenceAbortMs({ engSilenceAbortMs: NaN })
+  assert.equal(wNaN.ms, ENG_SILENCE_ABORT_MS, "非法（NaN）⇒ 回落缺省不变")
+  assert.ok(wNaN.warning.includes("NaN"),
+    "★ NaN 形态必须带上 String 口径「NaN」——旧实现只剩孤零零的 null，本行必红：" + wNaN.warning)
+  assert.ok(wNaN.warning.includes("null"),
+    "NaN 形态同时保留 JSON 口径「null」⇒ 双口径并列（结构化面与人读两本账）：" + wNaN.warning)
+  const wInf = resolveEngSilenceAbortMs({ engSilenceAbortMs: Infinity }).warning
+  assert.ok(wInf.includes("Infinity") && wInf.includes("null"), "Infinity 同走双口径：" + wInf)
+  // 两口径渲染**相同**（如 0 / -1）⇒ 只显一份：不产「0 / String: 0」式重复噪声
+  const wZero = resolveEngSilenceAbortMs({ engSilenceAbortMs: 0 }).warning
+  assert.ok(wZero.includes("engSilenceAbortMs 0 ("), "两口径相同（如 0）⇒ 单形态渲染保留：" + wZero)
+  assert.ok(!wZero.includes("/ String:"), "相同口径不并列第二份（双口径只用在两口径**不同**时）：" + wZero)
+
+  // —— 🔵2：显式 null 视同缺失（零告警）。钉口径：若哪天把 null 改归「非法 ⇒ warning」类，本行必红
+  //   ——届时必须同批改 JSDoc（下方静态钉）与 A29-3c 的判据，不得静默漂移。
+  assert.deepEqual(resolveEngSilenceAbortMs({ engSilenceAbortMs: null }),
+    { ms: ENG_SILENCE_ABORT_MS, warning: null }, "★ 显式 null ⇒ 视同缺失：回落缺省且**零告警**")
+  assert.deepEqual(resolveEngSilenceAbortMs({ engSilenceAbortMs: undefined }),
+    { ms: ENG_SILENCE_ABORT_MS, warning: null }, "对照：undefined 同为缺失（两形态同判）")
+  // 口径必须**写进 JSDoc**（不是只活在测试里）：静态钉住「null 视同缺失」这句话在实现侧在场。
+  const wdogSrc = readFileSync(new URL("../lib/silence-watchdog.mjs", import.meta.url), "utf8")
+  assert.ok(wdogSrc.includes("null 视同缺失"), "JSDoc 明写「null 视同缺失」口径（§2.9 🔵2 的文档面）")
+
+  // —— 🔵3：键名内嵌换行/控制符 ⇒ 折叠为单空格**后**再截断（「单行可 grep」恒成立）——
+  const weird = { "bad\nkey\tname": 1, plain: 2 }
+  const weirdStr = formatKeyList(weird)
+  assert.ok(!weirdStr.includes("\n") && !weirdStr.includes("\t"),
+    "★ 含换行/制表键名 ⇒ 清单仍单行（旧实现键名原样进清单 ⇒ 本行必红）：" + JSON.stringify(weirdStr))
+  assert.ok(weirdStr.includes("bad key name"), "键内换行/制表符折叠为单空格（截断**前**清洗）：" + JSON.stringify(weirdStr))
+  // 先折叠后截断：超长含换行键名同样单行 + 截断标记在场（折叠若发生在截断后，长度口径即漂移）
+  const longWeird = {}
+  longWeird["x".repeat(30) + "\n" + "y".repeat(30)] = 1
+  const longWeirdStr = formatKeyList(longWeird)
+  assert.ok(!longWeirdStr.includes("\n") && longWeirdStr.includes("…"),
+    "先折叠后截断（超长含换行键名仍单行且带截断标记）：" + JSON.stringify(longWeirdStr))
+})
+
+test("A29-16 (§2.9 🔵4/6 · AC-12): 缓冲与裸 warn 用**同一原文**（trim 只做空串判定；含首尾空白入参仍逐字相同）· A29-8c 头部复位接线闩 ⇒ 初始态自持", async () => {
+  // —— 🔵4（配对形态）：同一条留档文案进两通道 ⇒ 缓冲行与裸 warn 行逐字相等 ——
+  __resetWatchdogAttachArchiveForTest()
+  __resetArchiveChannelForTest()
+  const capPair = await captureWarn(async () =>
+    archiveWatchdogAttach({ result: Promise.resolve(), dispose() {}, onEvent() {} }, { attached: true, via: "onEvent" }))
+  assert.equal(capPair.warnings.length, 1, "前置：恰一条裸 warn（入队不取代告警，§2.8④）")
+  const pairLine = drainArchiveBlock().split("\n").find((l) => l.includes("接线留档"))
+  assert.ok(pairLine !== undefined, "前置：回执小节里有留档行（本腿在文件末尾，消费后其后无腿 ⇒ 零串味）")
+  assert.equal(pairLine, capPair.warnings[0], "缓冲行与裸 warn 行**逐字相同**（同一原文：两通道由构造同步）")
+
+  // —— 🔵4（决定性形态）：入参带首尾空白 ⇒ 缓冲逐字保留**原文**。旧实现入缓冲前 trim ⇒ 缓冲行 =
+  //    原文.trim() ≠ 裸 warn 打的原文 ⇒「同一条文案逐字不变」只是碰巧成立。本段按生产者的配对
+  //    形态复现（eng.mjs 的两处生产者都是「同一个字符串交给 enqueue + 裸 warn」），再逐字比对。
+  __resetArchiveChannelForTest()
+  const PADDED = "  [thincoder-suite] 接线留档·trim 一致性探针（首尾空白原文）  "
+  const warned = []
+  const origWarn = console.warn
+  try {
+    console.warn = (m) => { warned.push(String(m)) }
+    assert.equal(enqueueArchiveLine(PADDED), true, "首尾空白非纯空白 ⇒ 照常入队（拒收只针对纯空白）")
+    console.warn(PADDED) // 生产者配对形态：同一个字符串交给两通道（enqueue + 裸 warn）
+  } finally { console.warn = origWarn }
+  const paddedLines = drainArchiveBlock().split("\n")
+  assert.ok(paddedLines.includes(PADDED),
+    "★ 缓冲用**同一原文**（含首尾空白逐字保留，不做入缓冲 trim——旧实现本行必红）：" + JSON.stringify(paddedLines))
+  assert.equal(paddedLines[paddedLines.indexOf(PADDED)], warned[0],
+    "★ 缓冲内容与裸 warn **逐字相同**（含首尾空白入参时仍成立：§2.8①「同一条文案」由构造保证）")
+  assert.equal(enqueueArchiveLine("   "), false, "纯空白仍拒收（trim 只做空串判定，拒收语义不放宽）")
+
+  // —— 🔵6：A29-8c 初始态自持的**静态锁**。该腿头部复位接线闩后，「正确性不依赖跨腿顺序」在全量
+  //    顺序下体现不出删改风险（闩早被前腿合上，删掉复位该腿也绿）⇒ 用静态锁钉住复位调用必须在该腿
+  //    头部区域：删掉它 ⇒ 本行红（该腿随之退回「跨腿顺序依赖」的旧形态）。窗口 24 行：复位写在腿头
+  //    makeFrame/try 与既有缓冲复位之间（第 ~12 行）；腿名漂移 ⇒ 前置行先红（提示同步窗口谓词），
+  //    不会静默核错位置。
+  const selfLines = readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n")
+  const iA8c = selfLines.findIndex((l) => l.includes('test("A29-8c'))
+  assert.ok(iA8c !== -1, "前置：能定位 A29-8c 腿（腿名漂移 ⇒ 本行红，提示同步窗口谓词）")
+  assert.ok(selfLines.slice(iA8c, iA8c + 24).join("\n").includes("__resetWatchdogAttachArchiveForTest()"),
+    "★ A29-8c 腿头部显式复位接线闩（§2.9 🔵6：初始态自持——删掉该复位 ⇒ 本行必红，且该腿退回跨腿顺序依赖）")
 })
