@@ -20,7 +20,7 @@
 
 | [2026-09-25-dsh017-compat-design.md](2026-09-25-dsh017-compat-design.md) | 2026-09-25 | **批 24 设计（DSH 0.1.7 平台契约兼容修复）**：D-41 消息模型（工具结果从 `user + tool-result` 块 → 独立 `tool` 角色消息）+ D-42 jobs owner（Agent 对象 → `agent/session id`）+ D-40 home 探测同版发布。根因含 **0.1.6 与 0.1.7 两份平台源码逐字对照**；方案含压缩配对守卫的退化边界；验收锚 D41a/D41b/D42a/D42b；决策 D24-1…D24-5 |
 
-| [job-output-fallback.md](job-output-fallback.md) | 2026-09-25 | **常设运维说明（非批次档）**：平台侧 `job_output` 读不回后台作业全文的现象、逐机制绕行方式（advisor → session-state · consult → 纪要文件 · eng/escalate → 同步派发）、以及 eng/escalate 交付报告未落盘这个缺口与三条应急 |
+| [job-output-fallback.md](job-output-fallback.md) | 2026-09-25（**2026-09-28 更正定性**） | **常设运维说明（非批次档）**：后台作业「读不回全文」的现场与**最终真因**——真因是第三方插件 `@dsh-external/dsh-task-status` 的 `jobs.read` 镜像补丁（按 0.1.6 契约重写信封），**平台侧无缺陷**；含零重启运行时探针读数 · 逐机制绕行（advisor → session-state · consult → 纪要文件 · eng/escalate → `$DSH_HOME/.thincoder/jobs/`）· 批 26 落盘兜底的现状（降为附加保险） |
 
 | [dsh017-full-alignment-design.md](dsh017-full-alignment-design.md) | 2026-09-26 | **批 25 设计：插件对 DSH 0.1.7-rc.2 的全面契约对齐**——D-46 作业输出契约（`run(handle)` + 输出环 `append` + outcome 的 `result` 字段；0.1.6 的 `spec.run()` 无参与 `job.output` 在 0.1.7 已不存在）· D-44 文档集指纹的路径基座显式化；含两版源码逐字对照 · 决策 D25-1…D25-4 · 机验锚 A1…A6 |
 
@@ -30,7 +30,7 @@
 | [dsh017-batch28-design.md](dsh017-batch28-design.md) | 2026-09-26 | **批 28 设计：对外收口**——上游报告包（平台三问题：`job_output` 读法 · 沙箱子进程挂起 · advisor 三形态）+ 只读复现脚本 · **版本哨兵**（不一致响亮告警、不阻断）· 契约面巡检工具（与九条锁同源）· 结项说明。决策 D28-1…**7** · 锚 A28-1…6 · AC-1…6 |
 | [dsh017-batch29-design.md](dsh017-batch29-design.md) | 2026-09-26 | **批 29 设计：把门禁变可信（残项清零）**——**D-50** 三道机制（① 工具面 `toolFilter` 禁执行〔能拦就拦·拦不住如实标注〕② 静默看门狗〔`ENG_SILENCE_ABORT_MS` 默认 5 分钟，到点记「疑似挂死」〕③ `stages[].check` 语义正式改名「宿主验收清单」）· **D-51** 先可诊断再消时序（失败差量输出 + 可注入时钟；确属平台并发则显式登记）· **A28-6 机验腿** + 脚本文案分支 · **七条 🔵 收干**。决策 D29-1…**6** · 锚 A29-1…**7**（含 D-52 的 A29-7） · AC-1…7 |
 | [dsh017-batch30-design.md](dsh017-batch30-design.md) | 2026-09-26 | **批 30 设计：把门禁变可信（残项清零）**——**D-50** 三道机制（① 工具面 `toolFilter` 禁执行〔能拦就拦·拦不住如实标注〕② 静默看门狗〔`ENG_SILENCE_ABORT_MS` 默认 5 分钟，到点记「疑似挂死」〕③ `stages[].check` 语义正式改名「宿主验收清单」）· **D-51** 先可诊断再消时序（失败差量输出 + 可注入时钟；确属平台并发则显式登记）· **A28-6 机验腿** + 脚本文案分支 · **七条 🔵 收干**。决策 D29-1…**6** · 锚 A29-1…**7**（含 D-52 的 A29-7） · AC-1…7 |
-| [upstream-2026-09-26-platform-issues.md](upstream-2026-09-26-platform-issues.md) | 2026-09-26 | **上游报告包（批 28 · US-1）**：三条平台问题的自包含报告——① `job_output` 读全文对所有作业都崩（干净移除 profile 自带 rc.1 副本后仍崩 ⇒ 平台自身读法缺陷）② 沙箱拒子进程应**报错**而非挂起（实测挂 8 分钟、日志 0 字节；宿主同命令 7.24 秒全绿）③ advisor 三形态并存（内联条件不明）。每条含现象 / 最小复现 / 一手证据 / 影响 / 建议；配套只读复现脚本 [`scripts/repro-platform-issues.ps1`](../scripts/repro-platform-issues.ps1) |
+| [upstream-2026-09-26-platform-issues.md](upstream-2026-09-26-platform-issues.md) | 2026-09-26（**问题一 2026-09-28 撤回**） | **上游报告包（批 28 · US-1）**：三条报告，**其中问题一已撤回**——① ~~`job_output` 读全文对所有作业都崩（平台自身读法缺陷）~~ **已撤回：真因是第三方插件 `@dsh-external/dsh-task-status` 的 `jobs.read` 镜像补丁，平台侧无缺陷、卸载后即时恢复** ② 沙箱拒子进程应**报错**而非挂起（实测挂 8 分钟、日志 0 字节；宿主同命令 7.24 秒全绿）③ advisor 三形态并存（内联条件不明）。每条含现象 / 最小复现 / 一手证据 / 影响 / 建议；配套只读复现脚本 [`scripts/repro-platform-issues.ps1`](../scripts/repro-platform-issues.ps1) |
 | [dsh017-program-closeout.md](dsh017-program-closeout.md) | 2026-09-26 | **结项说明（批 28 · US-4）**：批次脉络（24/25/26/27/28）· 九条触点矩阵**只做指针 + 摘要**（权威源 = `lib/contract-baseline.mjs`）· 四道护栏（令牌 docHash · 锚/AC · 常驻锁 · 宿主验收回执）· 「平台换契约时的标准动作」（先跑 `contractWatch` → 对照矩阵 → 开新批） |
 
 ## 吸收面

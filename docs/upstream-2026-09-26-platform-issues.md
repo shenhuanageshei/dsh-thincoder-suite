@@ -2,16 +2,27 @@
 -->
 # 上游平台问题报告包（2026-09-26 · dsh017 批 28 · US-1）
 
+> **★ 2026-09-28 撤回通知（只针对问题一）**：经运行时取证，**问题一不是平台缺陷——本档对它的一切定性（含「平台自身读法缺陷」「本仓不可修」）一律撤回，请勿据其向上游报缺**。
+> 真因：本机 profile 装着的**第三方插件** `@dsh-external/dsh-task-status`（上游 `vlln/dsh-task-status`，未适配 0.1.7）给 `ctx.jobs.read` 打镜像补丁，按 **0.1.6** 契约重写信封 `{ text, snapshot }`，丢弃 **0.1.7** 的 `{ chunks, lossy, result?, job }`，使平台的 `readBody` 读 `read.job.output` 时崩。
+> **卸载该插件后 `job_output` 立刻恢复**（同机同日实测读到完整正文；未重启、未改平台包）。问题二、问题三**不受本通知影响**，仍然有效。
+> 取证与改法见 [`job-output-fallback.md`](./job-output-fallback.md) §0、登记表 [`2026-09-05-defect-registry.md`](./2026-09-05-defect-registry.md) D-45、[`dsh017-batch26-design.md`](./dsh017-batch26-design.md) §8 更正段。
+
 - 定位：本仓**不可修**的平台侧问题，打包成**自包含**的对外报告——拿到本档（配上 `scripts/repro-platform-issues.ps1`）即可复现，不必再翻会话导出。
 - 事实底座：全部现象/证据来自本机实测（2026-09-26），原始记录见 [`docs/dsh017-batch26-design.md`](dsh017-batch26-design.md) §1/§2.5/§8 与 [`docs/dsh017-batch27-design.md`](dsh017-batch27-design.md) §1。
 - 复现辅助：`scripts/repro-platform-issues.ps1`（**只读**；A28-6 口径——不改本仓文件/配置/环境；`job_output` 试作业腿走独立临时 `DSH_HOME`；沙箱挂死腿经插件派发 + 独立超时，绝不陪挂）。
 
 ## 环境背景（三问题共用的底座）
 
-- 官方桌面版内嵌 DSH `0.1.7-rc.2`（app 侧）；桌面 profile 的 pnpm 虚拟店里另残留 `0.1.7-rc.1` 的 `@deepseek-ai/dsh*` 副本（含 profile 自带的 `dsh-jobs-local` 与 `dsh-tool-jobs`）——版本混杂（skew）是下面问题的放大器，但**不是**根因（问题一的干净移除实验已证伪「rc.1 残留是根因」）。
+- 官方桌面版内嵌 DSH `0.1.7-rc.2`（app 侧）；桌面 profile 的 pnpm 虚拟店里另残留 `0.1.7-rc.1` 的 `@deepseek-ai/dsh*` 副本（含 profile 自带的 `dsh-jobs-local` 与 `dsh-tool-jobs`）——版本混杂（skew）是下面问题的放大器，但**不是**根因（问题一的干净移除实验已证伪「rc.1 残留是根因」；**2026-09-28 再补一步：问题一的真因既不是 rc.1 残留、也不是平台，而是第三方插件——见档首撤回通知**）。
 - 本插件侧的对应姿势：生产契约按 `0.1.7-rc.2` 对齐（批 24–27）；读取面崩坏用自持落盘兜底（D-45）；版本哨兵与九条触点锁见 `lib/contract-baseline.mjs`。
 
-## 问题一：`job_output` 读全文对所有作业都崩（读取面缺陷，平台侧）
+## 问题一：~~`job_output` 读全文对所有作业都崩（读取面缺陷，平台侧）~~ **【已撤回 2026-09-28：不是平台缺陷】**
+
+**撤回后的真因（2026-09-28 运行时取证）**
+本机 profile 装着的第三方插件 `@dsh-external/dsh-task-status`（上游 `vlln/dsh-task-status`）在 `apply()` 里给 `ctx.jobs.read` 打镜像补丁：它把 0.1.7-rc.2 的返回值 `{ chunks, lossy, result?, job }` 拆开后**只回吐 0.1.6 的 `{ text, snapshot }`**（`text` 还恒为空，因为它按已不存在的 `result.text` 取值）。平台的 `dsh-tool-jobs` 读 `read.job.output.spillPaths` ⇒ `read.job === undefined` ⇒ **`reading 'output'`**；`dsh-tool-pwsh` 的 promoted 分支读 `read.chunks` ⇒ **`reading 'filter'`**。**两条症状同源。**
+**卸载该插件后 `job_output` 与 promoted 读取立刻恢复**（同机同日实测）。⇒ **平台侧无缺陷，本档「问题一」不成立。**
+
+**（以下为 2026-09-26 当时的原文，仅作留档；其结论已被上面的取证推翻）**
 
 **现象**
 对**任何**作业调 `job_output` 读全文都报同一个错：`Cannot read properties of undefined (reading 'output')`——平台自产作业与插件自产作业 alike。读得到状态行，读不到正文。
@@ -31,13 +42,13 @@
 - 批 26 设计档 §8 环境实验记录：移出 profile 自带副本后仍崩（证据：备份目录 `profiles/desktop/_core-skew-backup-20260926-114225/`；`.pnpm` 内已无匹配脚本正则的 jobs 目录）。
 - 字节级明细：本插件 D-45 兜底会把每份报告全文落 `$DSH_HOME/.thincoder/jobs/<jobId>.txt`，并在同目录 `index.jsonl` 逐行记录（jobId、kind、at、bytes、pathForm）——上游取证可直接读该索引拿字节数（本报告不抄数，以索引为准）。
 
-**影响面**
-官方读取路径在这套部署上完全不可用：任何会话都拿不到后台作业的正文全文，只能靠状态行 + 各自为政的旁路。本仓的缓解（D-45 自持落盘）覆盖**本插件**派发的四条机制，平台自产作业无人在仓内替它兜底。
+**影响面（★ 已作废）**
+~~官方读取路径在这套部署上完全不可用~~ **撤回**：该部署上官方读取路径**本来可用**，是第三方插件把它遮住了；卸载后任何会话都能正常读回全文。原口径里的「平台自产作业无人在仓内替它兜底」也一并作废——平台自产作业同样受同一个插件影响，同样在卸载后恢复。
 
-**给上游的建议**
-- 修读取面对 0.1.7 信封的适配：正文在 `job.result` 与输出环，读取器仍在取旧字段（undefined 后直接读属性 ⇒ 崩）；对 undefined 形态先判空再取。
-- 让读取器与生产器**同代**：按运行时版本选择读取路径，或在版本失配时显式报错（而不是 TypeError）。
-- 复现入口：本报告「最小复现」两步 + `index.jsonl` 索引。
+**给上游的建议（★ 已作废——三条里前两条基于错误定性）**
+- ~~修读取面对 0.1.7 信封的适配~~ **撤回**：平台读取器本来就读的是 0.1.7 信封，是第三方插件把 `read` 换掉了。
+- ~~让读取器与生产器同代~~ **撤回**：本机 reader/writer 同代（`@deepseek-ai/dsh@0.1.7-rc.2` 同时钉 `dsh-jobs-local` 与 `dsh-tool-jobs`）。
+- **转给插件作者的一条（仍然成立）**：插件不应把平台服务的返回契约**静默重写**成另一代形状；确需镜像应保持信封透传，或改用**非消耗**的 `ctx.jobs.readAt(id, from, caller)`。已另拟 issue 给 `vlln/dsh-task-status`。
 
 ## 问题二：沙箱拒子进程应报错而非挂起（fail-open by omission，平台侧）
 

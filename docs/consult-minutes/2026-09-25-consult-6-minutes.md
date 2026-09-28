@@ -156,6 +156,7 @@ requiresReport: true
 - 评审对备份树 `.nm-broken-20260923-102653` 的**具体行号**（L94-107 / L412-413 等）父侧未逐条复读；本机确有同族兄弟目录（`.nm-broken-20260923-102653` / `-104713` / `-105929`），路径真实性已核、行号未核。
 - 「会诊子代理是否完整读取了 documents 里的设计档」不可验（只读工具无回执）。
 - `job_output` 平台缺陷的**根因**不可验：不在本仓代码面，本批只登记现象与两次复现（advisor-dsh-1 · consult-1）。
+  > **★ 2026-09-28 勘误**：本条里「**平台**缺陷」的定性**已撤回**——根因**可验**且已验明：本机第三方插件 `@dsh-external/dsh-task-status` 给 `ctx.jobs.read` 打镜像补丁、按 0.1.6 契约重写信封，丢弃 0.1.7 的 `{ chunks, lossy, result?, job }`；该插件已卸载，`job_output` 即时恢复。**平台侧无缺陷。** 取证见 [`job-output-fallback.md`](../job-output-fallback.md) §0。
 
 ## §6 历史行
 

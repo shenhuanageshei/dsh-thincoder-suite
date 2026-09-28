@@ -13,6 +13,8 @@
 **三、D-57 落盘只增不减**——`persistJobReport` 写前读回：新文本更短**且**现值以其为前缀（= 前缀形截断）⇒ **保留现值** + 裸 warn；残余窗口（更短的非前缀写仍可缩水）如实登记。
 **四、D-58/D-59/D-60（会诊三连）**——**D-58**：注入面消毒（ZWSP 断开裸引用形态，两分支）+ 失败时**兜底读子会话落盘 `turn/end.reason`**（多帧 zstd 切帧）+ codex 行不再吞 diagnostics；**D-59**：池行**前置可用性预检**（模型目录/effort 元数据；**账号类型不可预检 ⇒ 只暴露诊断**）；**D-60**：「只读」声明由**模型面证据**（子会话 `request/header`）裁定——本部署实测模型面 = `[run_code]` 单元素、子会话 `danger-full-access` ⇒ **会诊产物逐字带出「本部署无法保证只读」**（派发 detail + digest 同源）。
 **五、判据升级**：任何「工具面/只读已生效」的断言，证据**必须是模型请求头里的工具面**，**不得**以「restrict 未抛错」代替（A30-12 为真机项，已在轮 2 审计中被真机读到：299 帧内恰 1 条 `request/header`，`tools=[run_code]`）。
+**六、勘误（2026-09-28 同日补记 · 不改动任何已交付行为，只更正定性）**：**D-45 的定性撤回**。本版及批 26 一直把 `job_output` 读不回归因于「平台自身读法缺陷、本仓不可修」。当日**运行时取证**（往 profile 的 `cordis.patch.yml` 热插一个探针插件，零重启拿到 `ctx.jobs` 的运行时读数）推翻该结论：真因是**第三方插件** `@dsh-external/dsh-task-status`（上游 `vlln/dsh-task-status`，未适配 0.1.7）在 `apply()` 里给 `ctx.jobs.read` 打镜像补丁、按 0.1.6 契约重写信封 `{ text, snapshot }`，丢弃 0.1.7 的 `{ chunks, lossy, result?, job }` ⇒ 下游 `readBody` 读 `read.job.output` 即崩（同一链路亦解释 promoted `pwsh` 的 `reading 'filter'`）。**已卸载该插件；卸载后 `job_output` 与 promoted 读取立刻恢复**（同机同日实测，未重启、未改平台包）。⇒ **平台侧无缺陷**；`docs/upstream-2026-09-26-platform-issues.md` 的**问题一已撤回**；批 26 的落盘兜底**降为附加保险**。取证（探针读数）与上游同款告警见 `docs/job-output-fallback.md` §0。
+
 ## [0.29.10] — 2026-09-27
 
 > **一句话**：批 29 的**收尾三件套**——把 D-53 的证据从「按构造读不到」搬进**可读回执区**、**真机取证收口**，并如实登记它揭露的**三条新缺陷**；同时收干 §2.7 的测试健壮性四项与 §2.9 的六条 🔵。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。
@@ -95,7 +97,7 @@
 **批 26（把报告拿回来 ⊕ 把验证门归位：D-45 · D-47 · D-48）**
 
 - **【计数行】**：`node --test` **545/545**（**基线 527 + 本批 18**：D-45 = `test/dsh017-compat.test.mjs` +5〔A26-1/A26-1b/A26-2/index.jsonl 形状/pathForm 跨四机制〕· 新档 `test/platform-surface.test.mjs` +12〔九条触点常设锁 + A26-6/A26-7/A26-8〕· D-47 = `test/guard-e.test.mjs` +1〔A26-3〕）。⇒ 台账 §三：`dsh017-compat.test.mjs` **9 → 14** · `guard-e.test.mjs` **24 → 25** · **新增 `platform-surface.test.mjs`（12）**；档数 **22 → 23**。
-- **D-45（🟡 报告拿不回）**：`job_output` 在这台机器上对**所有**作业都崩（含平台自产）⇒ 报告正文无第二条可读路径。修法：`lib/job-outcome.mjs` 在**收口点**把正文写到 `$DSH_HOME/.thincoder/jobs/<jobId>.txt`（`jobId = handle?.id`），并追加 `index.jsonl` 记 `{jobId,kind,at,bytes,pathForm}`（`pathForm` 钉死枚举 result/ring/session-state/consult-minutes/none，由**实际携带正文的通道**判定）；四条机制全文统一落盘；派发文案与工具描述改「**首选读落盘文件**，`job_output` 作附加」。**实证**：`eng-dsh-1.txt`（12262 字节）已落盘并被宿主读回。**环境实验**：干净移除 profile 自带的 rc.1 jobs 副本后重启，`job_output` **仍崩** ⇒ 平台自身读法缺陷（不属本仓，建议上游修）。
+- **D-45（🟡 报告拿不回）**：`job_output` 在这台机器上对**所有**作业都崩（含平台自产）⇒ 报告正文无第二条可读路径。修法：`lib/job-outcome.mjs` 在**收口点**把正文写到 `$DSH_HOME/.thincoder/jobs/<jobId>.txt`（`jobId = handle?.id`），并追加 `index.jsonl` 记 `{jobId,kind,at,bytes,pathForm}`（`pathForm` 钉死枚举 result/ring/session-state/consult-minutes/none，由**实际携带正文的通道**判定）；四条机制全文统一落盘；派发文案与工具描述改「**首选读落盘文件**，`job_output` 作附加」。**实证**：`eng-dsh-1.txt`（12262 字节）已落盘并被宿主读回。**环境实验**：干净移除 profile 自带的 rc.1 jobs 副本后重启，`job_output` **仍崩** ⇒ ~~平台自身读法缺陷（不属本仓，建议上游修）~~ **★ 2026-09-28 勘误：此处的定性与该推论已撤回——真因是本机第三方插件 `@dsh-external/dsh-task-status` 改写 `ctx.jobs.read`，非平台缺陷；卸载后即时恢复。见 [0.29.11] 第六节。**
 - **D-47（🟡 门禁 fail-open）**：`makeDocFreezeGate` 的 `target` 归一带 `process.cwd()` ⇒ 相对路径对不上绝对冻结集即**静默放行**。修法：归一改传 `agent.session.header.cwd`（与 D-44 同款来源）；**A2 夹具零改动**（实测其只锁 `makeWriteGate` 的可执行行）；新增 A26-3 腿（相对路径命中 ⇒ deny + 负控放行）。
 - **D-48（🔴 验证相位挂死）**：dsh 子代理跑 stages 的 `check` 命令时**既不报错也不返回**（实测挂 8 分钟、日志 0 字节，而宿主同命令 7.24 秒全绿）。修法：**D48-1** 新增 `stages[].checkMode`（dsh 缺省 `host`）⇒ 任务书不再要求子代理执行命令 · **D48-2** 新增 `lib/host-check.mjs` 承接宿主验收执行面（独立 120s 超时并收敛为 `timed out`、失败只标回执 FAIL 而**不改作业状态**）——抽成 leaf 模块是为了**不撞**常驻锁 T-AP7（该锁把四档的定时器标识逐字钉死并与 HEAD 交叉核验，结构上不可再容纳新定时器）· **D48-3** 兜底信封附 stages 的 check 命令原文 + 取证指路 · **D48-4** 上游建议：沙箱拒绝子进程应**报错**而非挂起。
 - **九条平台触点常设锁**（新档 `platform-surface.test.mjs`）：把 0.1.7 那一轮「被撞出来」的九处契约面钉成**可独立转红**的断言（#2/#3/#4 标 `derived`，与既有锁**两处同改**）⇒ 下次平台换契约在改的当下就红。
@@ -113,7 +115,7 @@
 - **回归腿（5 条）**：D-46a/D-46b 走**真入口** `runEscalate` 的 dsh 后台派发（钉 `run` 形参个数 === 1、append 文本 === `outcome.result`）· D-44a（绝对 vs「相对 + 基座」同指纹且非空）/ D-44b（缺基座四态逐字 + `ok:false` 不变）· **D-46-static**（锚 A5 全量静态锁：`run: (handle)` 计数 === `jobs.start({` 计数、四档合计 **7**、**零处无参 `run: ()`**——任何一处被改回旧契约即红灯）。
 - **交付评审**：第 1 轮 **FAIL**（1🔴 静态锁 A5 未落地 · 1🟡 触发列滞后 · 3🔵）→ 逐条处置 → 第 2 轮 **PASS**。既有结构锁**逐字保留**（`stageGateNote(` = 5 · `failStop(` = 18 · 失败行零门字样）。
 - **流程实据（写进版本史，供后人避坑）**：本批实现走**后台派发**。`codexCli.budgetCapMs` 的缺省是 540000（9 分钟）——**同步派发**另受平台 `run_code` 墙钟约束（实测 600s），所以**把上限提到 60 分钟也在同步路径上用不上**；长任务的正解是后台路径（由 `dshBackgroundTimeoutMs` 兜底）。派发时插件会打 D-16 不变式提醒。
-- **残留（如实登记）**：**D-47** 冻结写门禁的路径归一仍猜基座 ⇒ 相对路径 **fail-open**（改动须同改 `guard-e` A2 夹具）→ **批 26**；**D-45** 作业全文落盘兜底 → 留转。
+- **残留（如实登记）**：**D-47** 冻结写门禁的路径归一仍猜基座 ⇒ 相对路径 **fail-open**（改动须同改 `guard-e` A2 夹具）→ **批 26**；**D-45** 作业全文落盘兜底 → 留转（**★ 2026-09-28 勘误：兜底保留为附加保险；当初的「平台缺陷」前提已撤回，见 [0.29.11] 第六节**）。
 ## [0.29.3] — 2026-09-25
 
 > **一句话**：修掉 **DSH 0.1.7 的三处平台契约变更**造成的插件失效——home 兜底探测的特征标记（`settings.yaml` → `settings.yaml.imported`）· advisor 工具结果的消息形状（`user+tool-result` 块 → 独立 `tool` 角色消息）· jobs 派发的 owner 参数据型（Agent 对象 → agent/session id）。**本版改 `lib/**` ⇒ 重启 DSH 后生效。**

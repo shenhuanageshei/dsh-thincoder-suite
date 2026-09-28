@@ -14,7 +14,7 @@
 | 27 | [dsh017-batch27-design.md](dsh017-batch27-design.md) | 残差清零：落盘目录清扫/轮转（只认四类 kind）、非法 pathForm 可见、超时解析单点、kill 语义收窄、cwdHint 透传、零落盘回归锚 | D27-1…D27-5 |
 | 28 | [dsh017-batch28-design.md](dsh017-batch28-design.md) | 对外收口：上游报告包 + 版本哨兵 + contractWatch 巡检 + 契约基线单一事实源 + 本结项页 | D28-1…D28-7 |
 
-缺陷登记（D-41…D-48）见 [2026-09-05-defect-registry.md](2026-09-05-defect-registry.md)；平台侧三问题（本仓不可修）的上游报告包见 [upstream-2026-09-26-platform-issues.md](upstream-2026-09-26-platform-issues.md)。
+缺陷登记（D-41…D-48）见 [2026-09-05-defect-registry.md](2026-09-05-defect-registry.md)；**三条**平台问题报告的上游报告包见 [upstream-2026-09-26-platform-issues.md](upstream-2026-09-26-platform-issues.md)（**★ 2026-09-28：其中问题一已撤回——真因是本机第三方插件，非平台；其余两条仍有效**）。
 
 ## 二、九条触点矩阵（指针 + 摘要；权威源 = lib/contract-baseline.mjs）
 
@@ -32,7 +32,7 @@
 | ps6-agent-session-fields | lib 消费面逐点消费 session.id / delegationDepth / header.cwd / options.provider·model / maxTokens | 批 25 矩阵 #6 · 批 26 §2.3 #6 |
 | ps7-registration-surface | 注册面期望计数 = 实测基线（批 28 上调 textTool 7→8：contractWatch，D28-6） | 批 26 §2.3 #7 · D28-6（登记处 = REGISTRATION_SURFACE_BASELINE 注释） |
 | ps8-request-rejection-fence | web 路由处理函数首个业务调用 = 信任栅栏（先取 connection 再问请求拒绝，契约外 503） | 批 22/24 矩阵 #8（D-39）· 批 26 §2.3 #8 |
-| ps9-dispatch-copy-persisted-path | 派发文案首选落盘文件、job_output 降为附加（读取面不在本仓的插件侧取向） | 批 26（D-45）§2.3 #9 |
+| ps9-dispatch-copy-persisted-path | 派发文案首选落盘文件、job_output 降为附加（★ 2026-09-28 更正：「读取面不在本仓」的前提已撤回——真因是第三方插件；取向本身不变） | 批 26（D-45）§2.3 #9 |
 
 ## 三、四道护栏
 
