@@ -5,7 +5,10 @@
 //   A28-1 注入「与基线一致」的版本 ⇒ 哨兵 match 且**零告警**（装配零干扰）
 //   A28-2 注入「不一致」的版本 ⇒ 恰**一条响亮告警** + 不阻断 + 文案含基线档与 docs/dsh017- 字样；
 //         提示落点**钉死工具描述**（lib/index.mjs 的 contractWatch description——评审 #8）
-//   A28-3 三源皆不可得 ⇒ 标 unknown + 告警 + **不崩**；三源钉死顺序与来源 evidence 逐级可查
+//   A28-3 四源皆不可得 ⇒ 标 unknown + 告警 + **不崩**；四源钉死顺序与来源 evidence 逐级可查
+//   ★ 批 31 扩源：源③ pluginManager（平台服务报告的平台组合包版本）与源④ 平台包解析——本档新增
+//     它们的**判别力**腿（含「用户侧同前缀包不得被当平台包」的假阳性负控），全部并入既有 test( 块
+//     （顶层用例数不变 ⇒ 台账 docs/test-lifecycle.md §三 逐格仍一致，与批 30 的先例同款）。
 //   A28-4 contractWatch 返回形状稳定：{ platformVersion, versionSource,
 //         locks = 9 条 { id, ok: true|false|"unknown", evidence }, jobsDir = { files, bytes, oldestDays } }
 //   A28-5 静态锁：九条谓词在测试与工具间**同源**——实现标记 grep 唯一，不存在第二份字面
@@ -38,7 +41,7 @@ const countOccurrences = (hay, needle) => hay.split(needle).length - 1
 test("A28-1: 注入与基线一致的版本 ⇒ 哨兵 match、warnings 为空；装配入口同样静默", () => {
   const empty = mkTemp("empty")
   try {
-    const opts = { dshHomeOverride: empty, resolveCorePackage: () => null }
+    const opts = { dshHomeOverride: empty, resolvePlatformPackage: () => null }
     const r = evaluateVersionSentinel({ pkg: { version: PLATFORM_VERSION_BASELINE } }, opts)
     assert.equal(r.status, "match", "与基线一致 ⇒ match")
     assert.deepEqual(r.warnings, [], "一致 ⇒ 零告警（装配零干扰）")
@@ -58,7 +61,7 @@ test("A28-1: 注入与基线一致的版本 ⇒ 哨兵 match、warnings 为空�
 test("A28-2: 注入不一致版本 ⇒ 恰一条响亮告警（点名检测值与基线值、含 contract-baseline 与 dsh017- 字样）+ 不阻断；提示落点钉死工具描述", () => {
   const empty = mkTemp("empty")
   try {
-    const opts = { dshHomeOverride: empty, resolveCorePackage: () => null }
+    const opts = { dshHomeOverride: empty, resolvePlatformPackage: () => null }
     const FAKE = "9.9.9-not-a-platform"
     const r = evaluateVersionSentinel({ pkg: { version: FAKE } }, opts)
     assert.equal(r.status, "mismatch")
@@ -89,18 +92,18 @@ test("A28-2: 注入不一致版本 ⇒ 恰一条响亮告警（点名检测值�
   } finally { rmTemp(empty) }
 })
 
-// ═════════ A28-3：三源皆不可得 ⇒ unknown + 告警 + 不崩；钉死顺序逐级可查（AC-1） ═════════
+// ═════════ A28-3：四源皆不可得 ⇒ unknown + 告警 + 不崩；钉死顺序逐级可查（AC-1；批 31 扩源） ═════════
 
-test("A28-3: 三源皆不可得 ⇒ 标 unknown + 告警 + 不崩；读取链按 ①ctx.pkg → ②profile manifest → ③包版本 钉死顺序", () => {
+test("A28-3: 四源皆不可得 ⇒ 标 unknown + 告警 + 不崩；读取链按 ①ctx.pkg → ②profile manifest → ③pluginManager → ④平台包 钉死顺序", () => {
   const empty = mkTemp("empty")
   const home = mkTemp("manifest")
   try {
-    // ① 三源皆不可得：无 ctx.pkg + 空 home（无 manifest）+ 源③恒 null
-    const r = readPlatformVersion({}, { dshHomeOverride: empty, resolveCorePackage: () => null })
+    // ① 四源皆不可得：无 ctx.pkg + 空 home（无 manifest）+ ctx.get 缺席（源③ 不适用）+ 源④恒 null
+    const r = readPlatformVersion({}, { dshHomeOverride: empty, resolvePlatformPackage: () => null })
     assert.equal(r.version, "unknown", "取不到 ⇒ 标 unknown（不猜）")
     assert.equal(r.source, "unknown")
     assert.ok(r.evidence.length > 0, "unknown 同样带 evidence（说明缺了哪些源）")
-    const s = evaluateVersionSentinel({}, { dshHomeOverride: empty, resolveCorePackage: () => null })
+    const s = evaluateVersionSentinel({}, { dshHomeOverride: empty, resolvePlatformPackage: () => null })
     assert.equal(s.status, "unknown")
     assert.equal(s.warnings.length, 1, "unknown ⇒ 告警（A28-3）")
     assert.ok(s.warnings[0].includes("unknown"), "告警点名 unknown")
@@ -109,20 +112,102 @@ test("A28-3: 三源皆不可得 ⇒ 标 unknown + 告警 + 不崩；读取链按
     // ② 钉死顺序：ctx.pkg 缺席时下探 profile manifest 的 dsh 依赖声明
     writeFileSync(join(home, "package.json"),
       JSON.stringify({ dependencies: { "@deepseek-ai/dsh-core": "^" + PLATFORM_VERSION_BASELINE } }), "utf8")
-    const viaManifest = readPlatformVersion({}, { dshHomeOverride: home, resolveCorePackage: () => null })
+    const viaManifest = readPlatformVersion({}, { dshHomeOverride: home, resolvePlatformPackage: () => null })
     assert.equal(viaManifest.source, "profile-manifest")
-    assert.equal(viaManifest.version, PLATFORM_VERSION_BASELINE, "范围符剥除后可比（^0.1.7-rc.2 → 0.1.7-rc.2）")
+    assert.equal(viaManifest.version, PLATFORM_VERSION_BASELINE, "范围符剥除后可比（^<基线> → <基线>，不写死版本号以免每次抬基线失同步）")
     assert.ok(viaManifest.evidence.includes("package.json"), "evidence 记 manifest 出处：" + viaManifest.evidence)
     // ③ 钉死顺序：① 永远先于 ②——ctx.pkg 在场时 manifest 不被消费
-    const viaCtx = readPlatformVersion({ pkg: { version: "0.0.1-ctx-first" } }, { dshHomeOverride: home, resolveCorePackage: () => null })
+    const viaCtx = readPlatformVersion({ pkg: { version: "0.0.1-ctx-first" } }, { dshHomeOverride: home, resolvePlatformPackage: () => null })
     assert.equal(viaCtx.source, "ctx.pkg")
     assert.equal(viaCtx.version, "0.0.1-ctx-first")
+    // ★ 批 31 新腿（源③ pluginManager；空 home ⇒ ② 不命中，故本腿独立于 ②）：
+    //   ③a 平台组合包在场 ⇒ 取它（平台包与安装同版号）
+    const fakeGet = (bundles) => ({ get: (name) => (name === "pluginManager" ? { listBundles: () => bundles } : undefined) })
+    const viaManager = readPlatformVersion(
+      fakeGet([{ name: "@deepseek-ai/dsh-base", version: PLATFORM_VERSION_BASELINE }]),
+      { dshHomeOverride: empty, resolvePlatformPackage: () => null })
+    assert.equal(viaManager.source, "plugin-manager", "源③ 命中 ⇒ 来源标注 plugin-manager")
+    assert.equal(viaManager.version, PLATFORM_VERSION_BASELINE)
+    assert.ok(viaManager.evidence.includes("@deepseek-ai/dsh-base@"), "evidence 记平台组合包出处：" + viaManager.evidence)
+    //   ③b **假阳性负控**（本源的立项理由）：清单里只有**用户侧**同前缀包时**不得**被当平台包
+    //      （本机实测形态：@deepseek-ai/dsh-token-cost@0.1.0 与平台同前缀）
+    const userOnly = readPlatformVersion(
+      fakeGet([{ name: "@deepseek-ai/dsh-token-cost", version: "0.1.0" }, { name: "dsh-undo-savepoint", version: "0.4.9" }]),
+      { dshHomeOverride: empty, resolvePlatformPackage: () => null })
+    assert.equal(userOnly.source, "unknown", "用户侧同前缀包不得冒充平台版本（假阳性负控）：" + JSON.stringify(userOnly))
+    //   ③c 服务缺席 / 抛错 / 形状意外 ⇒ 逐级下探到源④（而不是崩、也不是假装命中）
+    const throwing = { get: () => ({ listBundles: () => { throw new Error("boom") } }) }
+    const fellThrough = readPlatformVersion(throwing, { dshHomeOverride: empty, resolvePlatformPackage: () => ({ version: "9.9.9-from-pkg", source: "package-json", evidence: "e" }) })
+    assert.equal(fellThrough.source, "package-json", "源③ 抛错 ⇒ 下探源④")
+    assert.equal(fellThrough.version, "9.9.9-from-pkg")
+    // ④ 钉死顺序：② 先于 ③——manifest 在场时不去问服务
+    let asked = false
+    const viaManifestFirst = readPlatformVersion(
+      { get: (name) => { asked = true; return name === "pluginManager" ? { listBundles: () => [] } : undefined } },
+      { dshHomeOverride: home, resolvePlatformPackage: () => null })
+    assert.equal(viaManifestFirst.source, "profile-manifest", "② 命中即停")
+    assert.equal(asked, false, "② 命中 ⇒ ③ 的服务不得被调用（钉死顺序可查）")
+    // ★ 批 31 真机复盘补（D31-2 · 并入本块以保顶层用例数不变）：unknown 时除逐源诊断外，
+    //   还要交出**同一时刻的第二读数（旁证）**。动因是真机 2026-09-30 00:16 那次：四源里唯一
+    //   能命中的源④a 读的是 app.asar，而它在平台换代时被**整体替换**（当前这份的 CreationTime
+    //   是 00:14:38，新建而非原地改）⇒ 哨兵恰好在最该响的时刻瞎了，而事后**无从复盘**：装配期
+    //   的 warn 只进宿主 stderr（DSH 只在内存里滚动，那次没留下），工具返回体里也没有第二读数。
+    //   刻意**不**把旁证做成第五个源：它们会滞后（实测 runtime.json 现在写着 0.1.7-rc.2 时代的
+    //   旧值）也会领先 —— 拿它当源等于把「读不到」换成「读错」，哨兵假告警比哨兵瞎更坏。
+    const bystanderHome = mkTemp("bystander")
+    const bystanderLocal = mkTemp("localappdata")
+    const bareLocal = mkTemp("nolocal")
+    try {
+      const rtDir = join(bystanderHome, "dsh-runtimes", "dsh-primary-runtime")
+      mkdirSync(rtDir, { recursive: true })
+      writeFileSync(join(rtDir, "runtime.json"), JSON.stringify({ desktopVersion: "0.1.7-rc.2" }), "utf8")
+      const updaterDir = join(bystanderLocal, "@deepseek-aidsh-desktop-updater", "pending")
+      mkdirSync(updaterDir, { recursive: true })
+      writeFileSync(join(updaterDir, "update-info.json"),
+        JSON.stringify({ fileName: "deepseek-harness-0.1.7-rc.2-win-x64.exe" }), "utf8")
+      // ★ 负控（真机实测逼出来的）：本机 %LOCALAPPDATA% 下**同时**躺着 6 个不相干 electron-updater
+      //   应用的 update-info.json（MiniMax Code / ZCode / Cherry Studio / uTools / NGP…）。第一版
+      //   实现只按 `/updater$/` 匹配目录名 ⇒ 六个应用的版本全被刷进 evidence（真机读数当场抓到）。
+      //   这一格把那次的形态原样钉住：非 DSH 的 updater 目录**一个字都不许进**。
+      const otherDir = join(bystanderLocal, "cherrystudio-updater", "pending")
+      mkdirSync(otherDir, { recursive: true })
+      writeFileSync(join(otherDir, "update-info.json"),
+        JSON.stringify({ fileName: "Cherry-Studio-2.0.14-win-x64-setup.exe" }), "utf8")
+      const withBystander = readPlatformVersion({}, {
+        dshHomeOverride: bystanderHome, localAppDataOverride: bystanderLocal, resolvePlatformPackage: () => null })
+      // ① 判定面**逐字不变**：旁证在场也仍是 unknown，且绝不是枚举成员
+      assert.equal(withBystander.version, "unknown", "旁证在场 ⇒ 仍标 unknown（不猜）")
+      assert.equal(withBystander.source, "unknown", "旁证**不是**来源（否则从「读不到」变成「读错」）")
+      assert.ok(!VERSION_SOURCES.includes("runtime-manifest"), "旁证不得偷偷混进 VERSION_SOURCES")
+      // ② 判读面：两条旁证都进 evidence，且当场定性「不参与判定」
+      assert.ok(withBystander.evidence.includes("runtime.json desktopVersion=0.1.7-rc.2"),
+        "旁证①（runtime.json 的 desktopVersion）进 evidence：" + withBystander.evidence)
+      assert.ok(withBystander.evidence.includes("deepseek-harness-0.1.7-rc.2-win-x64.exe"),
+        "旁证②（更新器待装包 fileName）进 evidence：" + withBystander.evidence)
+      assert.ok(!withBystander.evidence.includes("Cherry-Studio"),
+        "★ 负控：非 DSH 的 updater 目录一个字都不许进（真机第一版就是被这个坑到，六个应用全刷进来）：" + withBystander.evidence)
+      assert.ok(withBystander.evidence.includes("不参与判定"), "旁证必须当场定性，免得被读成来源：" + withBystander.evidence)
+      assert.ok(withBystander.evidence.includes("逐源诊断"), "逐源诊断与旁证同时在场（A28-4 既有判据不撤）")
+      // ③ 「查过、没有」必须与「没查」区分开：两腿都空时如实写出来，而不是留空或编一个
+      const noBystander = readPlatformVersion({}, {
+        dshHomeOverride: empty, localAppDataOverride: bareLocal, resolvePlatformPackage: () => null })
+      assert.equal(noBystander.version, "unknown")
+      assert.ok(noBystander.evidence.includes("无运行时目录") || noBystander.evidence.includes("无 dsh 系"),
+        "旁证两腿落空 ⇒ 如实说明「查过、没有」：" + noBystander.evidence)
+      // ④ 旁证坏档不抛、不影响判定（「旁证永不抛」是它的契约）
+      writeFileSync(join(rtDir, "runtime.json"), "{ not json", "utf8")
+      const broken = readPlatformVersion({}, {
+        dshHomeOverride: bystanderHome, localAppDataOverride: bystanderLocal, resolvePlatformPackage: () => null })
+      assert.equal(broken.version, "unknown", "坏旁证不影响判定，也不抛")
+      assert.ok(broken.evidence.includes("update-info.json") || broken.evidence.includes("deepseek-harness"),
+        "旁证① 坏掉不影响旁证② 仍然交出：" + broken.evidence)
+    } finally { rmTemp(bystanderHome); rmTemp(bystanderLocal); rmTemp(bareLocal) }
   } finally { rmTemp(empty); rmTemp(home) }
 })
 
 // ═════════ A28-4：contractWatch 返回形状稳定（AC-2） ═════════
 
-test("A28-4: contractWatch 返回 {platformVersion, versionSource, locks=9×{id,ok,evidence}(ok 三态), jobsDir}——形状钉死", async () => {
+test("A28-4: contractWatch 返回 {platformVersion, versionSource, versionEvidence, locks=9×{id,ok,evidence}(ok 三态), jobsDir}——形状钉死", async () => {
   const { apply } = await import("../lib/index.mjs")
   const registered = []
   const fakeCtx = {
@@ -137,10 +222,16 @@ test("A28-4: contractWatch 返回 {platformVersion, versionSource, locks=9×{id,
   const tool = registered.find((t) => t.name === "contractWatch")
   assert.ok(tool, "apply() 注册了 contractWatch")
   const out = JSON.parse(await tool.execute({}, {}))
-  assert.deepEqual(Object.keys(out).sort(), ["jobsDir", "locks", "platformVersion", "versionSource"], "顶层形状钉死（恰四键）")
+  // ★ 批 31：形状 4 键 → 5 键（新增 versionEvidence）。理由 = 工具描述自批 28 起就承诺
+  //   「shows all nine lock verdicts **plus the version evidence**」，而返回体里从没有 evidence
+  //   ⇒ 这次真机读数拿不到版本时，模型**看不到任何失败原因**。补上即闭掉这处「描述 vs 实现」不一致。
+  assert.deepEqual(Object.keys(out).sort(), ["jobsDir", "locks", "platformVersion", "versionEvidence", "versionSource"],
+    "顶层形状钉死（批 31 起恰五键）")
   assert.equal(out.platformVersion, PLATFORM_VERSION_BASELINE)
   assert.equal(out.versionSource, "ctx.pkg")
   assert.ok(VERSION_SOURCES.includes(out.versionSource), "versionSource ∈ 钉死枚举")
+  assert.equal(typeof out.versionEvidence, "string")
+  assert.ok(out.versionEvidence.includes("ctx.pkg"), "versionEvidence 给出该值的出处：" + out.versionEvidence)
   assert.equal(out.locks.length, 9, "locks 恒 9 条（实测 " + out.locks.length + "）")
   assert.deepEqual(out.locks.map((l) => l.id), [...LOCK_IDS], "id 集合与顺序 = LOCK_IDS")
   for (const l of out.locks) {
@@ -151,6 +242,19 @@ test("A28-4: contractWatch 返回 {platformVersion, versionSource, locks=9×{id,
   }
   assert.deepEqual(Object.keys(out.jobsDir).sort(), ["bytes", "files", "oldestDays"], "jobsDir = { files, bytes, oldestDays }")
   for (const k of ["files", "bytes", "oldestDays"]) assert.equal(typeof out.jobsDir[k], "number", "jobsDir." + k + " 为数值")
+  // ★ 批 31 反向腿：versionEvidence 必须**真的**是逐源诊断，不是常量串——空 ctx（无 pkg、无服务）
+  //   下取 unknown，且 evidence 必须点名每一个源与逐源原因（否则「补上 evidence」只是换个地方看不见）
+  const outUnknown = JSON.parse(await (async () => {
+    const registered2 = []
+    const bare = { on: () => () => {}, effect: (fn) => { const d = fn?.(); return () => d?.() },
+      systemPrompt: { section: () => () => {} }, tools: { register: (t) => { registered2.push(t); return () => {} } }, get: () => null }
+    apply(bare, {})
+    return registered2.find((t) => t.name === "contractWatch").execute({}, {})
+  })())
+  assert.equal(outUnknown.platformVersion, "unknown")
+  for (const marker of ["ctx.pkg", "profile manifest", "pluginManager", "平台包解析", "逐源诊断"]) {
+    assert.ok(outUnknown.versionEvidence.includes(marker), "unknown 的 versionEvidence 必须含「" + marker + "」：" + outUnknown.versionEvidence)
+  }
 })
 
 // ═════════ A28-5：静态同源锁——不存在第二份字面（AC-3） ═════════
@@ -246,7 +350,8 @@ test("基线常量: 版本非空且 recorded-at 为 ISO 日期；来源枚举钉
   assert.equal(typeof PLATFORM_VERSION_BASELINE, "string")
   assert.ok(PLATFORM_VERSION_BASELINE.length > 0)
   assert.match(BASELINE_RECORDED_AT, /^\d{4}-\d{2}-\d{2}$/)
-  assert.deepEqual([...VERSION_SOURCES], ["ctx.pkg", "profile-manifest", "package-json", "unknown"])
+  assert.deepEqual([...VERSION_SOURCES], ["ctx.pkg", "profile-manifest", "plugin-manager", "package-json", "unknown"],
+    "来源枚举 = 批 31 扩源后的四源 + unknown（顺序即读取链的钉死顺序）")
   assert.deepEqual(REGISTRATION_SURFACE_BASELINE, { toolsRegister: 1, systemPromptSection: 3, textTool: 8 },
     "#7 基线 = 批 28 上调值（textTool 7→8：contractWatch，D28-6；上调登记见 REGISTRATION_SURFACE_BASELINE 注释）")
 })
@@ -271,7 +376,7 @@ test("A29-6④ (US-4 🔵④): 源②键过滤化简为单一前缀判据——�
       "@deepseek-ai/dsh-skew": "^" + PLATFORM_VERSION_BASELINE,
       "@deepseek-ai/dsh-core": "^" + PLATFORM_VERSION_BASELINE,
     } }), "utf8")
-    const both = readPlatformVersion({}, { dshHomeOverride: home, resolveCorePackage: () => null })
+    const both = readPlatformVersion({}, { dshHomeOverride: home, resolvePlatformPackage: () => null })
     assert.equal(both.source, "profile-manifest", "② 命中 manifest")
     assert.ok(both.evidence.includes("@deepseek-ai/dsh-core@"), "core 在场 ⇒ 优先取 core：" + both.evidence)
     assert.equal(both.version, PLATFORM_VERSION_BASELINE, "范围符剥除后可比")
@@ -279,13 +384,17 @@ test("A29-6④ (US-4 🔵④): 源②键过滤化简为单一前缀判据——�
     writeFileSync(join(home, "package.json"), JSON.stringify({ dependencies: {
       "@deepseek-ai/dsh-skew": "^" + PLATFORM_VERSION_BASELINE,
     } }), "utf8")
-    const skew = readPlatformVersion({}, { dshHomeOverride: home, resolveCorePackage: () => null })
+    const skew = readPlatformVersion({}, { dshHomeOverride: home, resolvePlatformPackage: () => null })
     assert.equal(skew.source, "profile-manifest", "非 core 前缀键仍被接受")
     assert.ok(skew.evidence.includes("@deepseek-ai/dsh-skew@"), "取的是该前缀键：" + skew.evidence)
     assert.equal(skew.version, PLATFORM_VERSION_BASELINE)
+    // ★ 批 31 评审 #2（🔵）：非版本权威键 ⇒ evidence 打 skew 标记（判据面不变，只让假告警当场可辨）；
+    //   权威键（core）则**不得**带该标记——两个方向都钉住，防标记退化成恒真/恒假
+    assert.ok(skew.evidence.includes("非版本权威键"), "非权威键的 evidence 带 skew 标记：" + skew.evidence)
+    assert.ok(!both.evidence.includes("非版本权威键"), "权威键（core）不得带 skew 标记：" + both.evidence)
     // 无任何 dsh 键 ⇒ 仍不可得（不猜）
     writeFileSync(join(home, "package.json"), JSON.stringify({ dependencies: { "lodash": "^4" } }), "utf8")
-    const none = readPlatformVersion({}, { dshHomeOverride: home, resolveCorePackage: () => null })
+    const none = readPlatformVersion({}, { dshHomeOverride: home, resolvePlatformPackage: () => null })
     assert.equal(none.source, "unknown", "无 dsh 键 ⇒ 不可得（不猜）")
   } finally { rmTemp(home) }
 })
@@ -299,7 +408,7 @@ test("A29-6⑤⑥ (US-4 🔵⑤⑥): once 标记两形态共用（注释 + 行�
   const home = mkTemp("once")
   try {
     const seen = []
-    const opts = { dshHomeOverride: home, resolveCorePackage: () => null, warn: (...a) => seen.push(a.join(" ")) }
+    const opts = { dshHomeOverride: home, resolvePlatformPackage: () => null, warn: (...a) => seen.push(a.join(" ")) }
     resetVersionSentinelWarnForTests()
     const r1 = runVersionSentinel({}, opts)
     assert.equal(r1.status, "unknown", "前提：第一场取不到版本 ⇒ unknown")
@@ -311,14 +420,16 @@ test("A29-6⑤⑥ (US-4 🔵⑤⑥): once 标记两形态共用（注释 + 行�
   // ⑥ 大小写等价：混合大小写词元必须与基线**等价**（不再误报 mismatch —— 旧行为是稳定假阳性）
   const home2 = mkTemp("case")
   try {
-    const opts = { dshHomeOverride: home2, resolveCorePackage: () => null }
-    const mixed = evaluateVersionSentinel({ pkg: { version: "0.1.7-RC.2" } }, opts)
-    assert.equal(mixed.status, "match", "0.1.7-RC.2 与基线 0.1.7-rc.2 等价（🔵⑥）：" + JSON.stringify(mixed))
+    const opts = { dshHomeOverride: home2, resolvePlatformPackage: () => null }
+    // ★ 批 31：改用**基线自己**的大小写变体（原写死 0.1.7-RC.2——那会让本腿在每次抬基线时静默失同步）
+    const UPPER = PLATFORM_VERSION_BASELINE.toUpperCase()
+    const mixed = evaluateVersionSentinel({ pkg: { version: UPPER } }, opts)
+    assert.equal(mixed.status, "match", UPPER + " 与基线 " + PLATFORM_VERSION_BASELINE + " 等价（🔵⑥）：" + JSON.stringify(mixed))
     assert.deepEqual(mixed.warnings, [], "等价 ⇒ 零告警（不再稳定假阳性）")
-    const upperV = evaluateVersionSentinel({ pkg: { version: "V0.1.7-RC.2" } }, opts)
+    const upperV = evaluateVersionSentinel({ pkg: { version: "V" + UPPER } }, opts)
     assert.equal(upperV.status, "match", "大写 V 前缀同样被剥（先归一再剥符号）")
     // 反例自证：真不同的版本仍必须 mismatch（大小写归一没有退化成「恒 match」）
-    const real = evaluateVersionSentinel({ pkg: { version: "0.1.7-rc.3" } }, opts)
+    const real = evaluateVersionSentinel({ pkg: { version: "9.9.9-different" } }, opts)
     assert.equal(real.status, "mismatch", "真不同的版本仍 mismatch（谓词未被削弱）")
     assert.equal(real.warnings.length, 1, "mismatch 仍恰一条告警")
   } finally { rmTemp(home2) }

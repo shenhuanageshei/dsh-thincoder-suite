@@ -126,11 +126,11 @@ flowchart LR
 
 ### ★ 最容易被配错的一件事：长任务默认走后台——前提是装了 jobs 插件
 
-`eng_coder` 和 `escalate` 的 **dsh 子代理路径默认后台**执行（批 21 起省略 `background` 即后台：返回 job 句柄，完成时通知、`job_output` 读全文报告）；传 `background: false` 才强制同步。codex 后端则一直按预算自动后台（缺省预算本就超过阈值）。
+`eng_coder` 和 `escalate` 的 **dsh 子代理路径默认后台**执行（批 21 起省略 `background` 即后台：返回 job 句柄，完成时通知，**报告全文首选读落盘文件 `$DSH_HOME/.thincoder/jobs/<jobId>.txt`、`job_output` 作为附加读取手段**——该取向自批 26 起适用于四条机制的**全部**后台派发）；传 `background: false` 才强制同步。codex 后端则一直按预算自动后台（缺省预算本就超过阈值）。
 
 | 调用方式 | 谁在等 | 生效的截止 | 结果 |
 |---|---|---|---|
-| 不传 `background`（默认）/ 显式 `true` | 父代理立刻拿到 job 句柄 | `dshBackgroundTimeoutMs`（默认 30 分钟） | **不占父代理墙钟**，完成时通知、`job_output` 读全文（stage 门横幅也在 job 输出里） |
+| 不传 `background`（默认）/ 显式 `true` | 父代理立刻拿到 job 句柄 | `dshBackgroundTimeoutMs`（默认 30 分钟） | **不占父代理墙钟**，完成时通知；**报告全文首选读落盘文件**（`$DSH_HOME/.thincoder/jobs/<jobId>.txt`，`job_output` 为附加）（stage 门横幅也在 job 输出里） |
 | 传 `background: false` | 父代理阻塞 | `codexCli.budgetCapMs`（默认 540s，**刻意低于平台 600s**） | 当场拿结果；插件在平台之前温柔超时、能拿到诊断；**但任务活不过 10 分钟** |
 | 后台**回落**（jobs 插件未装 / 派发失败） | 父代理阻塞（回落同步） | 同上 `budgetCapMs` | **告警随工具返回可见** + 回落同步（仍受 540s/600s 约束） |
 
@@ -141,7 +141,13 @@ flowchart LR
 
 ## 安装
 
-要求：**DSH（DeepSeek Harness）本体**——**不需要桌面壳**（本机那种包装壳只是 DSH 的一种运行方式）。具体：cordis `^4.0.0-rc.7` + web profile 标准服务（tools / llm / subagents / systemPrompt / webServer——webServer 缺失时仅设置页 API 降级，host 工具不受影响）。
+要求：**DSH（DeepSeek Harness）本体**——**不需要桌面壳**（本机那种包装壳只是 DSH 的一种运行方式）。具体：**DSH ≥ `0.2.0-rc.1`**（`peerDependencies` 声明的门槛，由**平台自己**的组合兼容闸门在装配前执行；本版九条平台触点锁逐条对齐并真机验证过的版本是 **`0.2.0-rc.2`**）+ cordis `^4.0.0-rc.7` + web profile 标准服务（tools / llm / subagents / systemPrompt / webServer——webServer 缺失时仅设置页 API 降级，host 工具不受影响）。
+
+> **⚠ 平台版本门槛（v0.30.0 起）**：**本版只支持 DSH ≥ `0.2.0-rc.1`**。
+> **如果你的 DSH 低于 `0.2.0-rc.1`（例如 `0.1.7-rc.2`），请改用旧版 release**：[**v0.29.11**](https://github.com/shenhuanageshei/dsh-thincoder-suite/releases/tag/v0.29.11)（及更早）支持 `0.1.7-rc.2`。
+> 硬装到低版平台上的表现是**整包被平台拦下**（不是半残运行）：插件管理页该包显示「异常」，启动日志出现 `dsh: skipping profile bundle "@dsh-external/dsh-thincoder-suite"`，并给出该包的 peer 范围与豁免指引——**这属于预期行为，不是安装损坏**。
+> 装配期还会有一条版本哨兵告警（`[thincoder-suite] 平台版本哨兵…`，只警告不阻断），两种形态都指向此处；也可随时调用只读工具 `contractWatch` 看当前平台版本、版本来源与九条触点锁现状。
+> **预期内的告警**：哨兵比对的是**本版验证过的那个平台版本**，所以同一 peer 区间里**别的**版本（例如将来的 `0.2.0-rc.3`，或区间内更早的 `0.2.0-rc.1`）也会各打**一次**告警——那不是在断言「不支持」，而是提示「本版尚未对该版本复核过」，照 `contractWatch` 走一遍九条触点锁即可（这正是它存在的意义）。
 
 > **⚠ 想让长任务能跑过 10 分钟，请先确认这两个插件在**：**`dsh-jobs-local` + `dsh-tool-jobs`**（后台任务靠它们）。**没装也能跑**，但长任务会**告警并回落同步执行**（批 21 起默认后台，回落时仍会撞平台的 600 秒墙钟）——**详见下方「最容易被配错的一件事」**。
 
@@ -198,6 +204,8 @@ node -e "const fs=require('fs');const p='<profile>/node_modules/@dsh-external/ds
 `pnpm add @dsh-external/dsh-thincoder-suite@link:<克隆路径> --lockfile-only`，
 然后把 `node_modules/@dsh-external/dsh-thincoder-suite` 换成指向克隆目录的链接（Windows 上 junction 即可），重启。
 切换前先备份 `package.json` 与 `pnpm-lock.yaml`。
+
+> **在本仓里不要 `pnpm install` / `npm install`**：本仓**零依赖**，`node --test` 直接就能跑（这也是它能免构建直发的原因）。`package.json` 的 `peerDependencies`（`@deepseek-ai/dsh` + `cordis`）声明的是**宿主**提供的运行时，不是要装进来的包——若你的安装器开了 `auto-install-peers`，它会去 registry 拉这两个宿主包（两个名字都已发布、可解析，例如 `@deepseek-ai/dsh@0.2.0-rc.1` 存在），纯属白装且**可能把一个副本塞进 profile 的 `node_modules` 里遮蔽宿主版本**（本机 2026-09-11 曾因 profile 里多出一份旧 `dsh-session` 起不来）。**DSH profile 那边的 `pnpm` 由 `pnpm-workspace.yaml` 的 `autoInstallPeers: false` 兜住**，本仓这边靠这条提示兜住。
 
 ---
 
@@ -374,7 +382,7 @@ flowchart TD
 | **一个极少见的测试偶发** | 全量测试连跑 80 轮里有 1 轮红、**具体是哪一条还没抓到**（当时的脚本只记了数量没记名字）。已保留它为「未关闭」，并保留发布门对它的复跑兜底；复现手段已就位 |
 | **codex-cli 会诊席经常缺席** | 该模型的子进程偶发非零退出，会诊通常按 3/4 交付（不影响结论，digest 会如实标出失败数） |
 | **长任务的两个截止键容易配错** | 见上文「最容易被配错的一件事」——文档已写明，但**配置本身没有护栏**（配错只是慢，不会坏） |
-| **平台触点还没有系统扫** | DSH 0.1.7 已知的三处断裂（工具结果的消息形状 · 后台派发的 owner 参数 · `settings.yaml` 改名打断 home 兜底探测）**都是人工撞出来的**。建议单列一批：把插件的全部平台触点对着新旧两版 DSH 包做一次 diff——第四处迟早会来 |
+| ~~**平台触点还没有系统扫**~~ **（2026-09-29 闭环）** | DSH 0.1.7 已知的三处断裂（工具结果的消息形状 · 后台派发的 owner 参数 · `settings.yaml` 改名打断 home 兜底探测）当年**都是人工撞出来的**，本行原建议「单列一批，把全部平台触点对着新旧两版做一次 diff」。**这笔欠账已经还了**：**九条平台触点常设锁**（单一事实源 [`lib/contract-baseline.mjs`](./lib/contract-baseline.mjs)；批 26 建档 → 批 28 收口 → 批 31 用它对 **0.2.0-rc.1 / 0.2.0-rc.2** 做了完整对照复核）把「全部门面」变成**一次调用可查**（只读工具 `contractWatch`，九条逐条给 `true|false|unknown` + evidence）；矩阵与批次脉络见 [`docs/dsh017-program-closeout.md`](./docs/dsh017-program-closeout.md) §二。**残余**：锁只覆盖**已知**九条触点，全新的平台面仍可能漏网——所以契约换版的标准动作是「先跑 `contractWatch`，任一条转红再开新批」 |
 
 **2026-09-28 收口一条（原先登记在本节）**：**`job_output` 读不回后台作业全文**——2026-09-25 实测四次报 `Cannot read properties of undefined (reading 'output')`（含平台自己产的作业），当时的定性「平台侧缺陷、本仓不可修」**已被推翻**。真因是**第三方插件**：本机 profile 装的 `@dsh-external/dsh-task-status`（上游 `vlln/dsh-task-status`，未适配 0.1.7）在 `apply()` 里给 `ctx.jobs.read` 打镜像补丁，按 0.1.6 契约重写信封 `{ text, snapshot }`，丢弃 0.1.7 的 `{ chunks, lossy, result?, job }` ⇒ 下游读 `read.job.output` 即崩（同一链路也解释 promoted `pwsh` 的 `reading 'filter'`）。**已卸载该插件；卸载后 `job_output` 与 promoted 读取立刻恢复**（同机同日实测，未重启、未改平台包）。**⇒ 平台侧无缺陷**；批 26 的落盘兜底保留为**附加保险**。真因取证（零重启热探针读数）、逐机制绕行与上游同款告警见 [`docs/job-output-fallback.md`](./docs/job-output-fallback.md) §0。
 
@@ -388,6 +396,7 @@ flowchart TD
 
 | 版本 | 日期 | 变更（人话） |
 |---|---|---|
+| **v0.30.0** | 2026-09-30 | **抬平台基线到 DSH `0.2.0-rc.2`**（先按 `0.2.0-rc.1` 逐触点复核；nightly 自动升到 rc.2 后复跑同一套复核，并对两个 `app.asar` 做 sha256 全量对照证明**运行时面逐字节未变**）+ **真机派发冒烟**（`escalate-dsh-1` 全链路走通、报告落盘并与 `job_output` 读回一致） · **版本哨兵扩到四源**（原来三源在本机全落空 ⇒ 对真实换版零反应；新增「问平台服务 `pluginManager` 要平台组合包版本」，并**钉死名单**防用户侧同前缀包假告警）· **支持门槛交给平台执行**（组合包声明 `peerDependencies @deepseek-ai/dsh`，低版平台由平台自己的组合兼容闸门在装配前拦下；旧 DSH 请改 [v0.29.11](https://github.com/shenhuanageshei/dsh-thincoder-suite/releases/tag/v0.29.11)）· 修 D-61（观测行读 `finish.usage`，而平台把用量发成**独立 chunk** ⇒ 恒打 `usage=none`）· `contractWatch` 补上工具描述里一直承诺的 **`versionEvidence`**（返回体 4 键 → 5 键），且**每个源失败都带一行可读原因**（读不到版本时不再是「看不见为什么」）。**改 `lib/**` ⇒ 重启 DSH 后生效** |
 | **v0.29.11** | 2026-09-28 | **批 30：把两条空转的防线真接上** —— D-55 工具面按 **Agent scope** 读名域（绝不猜名；`run_code` 残余风险如实标注）· D-56 看门狗改接 `localAgent.session.seq` + `ctx` 事件面（复用既有轮询、按子 id 过滤、`off()` 三路径）· D-57 落盘**前缀截断被拒** · D-58/D-59/D-60 会诊三连（注入面消毒 + 失败带真因 + 池预检 + **只读声明由模型面裁定**）
 | **v0.29.10** | 2026-09-27 | **批 29 收尾**：D-53 **真机取证收口**（实测：本部署 run 无事件面、工具面无清单访问器 ⇒ 两条机制走**诚实降级**；新登记 **D-55/D-56/D-57**）· 留档搬进**可读回执区**（🔴 空搬运提前关闸已修）· §2.7 测试健壮性四项 · §2.9 六条 🔵
 | **v0.29.9** | 2026-09-26 | **批 29 收尾**：D-53 的**一次性真机留档**（首派即取证：看门狗接线首次结果 + 工具面首次未生效，各一条裸 warn、只一次、不进返回文本）· `maxFiles` 与 `maxAgeDays` **同向**收紧（0 被拒、小数仍生效）· 审计 F1/F2 收敛（断言决定性 + 交付正文零污染）

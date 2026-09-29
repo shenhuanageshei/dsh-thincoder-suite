@@ -77,7 +77,13 @@ test("G-常驻3: CHANGELOG 顶部计数行形态合法（可推导式 `基线 X 
 test("G-常驻4: 依赖键集合不变（零新增依赖）+ 门的 script 已在位（N-3 / 评审 #9）", () => {
   assert.deepEqual(Object.keys(pkg.dependencies ?? {}), [], "dependencies 键集合必须为空（现状）——加一个键即红")
   assert.deepEqual(Object.keys(pkg.devDependencies ?? {}), [], "devDependencies 键集合必须为空（现状）——加一个键即红")
-  assert.deepEqual(Object.keys(pkg.peerDependencies ?? {}), ["cordis"], "peerDependencies 键集合必须不变（宿主提供，不计入零依赖口径）")
+  // ★ 批 31 上调（单点登记）：peerDependencies 由 ["cordis"] → ["@deepseek-ai/dsh", "cordis"]。
+  //   理由 = peer 不是依赖：`@deepseek-ai/dsh` 是**宿主**提供的运行时，声明它只把「本版只支持
+  //   DSH ≥ 0.2.0-rc.1」交给**平台自己的**组合兼容闸门（evaluatePluginCompatibility）在装配前执行；
+  //   零新增依赖口径（dependencies/devDependencies 两空）逐字不变。刻意**不做**「dsh 前缀白名单」
+  //   式的宽松断言——那会让任何 @deepseek-ai/dsh-* peer 静默通过（本次要的就是逐键可审计）。
+  assert.deepEqual(Object.keys(pkg.peerDependencies ?? {}), ["@deepseek-ai/dsh", "cordis"],
+    "peerDependencies 键集合 = 批 31 登记值（宿主运行时 + cordis；改动须同批登记本行）")
   assert.equal(pkg.scripts?.["release:check"], "node release-check.mjs",
     "package.json 必须有 release:check script（一行）——实得 " + JSON.stringify(pkg.scripts))
   assert.equal(pkg.scripts?.test, "node --test", "既有 test script 不得改动")

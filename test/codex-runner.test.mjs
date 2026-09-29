@@ -1481,18 +1481,28 @@ test("R1 D-01 观测: 空响应形态一 finish-null —— 分类行 + 观测�
   dropSession(sid)
 })
 
-test("R1 D-01 观测: 空响应形态二 stop 零文本块 —— 分类行 + finish 携带的 usage 入观测", async () => {
+test("R1 D-01 观测: 空响应形态二 stop 零文本块 —— usage 入观测（平台真实形态 = 独立 usage chunk；批 31 修复）", async () => {
   const sid = "r1-empty-stop"
+  // ★ 批 31：平台真实形态——用量是**独立 chunk** `{ type: "usage", usage }`，`finish` 上从来没有 usage
+  //   （StreamChunk 联合自 0.0.1-rc.5 起即如此，0.2.0-rc.2 逐字同）⇒ 旧腿喂的 `{type:"finish", usage}` 是
+  //   一个**平台不会发出的形状**，于是旧实现恒打 usage=none 而用例仍然绿。此处改喂真形状。
   const llm = reviewLlm([
-    { type: "finish", reason: { kind: "stop" }, usage: { inputTokens: 5, outputTokens: 0 } },
+    { type: "usage", usage: { inputTokens: 5, outputTokens: 0 } },
+    { type: "finish", reason: { kind: "stop" } },
   ])
   const out = await runDshReview(sid, llm, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } })
   assert.ok(out.startsWith("Advisor: review failed (empty response"), "R3 语义：重试一次仍空 → 前缀失败")
   assert.ok(out.includes("重试一次仍空"), "重试标记可见")
   assert.ok(out.includes("empty-response classification: stop-zero-text-blocks"), "三形态之二：stop 零块")
   assert.ok(out.includes("stream observation: finish=stop"))
-  assert.ok(out.includes('"inputTokens":5'), "finish 携带的 usage 入观测字段")
+  assert.ok(out.includes('"inputTokens":5'), "独立 usage chunk 入观测字段（批 31）")
   dropSession(sid)
+  // 兜底腿（同一 test 块内，不新增顶层用例）：finish.usage 仍被消费——防御未来的合并形态
+  const sid2 = "r1-empty-stop-legacy"
+  const llm2 = reviewLlm([{ type: "finish", reason: { kind: "stop" }, usage: { inputTokens: 7, outputTokens: 0 } }])
+  const out2 = await runDshReview(sid2, llm2, { advisor: { round1: { provider: "p", model: "m", timeoutMs: 300000 } } })
+  assert.ok(out2.includes('"inputTokens":7'), "兜底腿：finish.usage 形态仍被消费（防御式，非平台现状）")
+  dropSession(sid2)
 })
 
 test("R1 D-01 观测: 空响应形态三 error 无 message —— 失败文本带分类行（不再坍缩为 unknown provider error）", async () => {

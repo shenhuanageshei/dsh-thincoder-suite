@@ -2,6 +2,32 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.30.0] — 2026-09-30
+
+> **一句话**：批 31 —— **把平台基线抬到 DSH `0.2.0-rc.2` 并逐条复核九条触点锁**，顺手**接上一条一直在空转的防线**（版本哨兵在本机四源全落空 ⇒ 稳定报 unknown，对真实换版零反应）；同时把「只支持 ≥ 0.2.0-rc.1」从一句说明变成**平台自己执行的硬门槛**。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。
+
+**【计数行】**：`node --test` **594/594**（**基线 594 + 本批 0**：本批全部新腿**并入既有顶层 `test(` 块** ⇒ 顶层用例数不变，台账逐格仍一致）。
+
+**一、平台版本 0.1.7-rc.2 → 0.2.0-rc.2（真机逐触点复核，不是看版本号猜）**——对 `app.asar` 内 0.2.0-rc.1 源码逐条复核九条锁的**平台侧形状**，九条全部仍在位：tool-result 仍是**消息级** `role:"tool"` + `toolCallId`/`isError`/`source:{kind:"tool",callId}`（`dsh-llm/lib/types/message.js`）· `jobs.start(spec)` 仍 `resolveOwner(spec.owner)` → `spec.run(handle)`（handle 带 `id`/`append`，`dsh-jobs-local`）· `subagents.start(name, request)` 的 request 键仍是原九键并集（`dsh-subagent`）· `Agent{id,options,session}` 与 `SessionHeader{cwd?,delegationDepth?}`、`AgentOptions{provider?,model?,maxTokens?}` 逐字在位 · `settings.yaml` 仍被导入并改名 `settings.yaml.imported`（`dsh-settings`）· `ctx.tools.register` / `ctx.systemPrompt.section` / `ctx.webServer.register({kind,path,handler})` / `connection.requestRejection(req)→403|401|undefined` 全在（0.2.0 新增 `connection.admit()`，旧面无损保留）· `ctx.llm.stream` 与 `resolveModelInfo()→info.context.contextWindow` 在位。**约十小时后桌面版 nightly 自动升到 `0.2.0-rc.2`**（00:03 下载 / 00:14 安装）：复跑同一套复核——九条形状逐条仍在位，且 **rc.1→rc.2 的运行时面逐字节未变**（对两个 `app.asar` 的 `@deepseek-ai/**` 做 sha256 全量对照：`dsh-jobs` / `dsh-jobs-local` / `dsh-llm/lib/index.js` / `dsh-tools` / `dsh-system-prompt` / `dsh-host-webserver` / `dsh-client-connection` / `dsh-agent` / `dsh-subagent` / `dsh-session` 的运行时 JS **全部相同**；差异只落在 `package.json` 版本号、typert 类型目录与几个 **本插件不消费**的消费者上）。⇒ 本版验证的平台版本 = **`0.2.0-rc.2`**（`^0.2.0-rc.1` 这个 peer 区间天然覆盖 rc.2，故门槛声明不变）。
+
+**二、版本哨兵扩源：三源 → 四源（D31-1）**——批 28 的三源在本机**全部落空**（`contractWatch` 稳定报 `unknown`），于是 0.1.7→0.2.0 这次真实换版**零告警**——「只警告不阻断」的防线在拿不到版本时就等于没有。两条实测硬事实：① 原源③ 的 `@deepseek-ai/dsh-core` **在 0.2.0 里已不存在**（只活在 0.1.x）；② 插件自身模块图 `createRequire(import.meta.url)` **解析不到**任何平台包（桌面版把平台装在 `app.asar` 内，不在 profile 的 `node_modules` 里）。修法：**新增源③ = 平台服务 `pluginManager` 报告的平台自带组合包版本**（只认钉死名单 `@deepseek-ai/dsh-base` / `@deepseek-ai/dsh-web-app`——**刻意不取「任意 `@deepseek-ai/dsh-*` 包」**：本机 profile 里就装着用户侧的 `@deepseek-ai/dsh-token-cost@0.1.0`，取它会稳定假告警，已有负控腿钉住）；源④ 拆两条腿——**④a 桌面 Electron 布局**（`<exe 同级>/resources/app.asar/dsh/node_modules/…`，由 `process.execPath` / `process.resourcesPath` 推出，因为该布局下 `require.resolve` 一定解析不到）→ **④b 常规包解析**；候选名首选 `@deepseek-ai/dsh-app-boot`（平台自己的版本权威 `getDshRuntimeVersion()` 读的就是它），`dsh-core` 殿后只为 0.1.x 兼容。`VERSION_SOURCES` 枚举同步扩为 `ctx.pkg | profile-manifest | plugin-manager | package-json | unknown`。
+
+**二之补（真机读数第二轮）：把「读不到」变成「看得见为什么读不到」**——第一轮真机重启后 `contractWatch` 仍报 `unknown`，而**逐源原因一个字都看不到**（返回体里**版本相关**字段只有 `platformVersion` / `versionSource` 两个，四个源各自为什么落空没有任何出口）。两处修：① 每个源失败都往 `notes` 写**一行可读原因**（缺席 / 抛错原文与 `error.code` / 清单里没有平台成员——含见过的前几条名字），unknown 分支把它汇进 `evidence`，因此 **装配期告警与工具返回都直接带上逐源诊断**；② `contractWatch` 返回体自批 28 起就缺了它**工具描述里承诺过的** `versionEvidence`（描述写着 "shows all nine lock verdicts plus the version evidence"）⇒ 补上该字段（顶层 4 键 → **5 键**），描述同步改写。A28-4 的形状锁随之上调并加一条反向腿（unknown 下必须点名四个源与「逐源诊断」，防它退化成常量串）。**第二轮真机读数（基线抬到 rc.2 后）实测：源④a 命中**，`versionSource` = `package-json`、`versionEvidence` 直接给出 `…app.asar\dsh\node_modules\@deepseek-ai\dsh-app-boot\package.json version = 0.2.0-rc.2`——哨兵自批 28 上线以来**第一次真正读到平台版本**。
+
+**三、支持门槛交给平台执行（D31-2）**——`package.json` 新增 `peerDependencies: { "@deepseek-ai/dsh": "^0.2.0-rc.1" }`。**peer 不是依赖**（dependencies / devDependencies 两处仍为空）：它把「本版只支持 ≥ 0.2.0-rc.1」交给**平台自己的**组合兼容闸门 `evaluatePluginCompatibility`（`dsh-app-boot`）在装配前执行 ⇒ 低版平台上**整包被跳过**并附豁免指引，而不是半残运行；README 与 `contractWatch` 工具描述同步给出「旧 DSH 请改装 **v0.29.11**（支持 0.1.7-rc.2）」的指引。
+
+**四、D-61（🔴 诊断信息静默丢失）**——`streamObservationLine` 读 `finish?.usage`，而平台的 `StreamChunk` 联合**自 0.0.1-rc.5 起**就把用量发成**独立 chunk** `{type:"usage", usage}`（`finish` 只有 `{reason, replayState?}`；0.2.0-rc.2 逐字同）⇒ 该行**恒打 `usage=none`**。修法：`collectStream` 收集 `usage` chunk 并一路带到观测行（`finish?.usage` 保留为兜底，防御未来合并形态）；用例改喂**平台真实形状**（原腿喂的是平台不会发出的形状，所以一直绿而缺陷一直在）。
+
+**五、顺带登记（不改行为）**——`package.json` 的 `dsh.client.inject` 里列着的 `@deepseek-ai/dsh-client-runtime` **在 0.2.0 平台包树中已不存在**；该字段是**软排序提示**（平台查不到对应 client 模块行即跳过，`dsh-client-modules` 的 `arriveGraphRow`），且本插件 client 半边只 `require("react")` ⇒ **不影响设置页**，本版不动它，只在此如实登记。第二处登记：`dsh.client.inject` 与 `publish` 口径均未变，`peerDependencies` 新增键已在上文第三节交代。
+
+**六、评审收口（第四轮 6 条全部处置：1 🟡 + 5 🔵）**——
+① **轮内剩余预算加 1ms 下界**（`lib/advisor.mjs` 的 `runAdvisorToolLoop` 调用点）：循环顶的预算判定与取剩余预算之间存在 tick 边界竞态，余量若算出 ≤0，`collectStream` 会把「已到点」折成「没有截止」（`deadlineAt = null`）⇒ 该次调用**连 chunk 墙钟双检一起失效**、只剩 idle 看门狗。收口放在**调用点**而非 `collectStream` 内：后者被 **T-AP7 的冻结锁**钉死了 `setTimeout` 第二实参的逐字表达式（改它就是改机制本体）⇒ 既补上竞态窗口，又不动被冻结的条件；同一 test 块新增两条源码腿（下界在场 / 无下界的旧写法零残留）。
+② **runner 字段提示单点化**：`lib/codex-adapter.mjs` 新增 `CODEX_RUNNER_VALUE_HINT`（由已有的 `CODEX_ROW_FIELDS` 渲染），`lib/advisor.mjs` 两处提示（`resolveAdvisorRoute` 的 `expected("runner")` 与 `coerceValue` 报错文案）改为同源引用——此前两处**各写各的**，且**都漏了 `executable`**、其中一处还漏了 `"dsh"` 这个合法简写。
+③ **文档卫生三处**：CHANGELOG 版本头日期统一为 2026-09-30（与 README/交接页/基线记录同日）；「二之补」里「工具返回体只有两字段」收窄为「**版本相关**字段只有两个」（否则与同段「4 键 → 5 键」自相矛盾）；全库检索同类声明，README/结项页/交接页/哨兵的基线与门槛口径逐处对齐（含 `0.2.0-rc.1` 的两类正当留白：peer 门槛与 as-of 历史）。
+④ **源④ 候选名的权威性如实登记**：`PLATFORM_PACKAGE_NAMES` 的 doc 写明 `dsh-base`/`dsh-core` 只是兜底、**版本权威性弱于 `dsh-app-boot`**，命中时以 evidence 判读，不当硬结论。
+⑤ **测试时序腿（未决）**：`test/codex-runner.test.mjs` 里若干依赖真实墙钟的腿（`elapsed < 5000` / `sleep(800)` 等）与 README「已知未决」登记的全量偶发同族，**属既有形态**，本版不动；改假时钟是同族统一维护的活（先例：`T-AP4b` 的 D-51 假时钟），留作下一维护轮的候选。
+**第五轮复核 = PASS**（逐条核实上述 5 处已修/已登记），并当场改正一处**它新指出的计数漂移**（本节标题原写「第三轮发现的 9 条」，实际收口的是**第四轮的 6 条**）。⇒ 批 31 累计 **5 轮评审、16 条发现全部处置至 PASS**（轮 1 🟡1🔵3 · 轮 2 复核 PASS · 轮 3 🟡1🔵4 · 轮 4 🟡1🔵5 · 轮 5 复核 PASS + 1 计数漂移当场修）。
+
 ## [0.29.11] — 2026-09-28
 
 > **一句话**：批 30 —— **把两条「空转的防线」真接上**（工具面按 Agent scope 读名域 · 静默看门狗改接 `seq` 与 `ctx` 事件面），修掉**会丢证据**的落盘缺陷，并把会诊从「真根因不可见」救回来。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。

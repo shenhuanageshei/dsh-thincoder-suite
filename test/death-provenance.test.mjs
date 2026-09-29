@@ -672,7 +672,11 @@ test("T-AP3 (AC-AP3): 无声样 AbortError → 超时尾；用户取消 → inte
   // (d) 源码锁（AC-AP3 口径：**在循环 catch 内**零命中）：文本嗅探已删，超时判定绑 latch/结构化载荷
   const src = libFile("advisor.mjs")
   const loopStart = src.indexOf("for (let attempt = 1; attempt <= STREAM_ATTEMPTS; attempt++)")
-  const loopEnd = src.indexOf("const { blocks, finish } = result")
+  // ★ 批 31：锚点由「逐字 `const { blocks, finish } = result`」放宽为**同前缀的任意解构**
+  //   （该行在批 31 增列了 `usage`——用量改由独立 chunk 收集）。放宽只影响**区段边界**的取得，
+  //   区段内两条判据（禁文本嗅探 / 超时绑 latch）逐字不变。
+  const destructAt = src.search(/const \{ blocks, finish[^}]*\} = result/)
+  const loopEnd = destructAt >= 0 ? destructAt : -1
   assert.ok(loopStart > 0 && loopEnd > loopStart, "循环 catch 区段可定位")
   const loopCatchRegion = src.slice(loopStart, loopEnd)
   assert.ok(!/\/deadline reached\//.test(loopCatchRegion), "循环 catch 内的 /deadline reached/ 文本嗅探必须已删除")
@@ -956,6 +960,15 @@ test("T-AP7 (AC-AP7): `grep '\\\\.abort()' lib/` 零命中 + 写点数不增 + �
     assert.deepEqual(timerArgExprs(src[f]), expected,
       f + " 的 setTimeout 第二实参表达式必须与批 6 前**逐字**一致（`deadlineMs * 2` 这类改动必红）")
   }
+  // (d) ★ 批 31（评审 #1）：轮内剩余预算必须有 **1ms 下界**。为什么这条属于 T-AP7 的辖域：
+  //     上表冻结的是「定时器条件」，而 `deadlineMs` 正是截止定时器与 chunk 墙钟双检的**共同门**
+  //     （collectStream 里 `deadlineMs > 0 ? … : null`）——余量算出 ≤0 会把「已到点」折成「没有截止」，
+  //     整条截止机制静默失效。下界取在**调用点**（collectStream 内表达式被上表冻结，不许动）。
+  assert.ok(src["advisor.mjs"].includes("deadlineMs: Math.max(1, timeoutMs - (Date.now() - startTime))"),
+    "轮内剩余预算必须带 1ms 下界（否则 ≤0 会把截止机制折成 null ⇒ 只剩 idle 看门狗）")
+  assert.ok(!src["advisor.mjs"].includes("deadlineMs: timeoutMs - (Date.now() - startTime),"),
+    "无下界的旧写法必须零残留（防回退）")
+
   // 与 `git show HEAD:<file>` **逐字**交叉核验——证明上表就是批 6 之前的值（无 git 的机器跳过）
   let headChecked = 0
   for (const f of Object.keys(TIMER_ARGS_PRE_BATCH6)) {
