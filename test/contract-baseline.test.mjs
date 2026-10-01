@@ -165,10 +165,12 @@ test("A28-3: 四源皆不可得 ⇒ 标 unknown + 告警 + 不崩；读取链按
       mkdirSync(updaterDir, { recursive: true })
       writeFileSync(join(updaterDir, "update-info.json"),
         JSON.stringify({ fileName: "deepseek-harness-0.1.7-rc.2-win-x64.exe" }), "utf8")
-      // ★ 负控（真机实测逼出来的）：本机 %LOCALAPPDATA% 下**同时**躺着 6 个不相干 electron-updater
+      // ★ 负控（真机实测逼出来的）：本机 %LOCALAPPDATA% 下**同时**躺着别的 electron-updater
       //   应用的 update-info.json（MiniMax Code / ZCode / Cherry Studio / uTools / NGP…）。第一版
-      //   实现只按 `/updater$/` 匹配目录名 ⇒ 六个应用的版本全被刷进 evidence（真机读数当场抓到）。
+      //   实现只按 `/updater$/` 匹配目录名 ⇒ 那些应用的版本全被刷进 evidence（真机读数当场抓到）。
       //   这一格把那次的形态原样钉住：非 DSH 的 updater 目录**一个字都不许进**。
+      //  （计数刻意不写死：那类 `pending\update-info.json` 随安装完成而增减——2026-10-01 复测本机共
+      //   6 条、其中 DSH 自己 1 条，与写入时的条数已不同。判据只依赖「非 DSH 不许进」这个不变量。）
       const otherDir = join(bystanderLocal, "cherrystudio-updater", "pending")
       mkdirSync(otherDir, { recursive: true })
       writeFileSync(join(otherDir, "update-info.json"),
