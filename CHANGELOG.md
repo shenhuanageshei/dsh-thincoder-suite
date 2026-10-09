@@ -2,6 +2,26 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.30.1] — 2026-10-09
+
+> **一句话**：修掉**工程模式实施通道的「派发即死」**——`eng_coder` 把子代理派到**用户早已切换掉的旧模型通道**上（插件拿「建会话那一刻的模型」当「会话现在用的模型」，并**显式覆写**给子代理），并对这次死亡**一个字都不留**（全文只有 `eng_coder ended: error` + 空 partial）。设计档 [`docs/2026-10-09-eng-route-live-design.md`](./docs/2026-10-09-eng-route-live-design.md)。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。
+
+**【计数行】**：`node --test` **594/594**（**基线 594 + 本批 0**：本批全部新腿**并入既有顶层 `test(` 块** ⇒ 顶层用例数不变，台账逐格仍一致）。
+
+**一、D-62 根因（真机取证，不是推测）**——2026-10-09 提交方三次 eng_coder 同签名失败（~19 秒 · 报告 569 B · 空 partial · 子会话仅 header）。三条独立读数钉死根因：① 父会话 `session-9fdfe32c…` 的**每一个** `request/header` 都是 `deepseek-official/deepseek-flash`（用户 18:12:29 切过去）；② 三份失败子会话（`d43a0c32…`/`1733bd62…`/`bd014d26…`）的 `request/header` 却是 `minimax-cn/M3.1-Flash-Preview`——即**建会话那一刻（18:12:19）的部署默认**；③ 三份子会话的 `turn/end` 全是 `{"kind":"error",…"已达到 Token Plan 用量上限…","code":"RATE_LIMIT"}` ⇒ 首次模型请求即 429、重试 5 次退避合计 ≈19 秒（**这就是那 19 秒**）。平台侧规则逐字可查：`@deepseek-ai/dsh-subagent/lib/index.js:406-424` 明写「latest request header owns provider/model/reasoningEffort after request-time selection; creation options remain the fallback **before the first request**」，而 `:436-451` 的 `resolveChildAgentOptions` 里 **`requested`（调用方传的 `agentOptions`）覆盖继承面**；一次性派发路径在 `dsh-subagent-in-process-driver/lib/index.js:186` 逐字消费它。插件旧代码（`lib/eng.mjs:1340` 的 `agent.options ?? {}` → `:1687` / `:1850-1851` 的 `provider: agentOpts.provider`）正是那个「requested」⇒ **子代理被钉在创建期快照上**。提交方怀疑的 `toolFilter.deny` 名域与 `agentPreset:"ptc"` **经取证均不成立**（子会话 36 个事件、`turn/end` 齐全、无 spawn 期抛错；同一会话里跑起来的两名队友 preset 同样是 `ptc`）——如实登记为「已排除」。
+
+**二、修法**——① **新叶子模块 `lib/agent-route.mjs`**：`liveAgentRoute(agent)` 按**平台同款**两级读路由（`session.requestHeader().config` → 首次请求之前回落 `agent.options`），`maxTokens` **恒取创建期选项**（平台 JSDoc 原文「creation options … retain the configured output-token limit」⇒ F9 预算链逐字不变），**永不抛**。② **子代理不再被覆写路由**：两个 spawn 点的 `agentOptions` 收敛为 `{maxTokens, reasoningEffort?}`（后台 ⊕ 同步）——路由交给平台继承，结构性免疫「读错→传错」。③ **effort 按活动路由的模型校验/回落**（旧代码拿创建期快照查支持集 ⇒ 拿错模型回落，2026-09-04 那类秒死的同族风险）。④ **决策同源**：`lib/advisor.mjs`（兜底路由第 4 优先级 + 硬停指纹）与 `lib/index.mjs`（`advisor_config` 显示面 + 设置页 `agentOptionsOf`）一律改读 `liveAgentRoute`——硬停指纹那句「agent **路由变化** ⇒ 失配 ⇒ 硬停自动解除」第一次真正成立。
+
+**三、诊断面（提交方 §6 的诉求逐条落地）**——`stopReason !== "completed"` 分支（后台 + 同步）新增取证件：**本次派发路由 + 子会话 `turn/end.reason`**（复用 `lib/consult.mjs` 的 D-58 读取器，**补导出**、不新建模块）；异常面新增「阶段标记（钉死枚举 `ENG_FAILURE_STAGES`：`ctx.subagents.start` / `watchdog-attach` / `await run.result` / `deliver-bookkeeping` / `host-stage-checks`）+ name + message + **stack 前 3 行**」，`detail` 侧收成 ≤64 字符短句（D-46b 契约），两条腿**都同时 `console.warn`**。真机形态修复后实测报告（同一夹具、修复前后对照）：修复前 = `eng_coder ended: error` + 空 partial（**逐字节等价于 `eng-dsh-29.txt` 的形态**）；修复后 = 追加一行 `eng_coder 失败取证（D-62）：本次派发路由 = deepseek-official/deepseek-flash（request-header）；子会话 turn/end = error: 429 rate_limit_error: 已达到 Token Plan 用量上限 (2056)`。
+
+**四、有意改锁（3 处，逐条留痕）**——① `test/advisor-config.test.mjs` T18 与 `test/codex-runner.test.mjs` 的 eng dsh 行：`assert.equal(ao.provider, …)` 翻转为「**键缺席**」（D1 决策的行为面）；② `lib/contract-baseline.mjs` 锁 ④：从「provider/model 经 `agentOpts` 显式传子代理」翻转为「必须出现 `const route = liveAgentRoute(agent)` 与 `route.provider, route.model`」，并**新增负向锁**（`eng.mjs` 再出现 `provider: agentOpts.provider` / `model: agentOpts.model`，或 `advisor.mjs`/`index.mjs` 再出现 `agent.options ?? {}` ⇒ 红）；③ 取证件落点选在 partial **之后**，以**零改** SITES 16 条 / 17 挂点 / `failStop(` 恒 18 / T-AP2 首段锁（决策 D5）。
+
+**五、验证读数（红→绿）**——**修复前必红**（把 `lib/**` 换回 `6b46978` 后跑新腿）：`eng` 腿 `子代理实际路由必须是**活动路由**（不是创建期快照）: actual 'minimax-cn' / expected 'deepseek-official'` · `advisor` 腿 `第 4 优先级 = **活动路由**: actual 'minimax-cn' / expected 'deepseek-official'` · `provider/model 不得显式覆写（D-62）: {"provider":"acme","model":"model-a","maxTokens":65536}`（3 红）；**修复后全绿**：`node --test` **594/594**（顶层用例数不变），其中 `codex-runner` 190/190 · `contract-baseline`/`platform-surface`/`advisor-config` 全绿，`doc-hygiene`（SITES/V6/V7/V8）· `death-provenance`（T-AP2 首段）· `stage-gate`（T-AP7 定时器）· `job-persistence` 零漂移。
+
+**六、边界与遗留**——路由读取 fail-**open**（读面不可得 ⇒ 交还平台继承；不新增中止/抛出点）；取证 fail-**open**（读不到就**明写**不可读，绝不假装读到）；会话中途换模型**就地读、不缓存**（与平台同一次调用内一致）；平台若给 `session.requestHeader` 改名 ⇒ 回落创建期快照（退化为旧行为而非崩），`contractWatch` 九锁会在换版时先红。遗留登记 **4 条**见设计档 §十（R-62-1 / R-62-2 两条**排除项**（`toolFilter.deny` 名域、`preset:"ptc"`）· R-62-3 观察项（同一份子会话档两处读）· R-62-4 **待评估触点**（`session.requestHeader()` 是本批**新消费**的平台面，尚未进九条触点锁矩阵——读取面已做两级回落，换版时先由版本哨兵告警））。
+
+**七、交付评审（本插件 advisor · `zai-coding-cn:glm-5.3` · 1800s）= PASS**，4 条发现（1 🟡 + 3 🔵）逐条处置并落档设计档 §十一：🟡 = **半空 header 会产出跨源混搭对**（逐键回落 ⇒ `header 的 model ⊕ 创建期的 provider`，且 `source` 谎报 `request-header`；该对象喂 advisor 兜底路由还会绕过其「成对/禁跨环混搭」纪律）⇒ **已修**为**整对语义**（两键都非空才认 header，否则整对回落）＋两腿新断言（红读数：还原逐键逻辑 ⇒「半空 header ⇒ 整对回落」断言红）；🔵#2 = `agent.options` 属性读在 try 之外（理论违反「永不抛」）⇒ **已修**（抛错 getter ⇒ 归零 `{}`，附断言）；🔵#3（同步路径结算期取证件落在失败菜单之后）与 🔵#4（`oneLine` 与 `squashEvidence` 形状重复）**保留并写明理由**（前者受 SITES 第七针约束、同形态 spawn 期失败已落在菜单之前；后者是各自成立的读面，共享化收益仅 5 行）。修复轮后全量 **594/594** 仍绿。
+
 ## [0.30.0] — 2026-09-30
 
 > **一句话**：批 31 —— **把平台基线抬到 DSH `0.2.0-rc.2` 并逐条复核九条触点锁**，顺手**接上一条一直在空转的防线**（版本哨兵在本机四源全落空 ⇒ 稳定报 unknown，对真实换版零反应）；同时把「只支持 ≥ 0.2.0-rc.1」从一句说明变成**平台自己执行的硬门槛**。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。

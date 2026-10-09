@@ -1099,8 +1099,10 @@ test("R1 批19 A9/A10 接线 eng dsh 分支: 显式 off 关不掉 ⇒ agentOptio
   assert.ok(out.includes("eng_coder delivery:"))
   const ao = started[0].agentOptions
   assert.ok(!("reasoningEffort" in ao), "null ⇒ 键缺席（eng 的 !== null 判空——R-59 已登记）: " + JSON.stringify(ao))
-  assert.equal(ao.provider, "acme")
-  assert.equal(ao.model, "model-a")
+  // 批 32 / D-62（有意改锁）：provider/model 不再显式覆写——平台继承**活动路由**；显式传创建期
+  // 快照会把它盖掉（真机事故：子代理跑在用户早已切换掉的旧通道上 ⇒ 429 ⇒ 19 秒空报告）。
+  assert.ok(!("provider" in ao) && !("model" in ao),
+    "provider/model 不得显式覆写（D-62）: " + JSON.stringify(ao))
   assert.ok(out.includes("未能关闭推理"), "专属 note 经 warn 通道随工具返回可见")
   dropSession(sid)
 })
@@ -1132,6 +1134,40 @@ test("R1 批19 A9/A10 接线 advisor dsh 主路径: 显式 off 关不掉 ⇒ str
   assert.ok(out.includes("| 1 | a | b |"), "评审正文照常交付")
   assert.ok(out.includes("未能关闭推理"), "专属 note 入结果尾部（finalize 之后，不破坏 completed 判定）")
   dropSession(sid)
+
+  // ————— 批 32 / D-62 腿 5（修复前必红）：advisor 兜底路由的第 4 优先级「主代理路由」
+  // 必须取**活动路由**（`requestHeader().config`）——`agent.options` 是创建期快照，拿它当
+  // 「会话当前路由」会把评审派到用户早已切换掉的旧通道上（真机事故同 eng 腿）。 —————
+  {
+    const sid2 = "d59-adv-live-route"
+    const seen2 = []
+    const llm2 = {
+      ...ladderLlm(["high"]),
+      stream(opts) {
+        seen2.push(opts)
+        return (async function* () {
+          yield { type: "block-end", block: { type: "text", text: "| # | I | D |\n|---|---|---|\n| 1 | a | b |" } }
+          yield { type: "finish", reason: { kind: "stop" } }
+        })()
+      },
+    }
+    const agent2 = {
+      session: {
+        id: sid2, header: { cwd: tmpdir() }, deriveMessages: () => [],
+        requestHeader: () => ({ config: { provider: "deepseek-official", model: "deepseek-flash", reasoningEffort: "max" } }),
+      },
+      options: { provider: "minimax-cn", model: "M3.1-Flash-Preview" }, // 创建期快照（旧路由）
+    }
+    const out2 = await runAdvisorReview(
+      { llm: llm2 },
+      { agent: agent2, config: {}, reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false },
+    )
+    assert.equal(seen2.length, 1)
+    assert.equal(seen2[0].provider, "deepseek-official", "第 4 优先级 = **活动路由**（不是创建期快照）")
+    assert.equal(seen2[0].model, "deepseek-flash")
+    assert.ok(out2.includes("| 1 | a | b |"), "评审正文照常交付")
+    dropSession(sid2)
+  }
 })
 
 test("R1 批19 A9/A10 接线 advisor 智能回落轮: 显式 off 关不掉 ⇒ streamOpts 无 reasoningEffort 键且 provider/model 仍在", async () => {
@@ -1352,6 +1388,168 @@ test("R1 接线 eng dsh 分支：effort 按父代理路由模型解析（agentOp
   assert.equal(started[0].agentOptions.reasoningEffort, "high", "low 对 [off,high,max] 回落 high（off 不参与距离竞争，批 19）")
   assert.ok(out.includes("is not supported by model model-a-flash"), "note 经 warn 通道随工具返回可见")
   dropSession(sid)
+
+  // ————————— 批 32 / D-62：**活动路由**（会话当前路由）+ 失败取证（四腿） —————————
+  // 真机形态（2026-10-09 · session-9fdfe32c…）：agent 18:12:19 建（创建期选项 = 部署默认
+  // minimax-cn/M3.1-Flash-Preview），用户 18:12:29 把会话切到 deepseek-official/deepseek-flash
+  // ⇒ 此后 `agent.options` 就是**旧**路由。旧代码把它显式覆写给子代理 ⇒ 子代理跑在一条额度已尽的
+  // 通道上（首次请求 429，重试 5 次 ~19 秒后 turn/end = error），而报告面只剩 `eng_coder ended: error`。
+  /** 平台合并规则的**逐字复刻**（`dsh-subagent/lib/index.js:406-424` + `:436-451`）——闭式判据。 */
+  const platformChildAgentOptions = (parentCreated, liveConfig, requested) => {
+    let parentOpts
+    if (liveConfig === undefined) {
+      parentOpts = { ...parentCreated }
+    } else {
+      const { provider: _p, model: _m, reasoningEffort: _r, ...created } = parentCreated
+      parentOpts = {
+        ...created, provider: liveConfig.provider, model: liveConfig.model,
+        ...(liveConfig.reasoningEffort === undefined ? {} : { reasoningEffort: liveConfig.reasoningEffort }),
+      }
+    }
+    const resolved = { ...parentOpts, ...requested }
+    if ((resolved.provider !== parentOpts.provider || resolved.model !== parentOpts.model)
+      && requested?.reasoningEffort === undefined) delete resolved.reasoningEffort
+    return resolved
+  }
+  const STALE_CREATED = { provider: "minimax-cn", model: "M3.1-Flash-Preview", maxTokens: 65536 }
+  const LIVE_CFG = { provider: "deepseek-official", model: "deepseek-flash", reasoningEffort: "max" }
+
+  // 腿 1（修复前必红）：活动路由 = 子代理真实路由；effort 按**活动路由**的模型回落。
+  // 两个模型的阶梯刻意不同 ⇒ 拿错模型就会回落出错档（stale ["low"] → "low"；live [off,high,max] → "high"）。
+  {
+    const startedLive = []
+    const subLive = {
+      async start(_kind, req) {
+        startedLive.push(req)
+        return { result: Promise.resolve({ output: [{ type: "text", text: "ok\n\nTouched files: none" }], stopReason: "completed" }), dispose: async () => { } }
+      },
+    }
+    const sidL = "d59-live-route"
+    const stL = sessionState(sidL)
+    stL.engineering = true
+    const tokenL = makeEngToken(stL)
+    const agentL = {
+      session: { id: sidL, header: { cwd: tmpdir() }, requestHeader: () => ({ config: LIVE_CFG }) },
+      options: STALE_CREATED,
+    }
+    const llmL = {
+      async resolveModelInfo(_provider, model) {
+        const efforts = model === "deepseek-flash" ? ["off", "high", "max"] : ["low"]
+        return { reasoning: { efforts: efforts.map((e) => ({ id: e })) } }
+      },
+    }
+    const outL = await runEngCoder(
+      { ctx: { subagents: subLive, llm: llmL }, agent: agentL, config: { engCoderEffort: "medium" }, signal: undefined, configDefaultEngineering: false, spawn: () => { throw new Error("codex must not spawn") }, platform: "linux", env: {} },
+      { task: "implement live route", designToken: tokenL, docs: [] },
+    )
+    assert.ok(outL.includes("eng_coder delivery:"), outL)
+    const reqL = startedLive[0]
+    const effective = platformChildAgentOptions(STALE_CREATED, LIVE_CFG, reqL.agentOptions)
+    assert.equal(effective.provider, "deepseek-official", "子代理实际路由必须是**活动路由**（不是创建期快照）")
+    assert.equal(effective.model, "deepseek-flash", "子代理实际模型同上")
+    assert.equal(reqL.agentOptions.reasoningEffort, "high",
+      "effort 按**活动路由**的模型回落（stale 模型会给出 low——那正是修复前的错档）")
+    assert.ok(!("provider" in reqL.agentOptions) && !("model" in reqL.agentOptions),
+      "插件不得显式覆写 provider/model（否则盖掉平台的活动路由继承——D-62）")
+    assert.equal(reqL.agentOptions.maxTokens, 65536, "maxTokens 仍取创建期选项（平台同款，F9 预算链不变）")
+    dropSession(sidL)
+  }
+
+  // 腿 2（修复前必红）：失败报告必须自证——子会话 `turn/end.reason` + 本次派发路由。
+  {
+    const { zstdCompressSync } = await import("node:zlib")
+    const home = mkdtempSync(join(tmpdir(), "d59-home-"))
+    const childId = "d59-child-rate-limit"
+    const childDir = join(home, "sessions", "proj", childId)
+    mkdirSync(childDir, { recursive: true })
+    const turnEnd = JSON.stringify({
+      type: "turn/end", seq: 34,
+      data: { turn: 1, reason: { kind: "error", error: { message: "429 rate_limit_error: 已达到 Token Plan 用量上限 (2056)", code: "RATE_LIMIT" } } },
+    })
+    writeFileSync(join(childDir, "session.v4.jsonl.zstd"), zstdCompressSync(Buffer.from(turnEnd + "\n")))
+    const subFail = {
+      async start() {
+        return { id: childId, result: Promise.resolve({ output: [], stopReason: "error" }), dispose: async () => { } }
+      },
+    }
+    const sidF = "d59-failure-forensics"
+    const stF = sessionState(sidF)
+    stF.engineering = true
+    const tokenF = makeEngToken(stF)
+    const agentF = {
+      session: { id: sidF, header: { cwd: tmpdir() }, requestHeader: () => ({ config: LIVE_CFG }) },
+      options: STALE_CREATED,
+    }
+    const { value: outF, warnings: warnF } = await captureWarn(() => runEngCoder(
+      { ctx: { subagents: subFail }, agent: agentF, config: {}, signal: undefined, configDefaultEngineering: false, dshHome: home },
+      { task: "implement failing", designToken: tokenF, docs: [], background: false },
+    ))
+    assert.ok(outF.includes("eng_coder ended: error"), "首行文案逐字不变（SITES 针）: " + outF.slice(0, 200))
+    assert.ok(outF.includes("eng_coder 失败取证（D-62）"), "报告必须带取证件（修复前这里什么都没有）")
+    assert.ok(outF.includes("已达到 Token Plan 用量上限"), "取证件含子会话 turn/end 的真因（429 原文）")
+    assert.ok(outF.includes("deepseek-official/deepseek-flash"), "取证件含本次派发路由（活动路由）")
+    assert.ok(warnF.some((w) => w.includes("eng_coder ended: error")), "同时 console.warn 留档")
+    rmSync(home, { recursive: true, force: true })
+    dropSession(sidF)
+  }
+
+  // 腿 3（修复前必红）：异常面自证——阶段标记 + name/message/stack 前 3 行；detail 仍 ≤64 字符。
+  {
+    const boom = new Error("platform refused dispatch")
+    boom.name = "SubagentError"
+    const subThrow = { async start() { throw boom } }
+    const sidT = "d59-spawn-throw"
+    const stT = sessionState(sidT)
+    stT.engineering = true
+    const tokenT = makeEngToken(stT)
+    const agentT = { session: { id: sidT, header: { cwd: tmpdir() }, requestHeader: () => ({ config: LIVE_CFG }) }, options: STALE_CREATED }
+    const { value: outT, warnings: warnT } = await captureWarn(() => runEngCoder(
+      { ctx: { subagents: subThrow }, agent: agentT, config: {}, signal: undefined, configDefaultEngineering: false },
+      { task: "implement throw", designToken: tokenT, docs: [], background: false },
+    ))
+    assert.ok(outT.includes("eng_coder failed to start: platform refused dispatch"), "首行文案逐字保留: " + outT.slice(0, 200))
+    assert.ok(outT.includes("阶段 = ctx.subagents.start"), "必须点明崩在哪一步（阶段标记）")
+    assert.ok(outT.includes("SubagentError"), "必须带异常 name")
+    assert.ok(/at .+:\d+:\d+/.test(outT), "必须带 stack 前若干行（可定位到文件:行）")
+    assert.ok(warnT.some((w) => w.includes("阶段 = ctx.subagents.start")), "同时 console.warn 留档")
+    dropSession(sidT)
+  }
+
+  // 腿 4：`liveAgentRoute` 的读面语义（活动路由优先 / 首次请求之前回落创建期 / 永不抛）。
+  {
+    const { liveAgentRoute } = await import("../lib/agent-route.mjs")
+    const live = liveAgentRoute({
+      session: { requestHeader: () => ({ config: { provider: "deepseek-official", model: "deepseek-flash", reasoningEffort: "max" } }) },
+      options: STALE_CREATED,
+    })
+    assert.equal(live.source, "request-header")
+    assert.equal(live.provider + "/" + live.model, "deepseek-official/deepseek-flash")
+    assert.equal(live.maxTokens, 65536, "maxTokens 恒取创建期选项（平台同款）")
+    const pre = liveAgentRoute({ session: {}, options: { provider: "p", model: "m" } })
+    assert.equal(pre.source, "creation-options", "首次请求之前回落创建期选项（平台同款）")
+    assert.equal(pre.provider + "/" + pre.model, "p/m")
+    assert.equal(liveAgentRoute({ session: { requestHeader: () => { throw new Error("boom") } }, options: { provider: "p", model: "m" } }).source,
+      "creation-options", "读面抛错 ⇒ 回落而非上抛（取证面不得成为新的失败源）")
+    assert.equal(liveAgentRoute(null).source, "none", "无 agent ⇒ none（不编造路由）")
+    assert.equal(liveAgentRoute({ session: { requestHeader: () => ({ config: { provider: "", model: "" } }) }, options: {} }).source, "none",
+      "空串不是路由（不得把空串当已读到的 provider/model）")
+    // ★ 交付评审 #1（🟡）：**单侧**空串 ⇒ **整对**回落（禁跨源混搭对），且 source 不得谎报 request-header
+    const half = liveAgentRoute({
+      session: { requestHeader: () => ({ config: { provider: "", model: "deepseek-flash" } }) },
+      options: { provider: "minimax-cn", model: "M3.1-Flash-Preview" },
+    })
+    assert.equal(half.source, "creation-options", "半空 header ⇒ 整对回落（不得标 request-header）")
+    assert.equal(half.provider + "/" + half.model, "minimax-cn/M3.1-Flash-Preview",
+      "半空 header 不得产出 **header 的 model ⊕ 创建期的 provider** 这种从未存在过的混搭对")
+    const half2 = liveAgentRoute({
+      session: { requestHeader: () => ({ config: { provider: "deepseek-official", model: "" } }) },
+      options: { provider: "minimax-cn", model: "M3.1-Flash-Preview" },
+    })
+    assert.equal(half2.provider + "/" + half2.model, "minimax-cn/M3.1-Flash-Preview", "另一侧半空 ⇒ 同样整对回落")
+    // 「永不抛」：抛错的 options getter 也必须被吞掉（交付评审 #2）
+    assert.equal(liveAgentRoute({ get options() { throw new Error("boom") }, session: {} }).source, "none",
+      "options 读面抛错 ⇒ 归零为 {}，不得上抛（永不抛契约）")
+  }
 })
 
 test("R1 接线 advisor codex 行：runner.effort 经 catalog 校验回落（argv）+ note 并入结果尾部", async () => {

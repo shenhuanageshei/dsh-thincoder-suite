@@ -478,7 +478,11 @@ test("T18: eng_coder spawn agentOptions carry maxTokens (≥ config or default 6
   assert.equal(req.agentOptions.maxTokens, 99999)
   assert.equal(req.agentOptions.reasoningEffort, "high")
   assert.ok(req.toolFilter.deny.includes("ask_user_question"))
-  assert.ok(req.agentOptions.provider === "p" && req.agentOptions.model === "m")
+  // 批 32 / D-62（有意改锁）：provider/model **不再**由插件显式覆写——平台自己按
+  // `resolveChildAgentOptions` 继承**活动路由**（`requestHeader().config`），插件显式传的
+  // 创建期快照会把它盖掉（真机事故：子代理跑在用户早已切换掉的旧通道上）。⇒ 断言翻转成键缺席。
+  assert.ok(!("provider" in req.agentOptions) && !("model" in req.agentOptions),
+    "provider/model 不得显式覆写（D-62）: " + JSON.stringify(req.agentOptions))
   dropSession("t18a")
 
   // 缺省：config 未配置 → 默认 65536 + effort medium（批 14 / D14-1：默认值与回落目标同源常量）
