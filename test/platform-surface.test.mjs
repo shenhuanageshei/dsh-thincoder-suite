@@ -65,7 +65,7 @@ test("#5 subagents.start 形状: 全部调用点的参数键集合 ⊆ 平台已
   assertLock("ps5-subagents-start-shape")
 })
 
-test("#6 agent/session 形状: 实谓词——lib 消费面逐点消费 session.id/header.cwd/delegationDepth/options.provider·model；夹具文本腿随本档传入", () => {
+test("#6 agent/session 形状: 实谓词——lib 消费面逐点消费 session.id/header.cwd/delegationDepth/**活动路由**（liveAgentRoute；D-62 负向锁禁以 agent.options 充当路由）/maxTokens（创建期）；夹具文本腿随本档传入", () => {
   assertLock("ps6-agent-session-fields")
 })
 

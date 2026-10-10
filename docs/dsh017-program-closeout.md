@@ -29,7 +29,7 @@
 | ps3-jobs-output-contract | run(handle) 收句柄 + 正文经 jobOutcome 收口（0.1.7 输出环/job.result） | 批 25 设计档（D-46）· 批 26 §2.3 #3（derived，两处同改） |
 | ps4-home-probe-dual-name | home 探测同时认 settings.yaml 与 settings.yaml.imported（sessions/ 特征仍在） | 批 24/25 矩阵 #4 · 批 26 §2.3 #4（derived，两处同改） |
 | ps5-subagents-start-shape | subagents.start 全部调用点的参数键 ⊆ 平台已知九键并集（六个调用点） | 批 25 矩阵 #5 · 批 26 §2.3 #5 |
-| ps6-agent-session-fields | lib 消费面逐点消费 session.id / delegationDepth / header.cwd / options.provider·model / maxTokens | 批 25 矩阵 #6 · 批 26 §2.3 #6 |
+| ps6-agent-session-fields | lib 消费面逐点消费 session.id / delegationDepth / header.cwd / **活动路由**（`liveAgentRoute`：`requestHeader().config` 整对，回落创建期 `options`；**D-62 负向锁**禁以 `agent.options` 充当路由）/ maxTokens（创建期，平台同款） | 批 25 矩阵 #6 · 批 26 §2.3 #6 · **批 32 改判**（D-62：判据从「provider/model 经 agentOpts 显式透传」翻转为「必须读活动路由 + 禁覆写」，本行随改） |
 | ps7-registration-surface | 注册面期望计数 = 实测基线（批 28 上调 textTool 7→8：contractWatch，D28-6） | 批 26 §2.3 #7 · D28-6（登记处 = REGISTRATION_SURFACE_BASELINE 注释） |
 | ps8-request-rejection-fence | web 路由处理函数首个业务调用 = 信任栅栏（先取 connection 再问请求拒绝，契约外 503） | 批 22/24 矩阵 #8（D-39）· 批 26 §2.3 #8 |
 | ps9-dispatch-copy-persisted-path | 派发文案首选落盘文件、job_output 降为附加（★ 2026-09-28 更正：「读取面不在本仓」的前提已撤回——真因是第三方插件；取向本身不变） | 批 26（D-45）§2.3 #9 |
