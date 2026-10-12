@@ -4,6 +4,7 @@
   - **2026-09-13 批 10 文档卫生订正**（**分歧审计 #5**）：本行原写「未实现」，与工作树/CHANGELOG 事实矛盾——它**逃过了 AC-H1 的字面 grep**，因为它写的是「**设计定稿待评审**」而非规范形态「设计待评审」。本档同时**补登记进 `README.md` 文档地图**（此前不在图上）。判据见 [`2026-09-13-ledger-discipline-design.md`](./2026-09-13-ledger-discipline-design.md) §11.2 的 **AC-H1**（全仓滞后状态行扫荡——其字面 grep 抓不到本行这种「非规范形态」的滞后）
   - **逐档用例数见 [`test-lifecycle.md`](./test-lifecycle.md) §三**（那是机械副本与计数单点；本档**不复写**计数，避免再造一个会漂的自报数——本批 P1 的病根）
 - 环境：Windows 11 · codex-cli 0.150.1（npm 安装，能力探测后兼容 ≥0.150）· ChatGPT 登录态
+  - **2026-10-12 复验与升级（codex-cli 0.153.4 → 0.162.1）**：插件侧四项全绿——`resolveExecutableFile` 解析到 npm shim、`probeCodex` 报 `0.162.1`、`discoverCodexModels`（`codex debug models`）解析到 **11** 个模型（含新增 `gpt-6.1-sol` 等，目录由 CLI 动态给出、插件不硬编码）、**真任务端到端** `runCodexTask` 返回 `ok:true / text:"SMOKE-OK" / usage{in:17703,out:8} / runner.version:"0.162.1"`；`buildCodexArgs` 用到的 **7 个 flag + `resume` 子命令**在新版 `exec --help` 里逐条在位。**升级方式如实登记**：本机 npm 缓存（`C:\home\magic\.npm`）出现 cacache 并发写竞态（`EBUSY/EEXIST`，`npm i -g` 连试 `--force`/新缓存/`--maxsockets 1` 均失败）⇒ 改由 registry 直取两个 tarball（wrapper + 平台包 `@openai/codex@0.162.1-win32-x64`）**手工落位**到 npm 全局目录；旧版整目录保留在 `…\npm\node_modules\@openai\codex-0.153.4`（回滚 = 改回目录名，运行中的 codex 会话不受影响）。
 - 评审来源：codex gpt-5.6-sol（high effort，66k tokens，179s）深度评审已逐条采纳；GLM-5.3 会诊三次尝试全部 child aborted（会诊池环境故障，见附录 B）。本文档由 codex 评审 + 作者综合执笔。
 - 术语表（首次出现先解释）：**runner** = 模型后端适配器，决定任务交给谁跑；**headless** = 无交互命令行模式，跑完退出；**resume** = 继续上一次 codex 会话接着聊；**AGENTS.md** = codex 启动时自动读取的项目规则文件；**envelope** = 统一返回信封，不管后端是谁返回结构一致；**fail-closed** = 校验不过就拒绝，绝不带病运行、绝不静默换后端；**watchdog** = 看门狗定时器，超时强杀进程。
 
@@ -416,7 +417,7 @@ flowchart LR
 ## 10. 风险清单
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| codex 版本漂移（0.153.0 已发布；flag 面随版本变） | 参数失效 | 启动能力探测（B11）+ 记录 runner 版本 + 兼容矩阵回归 |
+| codex 版本漂移（0.153.0 已发布；flag 面随版本变） | 参数失效 | 启动能力探测（B11）+ 记录 runner 版本 + 兼容矩阵回归。**2026-10-12 复验（0.162.1）**：7 个 flag + `resume` 子命令逐条在位、探测/目录/真实 exec 全链路通过 ⇒ **本版兼容**；复验手法 = 直接调用插件自己的四个入口（不做只读猜测），可重复执行 |
 | 网络重连/登录态/配额不可插件控 | 长时间阻塞 | 外层 timeoutMs + watchdog 进程树清理 + 稳定错误码 |
 | consult 5 路并发 = 5 个 CLI 进程 | token/CPU/代理连接放大 | 沿用池上限（B15）+ NFR-2 |
 | 会话明文落盘 ~/.codex/sessions（当前 444 文件 1.52GB） | 敏感代码长期留存 | B14 告知 + threadId 不持久 + 日志脱敏 |
