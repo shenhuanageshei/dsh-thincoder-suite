@@ -2,6 +2,24 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.31.0] — 2026-10-14
+
+> **一句话（人话）**：给插件**多开一条 codex 通道**。以前 codex 只有一条路——在本机起 `codex exec` 子进程；你这台机器上那条路**一遇到「要执行命令」就挂**（Windows 沙箱助手起不来 + 联网子系统超时）。现在多了一条：走**平台自带的 codex 支持**（官方 app-server 协议），用于**只读类**任务（会诊 / 评审）。两条通道并存，用哪条写在配置里，一眼可辨、随时可退。
+
+**【计数行】**：本版与批 34（防漂）**共用同一份工作树**，`node --test` 读数在**两批合并回 main 时**按当次实测补写（发布门 G3 强制计数一致）——**此处故意不写会漂的数字**。
+
+**一、为什么要加（人话）**：`codex exec` 这条路在本机有两处坏点——① 要执行命令时 `Failed to create unified exec process: helper_unknown_error`；② 联网子系统反复超时（`chatgpt.com/backend-api/ps/mcp` + 模型表刷新）。对照：平台自带 `@deepseek-ai/dsh-subagent-codex`（注册 provider 名 **`codex`**，走 **app-server** 协议）**协议握手实测通过**。按用户裁定走后者，且**不动 Codex 桌面端任何配置**。
+
+**二、怎么用（人话）**：会诊池 / advisor 路由的行或组里写 `runner: { kind: "codex-app-server" }` 即走新通道；写 `codex-cli` 仍走老通道；`dsh`（缺省）不变。**两条必须知道的边界**：① 新通道**只读**——无人值守时平台对审批一律拒绝，所以 **eng_coder / escalate 配它会具名拒绝**（它们要写工作区）；② 新通道**不消费 `model` / `effort`**（模型由本机 Codex 配置决定），配了不静默忽略、会在展示面如实告知。
+
+**三、改了什么（技术面）**：新档 `lib/codex-app-server.mjs`（请求**只发** `prompt/parent/signal/label`；provider 未装配 / 文本为空 / start 拒绝等**具名 fail-closed**；平台失败面原样上浮；**不提供 usage**，行渲染不留空占位）· 配置面（`CODEX_RUNNER_KINDS` 收新 kind · `lib/index.mjs` 的 `isCodex`/`sanitize*` · `lib/client.js` 判定族字面单点化）· 接线（`lib/consult.mjs` / `lib/advisor.mjs` 按 `runner.kind` 分派；写任务守卫落 `lib/escalate.mjs`）· 结项页矩阵行补新 kind 与覆盖边界。
+
+**四、有意改锁（用户裁定 · 留痕）**：`lib/advisor.mjs` 的 `.abort(` 写点 **4 → 6**（新腿两处：`:1920` 上游中止中继 / `:1931` 腿内预算截止）⇒ 站点同步进 `lib/abort-provenance.mjs` 档头枚举（标「批 33 追认」）；`T-AP7` 两条腿（写点预算 / 定时器表达式）随之**有意更新期望值**——**不是放宽锁，是登记新增**。
+
+**五、文档与评审**：[需求档](./docs/2026-10-14-codex-app-server-requirements.md) + [设计档](./docs/2026-10-14-codex-app-server-design.md) · 设计评审 **PASS**（令牌有效至 2026-10-21）· 评审轮 1 的 11 条 + 复审 2 条全部收口（处置表落设计档 §11）。
+
+**六、已知残留**：`T-AP7(b)` 定时器表达式腿由收官小修补齐；共享档（本档与 `README.md`）按「逐文件 add」纪律合并，禁 `git add -A`。
+
 ## [0.30.1] — 2026-10-09
 
 > **一句话**：修掉**工程模式实施通道的「派发即死」**——`eng_coder` 把子代理派到**用户早已切换掉的旧模型通道**上（插件拿「建会话那一刻的模型」当「会话现在用的模型」，并**显式覆写**给子代理），并对这次死亡**一个字都不留**（全文只有 `eng_coder ended: error` + 空 partial）。设计档 [`docs/2026-10-09-eng-route-live-design.md`](./docs/2026-10-09-eng-route-live-design.md)。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。
@@ -18,7 +36,7 @@
 
 **五、验证读数（红→绿）**——**修复前必红**（把 `lib/**` 换回 `6b46978` 后跑新腿）：`eng` 腿 `子代理实际路由必须是**活动路由**（不是创建期快照）: actual 'minimax-cn' / expected 'deepseek-official'` · `advisor` 腿 `第 4 优先级 = **活动路由**: actual 'minimax-cn' / expected 'deepseek-official'` · `provider/model 不得显式覆写（D-62）: {"provider":"acme","model":"model-a","maxTokens":65536}`（3 红）；**修复后全绿**：`node --test` **594/594**（顶层用例数不变），其中 `codex-runner` 190/190 · `contract-baseline`/`platform-surface`/`advisor-config` 全绿，`doc-hygiene`（SITES/V6/V7/V8）· `death-provenance`（T-AP2 首段）· `stage-gate`（T-AP7 定时器）· `job-persistence` 零漂移。
 
-**六、边界与遗留**——路由读取 fail-**open**（读面不可得 ⇒ 交还平台继承；不新增中止/抛出点）；取证 fail-**open**（读不到就**明写**不可读，绝不假装读到）；会话中途换模型**就地读、不缓存**（与平台同一次调用内一致）；平台若给 `session.requestHeader` 改名 ⇒ 回落创建期快照（退化为旧行为而非崩），`contractWatch` 九锁会在换版时先红。遗留登记 **4 条**见设计档 §十（R-62-1 / R-62-2 两条**排除项**（`toolFilter.deny` 名域、`preset:"ptc"`）· R-62-3 观察项（同一份子会话档两处读）· R-62-4 **待评估触点**（`session.requestHeader()` 是本批**新消费**的平台面，尚未进九条触点锁矩阵——读取面已做两级回落，换版时先由版本哨兵告警））。
+**六、边界与遗留**——路由读取 fail-**open**（读面不可得 ⇒ 交还平台继承；不新增中止/抛出点）；取证 fail-**open**（读不到就**明写**不可读，绝不假装读到）；会话中途换模型**就地读、不缓存**（与平台同一次调用内一致）；平台若给 `session.requestHeader` 改名 ⇒ 回落创建期快照（退化为旧行为而非崩），`contractWatch` **先响的是版本哨兵**（每进程一次、只警告不阻断）——九条锁是**本仓源码文本谓词**，平台改名**不会**让它们变红（2026-10-13 订正：本句原文误称「九锁会在换版时先红」，由会诊 #48 三家独立指出）。遗留登记 **4 条**见设计档 §十（R-62-1 / R-62-2 两条**排除项**（`toolFilter.deny` 名域、`preset:"ptc"`）· R-62-3 观察项（同一份子会话档两处读）· R-62-4 **待评估触点**（`session.requestHeader()` 是本批**新消费**的平台面，尚未进九条触点锁矩阵——读取面已做两级回落，换版时先由版本哨兵告警））。
 
 **七、交付评审（本插件 advisor · `zai-coding-cn:glm-5.3` · 1800s）= PASS**，4 条发现（1 🟡 + 3 🔵）逐条处置并落档设计档 §十一：🟡 = **半空 header 会产出跨源混搭对**（逐键回落 ⇒ `header 的 model ⊕ 创建期的 provider`，且 `source` 谎报 `request-header`；该对象喂 advisor 兜底路由还会绕过其「成对/禁跨环混搭」纪律）⇒ **已修**为**整对语义**（两键都非空才认 header，否则整对回落）＋两腿新断言（红读数：还原逐键逻辑 ⇒「半空 header ⇒ 整对回落」断言红）；🔵#2 = `agent.options` 属性读在 try 之外（理论违反「永不抛」）⇒ **已修**（抛错 getter ⇒ 归零 `{}`，附断言）；🔵#3（同步路径结算期取证件落在失败菜单之后）与 🔵#4（`oneLine` 与 `squashEvidence` 形状重复）**保留并写明理由**（前者受 SITES 第七针约束、同形态 spawn 期失败已落在菜单之前；后者是各自成立的读面，共享化收益仅 5 行）。修复轮后全量 **594/594** 仍绿。
 

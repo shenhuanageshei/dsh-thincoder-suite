@@ -254,6 +254,11 @@ host API 前缀 `/thincoder-suite/api`（GET/PUT/DELETE `/config`、GET/DELETE `
           - provider: provider-b
             model: strong-model-y
             effort: high                # 可选，映射 reasoningEffort
+          # 也可整行改走 codex（runner 字面量；与 provider/model 行并列，可混用）：
+          #   - runner: { kind: codex-cli }                  # 本地 Codex CLI 子进程（可写；advisor/consult/escalate/eng_coder）
+          #   - runner: { kind: codex-app-server }           # 平台 codex provider 的 app-server 传输面（**只读定位**：advisor/consult 用；
+          #                                                  # 不消费 model/effort——模型由本机 Codex 配置决定；写任务会被具名拒绝，
+          #                                                  # 详见 docs/2026-10-14-codex-app-server-design.md）
         # advisor 评审路由（不配置则跟随当前会话模型）——按轮次分层：
         advisor:
           round1:                      # 首次全量评审（建议旗舰组）
@@ -290,6 +295,7 @@ host API 前缀 `/thincoder-suite/api`（GET/PUT/DELETE `/config`、GET/DELETE `
 字段说明要点：
 
 - **provider / model 成对解析**：会话覆盖 ⊕ 全局组 → 旧字段 `advisor.provider/model`（仅首轮，兼容迁移）→ 主代理路由；**禁止跨层混搭**。两组都没配则评审跟随当前会话模型。
+- **runner（可选，逐行/逐组）**：**人话**——`dsh`（缺省，走当前会话模型）· `codex-cli`（在本机起 codex 子进程，**能写**）· **`codex-app-server`**（走平台自带 codex 的 app-server 传输面，**只读**，用于会诊/评审；**不消费 model/effort**）。`kind` 闭集 = 上述三者（批 33）。后两者是 codex 的两条通道；`codex-app-server` 走平台自带 `codex` provider 的 app-server 传输面，**只读定位**（无人值守对审批一律拒绝）⇒ 只用于 advisor / consult，eng_coder / escalate 配到它会被**具名拒绝**；该通道**不消费 `model`/`effort`**（模型由本机 Codex 配置决定，配了只会出现在展示标签并如实告知）。设计与边界见 [docs/2026-10-14-codex-app-server-design.md](docs/2026-10-14-codex-app-server-design.md)。
 - **effort**：`off|low|medium|high|max`，映射 `reasoningEffort`；非法值忽略并警告；不传就用适配器默认。
 - **timeoutMs**：单轮评审硬预算（绝对截止，到点即中止，不依赖数据块到达）；合法 1000~3600000。
 - **includeProjectGuide**：评审是否注入 `AGENTS.md`（默认 false——评审独立于项目记忆，需求与验收标准请显式传 `documents=[...]`）。
