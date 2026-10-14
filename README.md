@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![topic: dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-8957e5)](https://github.com/topics/dsh-plugin)
 
-**把「AI 写代码时的四条自我纪律」装进 [DSH（DeepSeek Harness）](https://deepseek.com)**——一个插件，四个工具，**不改 DSH 本体一行代码**。它是给 **DSH 本身**写的（本机那种「桌面壳」只是 DSH 的一种包装方式，插件不依赖壳）。
+**把「AI 写代码时的五条自我纪律」装进 [DSH（DeepSeek Harness）](https://deepseek.com)**——一个插件，十一个工具，**不改 DSH 本体一行代码**。它是给 **DSH 本身**写的（本机那种「桌面壳」只是 DSH 的一种包装方式，插件不依赖壳）。
 
 > 移植自开源项目 [thincoder](https://gitee.com/shanghai-xinbo/thincoder)（上游 MIT 协议），向上游贡献者致谢。
 
