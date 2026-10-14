@@ -441,3 +441,24 @@ test("A29-6⑤⑥ (US-4 🔵⑤⑥): once 标记两形态共用（注释 + 行�
   } finally { rmTemp(home2) }
 })
 
+// ═════════ README 头部计数声明 = 注册面真值（N-4：把"散文里的计数"接进机器门） ═════════
+
+test("N-4 README 头部的工具数声明必须等于注册面基线（防跨档计数静默漂移）", () => {
+  // 为什么用中文数词：README 头部写的是「十一个工具」这种**中文数词**，不是阿拉伯数字 ⇒
+  // 正则必须认中文数词，否则这条腿会因为"找不到"而**恒绿**（那是最坏的一种腿）。
+  const CN = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十一: 11, 十二: 12, 十三: 13, 十四: 14, 十五: 15 }
+  const readme = readFileSync(join(PLUGIN_DIR, "README.md"), "utf8")
+  const head = readme.split("\n").slice(0, 12).join("\n") // 头部区（tagline 所在）
+  const m = head.match(/一个插件，\s*([一二三四五六七八九十]+)\s*个工具/u)
+  assert.ok(m, "README 头部必须有一条「一个插件，N 个工具」声明（找不到 ⇒ 本腿无锚点，必须红而不是静默放行）")
+  const claimed = CN[m[1]]
+  assert.ok(Number.isInteger(claimed), "认不出的中文数词：" + m[1])
+  // 真值源：注册面基线（ps7 的同一常量）——**不另立第二份真值**
+  assert.equal(claimed, REGISTRATION_SURFACE_BASELINE.textTool,
+    "README 头部说「" + m[1] + "个工具」(" + claimed + ")，而注册面基线 textTool = "
+    + REGISTRATION_SURFACE_BASELINE.textTool + " ⇒ 两处必须同批改（本仓 DOC-HYGIENE 覆盖不到散文计数）")
+  // 反向自证：把基线临时当作别的值，本腿所断言的等式**不再恒真**（证明它测的是"相等"而不是"恒过"）
+  const other = REGISTRATION_SURFACE_BASELINE.textTool + 1
+  assert.notEqual(claimed, other, "自证：本腿断言的是 claimed === 基线，而非恒真")
+})
+
