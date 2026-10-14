@@ -37,6 +37,7 @@ import {
   gateDecision, renderAntiDriftLine, outstandingDebts,
   pickPushback, onTurnStopping, onAgentCreated, probeAntiDriftSurfaces,
   noteToolCall, markStallNoticed, stallNotice,
+  turnIndexOf, dropTurnShapeWarn,
   __resetAntiDriftState,
 } from "../lib/anti-drift.mjs"
 
@@ -751,6 +752,54 @@ test("尾-5 L-6 标定：真实长度的 objective / check 全额保留，且行
     assert.ok(line.includes(chk), name + "：check 必须逐字在注入行里")
     assert.ok(line.length <= 512, name + "：行长仍必须 ≤512（实测 276/323/271），实得 " + line.length)
   }
+})
+
+// ═══ 畸形 turn 标识：必须规范化为稳定原语，否则回合域每步复位 ⇒ 机制静默失效 ═══
+
+test("尾-6 turnIndexOf：只接受稳定原语；畸形形态回落 0 且**跨步稳定**（否则机制静默失效）", () => {
+  const S = sid(95)
+  // ① 正常形态：整数 index 优先
+  assert.equal(turnIndexOf({ turn: { index: 7 } }, S), 7, "index 为整数 ⇒ 用它")
+  assert.equal(turnIndexOf({ turn: { index: 7, id: 9 } }, S), 7, "index 优先于 id")
+  assert.equal(turnIndexOf({ turn: { id: 9 } }, S), 9, "index 缺席 ⇒ 用 id")
+  assert.equal(turnIndexOf({ turn: 3 }, S), 3, "turn 直接是数字 ⇒ 用它")
+  assert.equal(turnIndexOf({}, S), 0, "无 turn ⇒ 0")
+  // ② 畸形形态：**不返回对象**（返回对象会让 `!==` 恒真 ⇒ 每步都算新回合）
+  const bad = turnIndexOf({ turn: { name: "x" } }, S)
+  assert.equal(typeof bad, "number", "畸形形态必须回落**数字**，绝不能把对象交出去")
+  assert.equal(Number.isInteger(bad), true, "回落值必须是整数")
+  // ③ **跨步稳定**：同一个畸形载荷连续 10 次，候选值必须恒等（否则 advanceTurn 每步复位）
+  const seen = new Set()
+  for (let i = 0; i < 10; i++) seen.add(turnIndexOf({ turn: { name: "x" } }, S))
+  assert.equal(seen.size, 1, "畸形形态下候选值必须**跨步稳定**（实得 " + seen.size + " 种）")
+  // ④ 后果锁：畸形载荷下 advanceTurn **只判定一次**新回合
+  const S2 = sid(96)
+  let resets = 0
+  for (let i = 0; i < 10; i++) if (advanceTurn(S2, turnIndexOf({ turn: { name: "x" } }, S2))) resets += 1
+  assert.equal(resets, 1, "畸形形态下 10 步只应判定 1 次新回合（实得 " + resets + "）")
+  // ⑤ 后果锁：畸形载荷下**停滞检测仍然触发**（它是回合域的，此前会被每步清零）
+  const S3 = sid(97)
+  let stalled = false
+  for (let i = 0; i < 12; i++) {
+    advanceTurn(S3, turnIndexOf({ turn: { name: "x" } }, S3))
+    if (noteToolCall(S3, "read", { f: "x.mjs" }).stalled) stalled = true
+  }
+  assert.equal(stalled, true, "畸形回合标识下停滞检测仍必须能触发（否则是静默失效）")
+  // ⑥ 稳定数字标识的对照组：多步只复位一次
+  const S4 = sid(98)
+  let r4 = 0
+  for (let i = 0; i < 10; i++) if (advanceTurn(S4, 1)) r4 += 1
+  assert.equal(r4, 1, "对照组（稳定标识）10 步复位 1 次")
+  dropTurnShapeWarn(S)
+  // ⑦ ★ **接线锁**（本轮自证时发现的自身缺口）：上面对 `turnIndexOf` 的断言**测不到接线**——
+  //    若有人把 `lib/index.mjs` 换回内联的 `payload?.turn?.index ?? payload?.turn ?? 0`，
+  //    上面全绿而生产每步复位（原来那个 bug 正是住在**接线**里，不在函数里）。
+  //    ⇒ 钉住接线面：生产必须是 `turnIndexOf(payload, sid)`，且**不得**再出现内联兜底形态。
+  const indexSrc = readFileSync(join(HERE, "..", "lib", "index.mjs"), "utf8")
+  assert.ok(indexSrc.includes("turn: turnIndexOf(payload, sid)"),
+    "生产接线必须是 turnIndexOf(payload, sid)（否则畸形载荷下每步复位）")
+  assert.equal(/turn:\s*payload\?\.turn/.test(indexSrc), false,
+    "生产接线**不得**退回内联兜底 `payload?.turn?.index ?? payload?.turn ?? 0`（那会让对象身份参与比较）")
 })
 
 // 清理临时目录（best-effort；测试失败时不掩盖真错误）
