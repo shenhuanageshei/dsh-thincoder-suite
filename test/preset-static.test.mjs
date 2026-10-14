@@ -42,7 +42,7 @@ const PRESET_STABLE_FIXTURE = `# The \`thincoder-eng\` agent preset: engineering
 # itself comes from the GLOBALLY installed @dsh-external/dsh-thincoder-suite
 # plugin (advisor / eng / eng_coder / escalate / consult are host-plane tools).
 #
-# The engineering-mode entry: the plugin watches 'agent/session-start' and
+# The engineering-mode entry: the plugin watches \`agent/created\` and
 # recognizes this preset's id — a session composed from thincoder-eng starts
 # with engineering ON automatically (architect role, design-before-code gates).
 # No realm duplication of the plugin, no second fiber: the preset is the

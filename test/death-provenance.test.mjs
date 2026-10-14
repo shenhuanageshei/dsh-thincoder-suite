@@ -948,11 +948,20 @@ test("T-AP7 (AC-AP7): `grep '\\\\.abort()' lib/` 零命中 + 写点数不增 + �
   const bare = files.filter((f) => /\.abort\(\)/.test(src[f]))
   assert.deepEqual(bare, [], "裸 .abort() 必须零命中，实测：" + bare.join(", "))
 
-  // (b) 零新增写点：写点计数 = 批 6 开工时实测值（只加载荷，不加写点）
-  const budget = { "advisor.mjs": 4, "eng.mjs": 5, "escalate.mjs": 5, "consult.mjs": 3 }
+  // (b) 零新增写点：写点计数基线 = 批 6 开工时实测值（只加载荷，不加写点）
+  //     ★ **批 33 有意改锁**（用户裁定认可）：`advisor.mjs` 的期望值 **4 → 6**——批 33 的 app-server 腿
+  //     （`runAdvisorAppServerTask`）新增两处写点（`:1920` 上游中止中继 / `:1931` 腿内预算截止）。
+  //     两处均已在 `lib/abort-provenance.mjs` 档头 B 表按「**批 33 追认**」登记（不重复添加）。
+  //     逐档的改锁理由写在 `budgetNote` 里，并**拼进断言消息**（改锁必须当场自证，不留无声的期望值）。
+  const budget = { "advisor.mjs": 6, "eng.mjs": 5, "escalate.mjs": 5, "consult.mjs": 3 }
+  const budgetNote = {
+    "advisor.mjs": "（批 33 有意改锁：新增两处均在新腿 `runAdvisorAppServerTask` 内——`:1920` 上游中止中继"
+      + "（形状由调用方信号决定，与 eng/escalate 的 forwardSignal 同族）、`:1931` 腿内预算截止"
+      + "（带 abort-provenance 机器标记））",
+  }
   for (const [f, n] of Object.entries(budget)) {
     const got = (src[f].match(/\.abort\(/g) ?? []).length
-    assert.equal(got, n, f + " 的 .abort( 写点数必须保持批 6 前实测值（零新增写点）")
+    assert.equal(got, n, f + " 的 .abort( 写点数必须保持批 6 前实测值（零新增写点）" + (budgetNote[f] ?? ""))
   }
 
   // (c) 定时器时长/条件**逐字**未改（改时长/条件 = 改机制本体，本批禁止）
@@ -1131,7 +1140,17 @@ const AP_TEST_ADDED = "test/death-provenance.test.mjs"
 //   是 `test/test-lifecycle.test.mjs` 的 **R0 元锁档**，该闸**明令禁止** R0 出现在本清单里
 //   （见其 T-LC4 的「授权面不得包含 R0 元锁档」断言）⇒ 它们的授权只能落在**本单任务书明文**与
 //   设计档 §7 留痕上，**不可能**也不允许登记在此（登记反而会让 T-LC4 转红）。
-const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs", "test/context-budget.test.mjs", "test/session-state.test.mjs", "test/truncation.test.mjs", "test/stages.test.mjs", "test/job-persistence.test.mjs", "test/contract-baseline.test.mjs"]
+// 批 34 / C10（防漂批的独立缺陷修复）：`agent/session-start` 在装机 0.2.0-rc.2 与开发树 0.2.1-alpha.2
+// **都不存在**（装机包字节扫描 0 命中 / 开发树 `packages/` 全仓 grep 0 命中），而 `preset/thincoder-eng/agent.cordis.yml`
+// 的注释逐字写了「the plugin watches 'agent/session-start'」——该句是**基线夹具的组成部分**
+// （`test/preset-static.test.mjs` 的 T6 用 `PRESET_STABLE_FIXTURE` 与工作树逐字节比对），
+// 故修 C10 必须同批改这一句 ⇒ `test/preset-static.test.mjs` 必须进本清单（**本轮新增第 12 项**）。
+// 改动 = 该夹具里的 `'agent/session-start'` → `` `agent/created` `` 一行的同句替换（断言语义零变，
+// 比对的仍是「preset 注释与工作树一致」）。**这不是「退役该档」**：档仍现役、锁仍活。
+// **裁定依据** = 用户在本会话（2026-10-14）的显式指令「a 设计评审 b. 也做」——「b 也做」即修 C10，
+// 故属**显式授权改动**而非静默改基线。另：`test/session-state.test.mjs` **早已**在本清单内
+// （批 22 的 ⑦ 行），本批在其上新增 `T1b-C10` 回归锁 ⇒ 不重复登记。
+const AP_TEST_AUTHORIZED = ["test/design-review-guard.test.mjs", "test/codex-runner.test.mjs", "test/config-api.test.mjs", "test/consult.test.mjs", "test/advisor-config.test.mjs", "test/context-budget.test.mjs", "test/session-state.test.mjs", "test/truncation.test.mjs", "test/stages.test.mjs", "test/job-persistence.test.mjs", "test/contract-baseline.test.mjs", "test/preset-static.test.mjs"]
 /** 批 6 开工基线 = 批 4 交付提交（固定 sha ⇒ 不随新提交漂移，锚的是**历史**）。 */
 const AP_BASELINE_SHA = "9282882"
 

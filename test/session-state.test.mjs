@@ -143,6 +143,8 @@ function makeFakeCtx() {
       return () => { /* disposer no-op（测试语境） */ }
     },
     emit: (ev, payload) => { for (const fn of handlers.get(ev) ?? []) fn(payload) },
+    // 已登记事件名的只读视图（C10 回归锁用：断言「核对了事件名」而非只断言行为）
+    listeners: { has: (ev) => handlers.has(ev) },
     effect: (fn) => {
       const d = fn?.()
       cleanups.push(d)
@@ -253,6 +255,58 @@ test("T1-session-start: agent/session-start restores state, re-attaches engineer
     const logsBefore = logs.length
     fakeCtx.emit("agent/session-start", { agent: { ...agent, session: { id: sid3, header: { cwd: PLUGIN_DIR, agentPreset: "" } } }, source: "startup" })
     assert.equal(logs.length, logsBefore, "no restore line for a session without disk state")
+  } finally {
+    process.env.DSH_HOME = savedEnv
+    console.log = origLog
+    dropSession(sid)
+    rmHome(home)
+  }
+})
+
+// ————————————— T1b（C10 回归锁）：恢复链必须挂在现行平台真名 `agent/created` 上 —————————————
+//
+// 背景（2026-10-14 实测）：`agent/session-start` 在装机 0.2.0-rc.2 与开发树 0.2.1-alpha.2
+// 都**不存在**；原实现只挂它 ⇒ 恢复链与 preset 自动 enter 在真机上从未触发。本腿是
+// **正向**判据：只用现行真名 `agent/created` 派发，恢复必须发生（不依赖兼容垫片）。
+// 负向面：`agent/session-start` 仍须被登记（跨版本垫片），故两者都在断言内。
+
+test("T1b-C10: state restores when dispatched under the current platform name agent/created (not only the legacy shim)", () => {
+  const home = mkHome()
+  const sid = "f12-created-" + randomUUID()
+  const savedEnv = process.env.DSH_HOME
+  const logs = []
+  const origLog = console.log
+  console.log = (m) => logs.push(String(m))
+  process.env.DSH_HOME = home
+  try {
+    saveSessionState(sid, {
+      engineering: true, advisorRound: 3, lastAdvisorOutput: "prior via created",
+      lastReviewType: "design", mutatedThisRun: false, touchedFiles: [],
+    }, home)
+    const fakeCtx = makeFakeCtx()
+    apply(fakeCtx, {})
+    // 兼容垫片必须同时在场（两名都登记；单一平台上至多一个会触发）
+    assert.ok(fakeCtx.listeners.has("agent/created"), "agent/created must be registered (current platform name)")
+    assert.ok(fakeCtx.listeners.has("agent/session-start"), "legacy name kept as a cross-version shim")
+    const disposer = () => {}
+    const agent = {
+      session: { id: sid, header: { cwd: PLUGIN_DIR, agentPreset: "" } },
+      options: { provider: "p", model: "m" },
+      ctx: { systemPrompt: { section: (opts) => { fakeCtx.sections.push(opts); return disposer } } },
+    }
+    fakeCtx.emit("agent/created", { agent, source: "resume" })
+    const state = sessionState(sid)
+    assert.equal(state.engineering, true, "engineering restored via agent/created")
+    assert.equal(state.advisorRound, 3, "advisorRound restored via agent/created")
+    assert.equal(state.lastAdvisorOutput, "prior via created")
+    assert.equal(state.lastReviewType, "design")
+    assert.equal(state.engSection, disposer, "engineering section re-attached on agent/created")
+    assert.ok(logs.some(l => l.includes("session state restored")), "observation line printed: " + logs.join(" | "))
+    // preset 自动 enter 同样经现行真名生效（原路径在真机上从未触发）
+    const sid2 = "f12-created2-" + randomUUID()
+    const agent2 = { ...agent, session: { id: sid2, header: { cwd: PLUGIN_DIR, agentPreset: "thincoder-eng" } } }
+    fakeCtx.emit("agent/created", { agent: agent2, source: "startup" })
+    assert.equal(sessionState(sid2).engineering, true, "preset auto-enter fires under agent/created")
   } finally {
     process.env.DSH_HOME = savedEnv
     console.log = origLog

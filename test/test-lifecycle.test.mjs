@@ -191,22 +191,31 @@ test("T-LC4 (AC-5 / 锚 N2+N3): 四方一致——台账 ↔ fs ↔ T-E19 清单
     assert.deepEqual(authorizationViolations(retired, baselinePaths, authorized), [],
       "退役行若命中基线档，必须逐档出现在 AP_TEST_AUTHORIZED 里（子集谓词）")
 
-    // —— 谓词自证（律 3）：三条合成行必须分别判出 违规 / 合规 / 合规 ——
-    //    批 29 订正（单①）：违规样例由 `stages.test.mjs` 换成 `preset-static.test.mjs`——前者因 D29-3
-    //    （`stages[].check` 语义改名「宿主验收清单」，host 态渲染文本随之改变）**已进授权表**；再拿它
-    //    当「未授权」样例会让这条自证**自身失效**（它要证的恰是「谓词不得恒空」）。**当时全表仅剩
-    //    `preset-static.test.mjs` 一档仍在表外**，故换用该档；谓词语义逐字不变。
-    //    （历史）批 22 订正（D-39）：违规样例由 `session-state.test.mjs` 换成 `stages.test.mjs`——前者因本批
-    //    的夹具改动**已进授权表**（`AP_TEST_AUTHORIZED` 新增 `context-budget` / `session-state` 两项），
-    //    再拿它当「未授权」样例会让这条自证**自身失效**（它要证的恰是「谓词不得恒空」）。换成仍在表外
-    //    的基线档，谓词语义逐字不变。
+    // —— 谓词自证（律 3）：**谓词逻辑**与**跨批状态**分离断言 ——
+    //    ★ 批 34 订正（C10，第三次踩同一族坑）：违规样例**不能再取真实基线里的档**——
+    //    基线 10 档的实测授权状态是「**9 档已在授权表内**（批 22 的 ⑦ 行 2 档 + 批 29 单①② 2 档 +
+    //    批 34 本批 1 档 `preset-static` + 更早各批 4 档），剩余 1 档 = 本批刚授权的 `preset-static`」
+    //    ⇒ 真实基线里**已经不存在**「在基线内 ∧ 未授权」的档。批 22 与批 29 各把样例换成"当时仅剩的
+    //    表外档"，本批已无表外档可换 ⇒ **换法本身已经用尽**，必须改判据形态。
+    //    ⇒ 正确做法 = **把谓词逻辑与跨批状态分开证**：
+    //      ① 谓词逻辑：用**合成的基线集合**（含表外档）+ 真实授权表 ⇒ 证「在基线 ∧ 未授权 ⇒ 违规」与非违规两例；
+    //      ② 跨批状态：用**真实基线** + 真实授权表 ⇒ 钉住「当时已全在授权表内」这一**会漂移的事实**，
+    //         若未来有批次动了授权表（新增/移除）而忘记同步口径，② 报出实测状态而不是让 ① 静默恒空。
     const synth = (file) => ["2026-01-01", "deadbeef", "test/" + file + " :: \"some title\"", "R1 + 证据", "1", "0", "—"]
-    assert.deepEqual(authorizationViolations([synth("preset-static.test.mjs")], baselinePaths, authorized),
-      ["test/preset-static.test.mjs"], "自证：基线档且未授权 ⇒ 必须判违规（谓词不得恒空）")
-    assert.deepEqual(authorizationViolations([synth("design-review-guard.test.mjs")], baselinePaths, authorized),
-      [], "自证：基线档且在授权表内 ⇒ 合规")
-    assert.deepEqual(authorizationViolations([synth("stage-gate.test.mjs")], baselinePaths, authorized),
-      [], "自证：基线**后**新增档 ⇒ 无需授权（谓词不是等值比较）")
+    const SYNTH_OUTSIDE = "legacy-unauthorized.test.mjs" // 合成档：不在真实基线、不在授权表
+    const synthBaseline = [...baselinePaths, "test/" + SYNTH_OUTSIDE]
+    assert.deepEqual(authorizationViolations([synth(SYNTH_OUTSIDE)], synthBaseline, authorized),
+      ["test/" + SYNTH_OUTSIDE], "自证①：合成基线档且未授权 ⇒ 必须判违规（谓词不得恒空）")
+    assert.deepEqual(authorizationViolations([synth("design-review-guard.test.mjs")], synthBaseline, authorized),
+      [], "自证①：在基线且在授权表内 ⇒ 合规")
+    assert.deepEqual(authorizationViolations([synth("stage-gate.test.mjs")], synthBaseline, authorized),
+      [], "自证①：基线**后**新增档 ⇒ 无需授权（谓词不是等值比较）")
+    // ② 跨批状态钉（真实数据；**这是读数不是断言许可**——它红了说明授权表被本批之外的动作改过）
+    const realUnauthorized = baselinePaths.filter((p) => !authorized.includes(p))
+    assert.deepEqual(realUnauthorized, [],
+      "自证②：批 34 实测「真实基线里已无未授权档」——实测表外集合 " + JSON.stringify(realUnauthorized)
+      + "。若非空 ⇒ 授权表被改动而未同步本处口径（批 22 / 批 29 / 批 34 三批各踩过一次）；"
+      + "**不要**把样例改回真实表外档，按 ① 的合成基线口径断言即可")
   }
 })
 
