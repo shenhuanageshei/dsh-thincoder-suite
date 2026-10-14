@@ -802,6 +802,46 @@ test("尾-6 turnIndexOf：只接受稳定原语；畸形形态回落 0 且**跨�
     "生产接线**不得**退回内联兜底 `payload?.turn?.index ?? payload?.turn ?? 0`（那会让对象身份参与比较）")
 })
 
+// ═══ 截断必须按**码点**（星平面字符不得被劈成孤立代理；那段文本直接进模型上下文） ═══
+
+test("尾-7 截断按码点：星平面字符（emoji/星平面汉字）在截断处**不得**产生孤立代理", () => {
+  const S = sid(99)
+  // 极端夹具：长目标全是星平面字符（每个占 2 个 UTF-16 单元）⇒ 按单元截必然劈开代理对
+  const astral = "🔵".repeat(200)
+  setCriteria({ sessionId: S, criteria: "c", check: "node --test", ...io() })
+  promotePending({ sessionId: S, goalId: "g-astral", ...io() })
+  const line = renderAntiDriftLine({ sessionId: S, goal: { id: "g-astral", objective: astral }, config: on(), ...io() })
+  // ① 判据：不得出现孤立代理（半字符）——UTF-16 层面逐位体检
+  const lone = []
+  for (let i = 0; i < line.length; i++) {
+    const c = line.charCodeAt(i)
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      const n = line.charCodeAt(i + 1)
+      if (!(n >= 0xDC00 && n <= 0xDFFF)) lone.push(i)
+    } else if (c >= 0xDC00 && c <= 0xDFFF) {
+      const p = line.charCodeAt(i - 1)
+      if (!(p >= 0xD800 && p <= 0xDBFF)) lone.push(i)
+    }
+  }
+  assert.deepEqual(lone, [], "注入行不得含孤立代理（那是非法 UTF-16，渲染成乱码）：位置 " + JSON.stringify(lone))
+  // ② 反向自证：把 cut 换回"按 UTF-16 单元"必然产生孤立代理 —— 用同口径独立复算，证明本腿不是空转
+  const naive = astral.length <= 140 ? astral : astral.slice(0, 139) + "…"
+  const naiveLone = []
+  for (let i = 0; i < naive.length; i++) {
+    const c = naive.charCodeAt(i)
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      const n = naive.charCodeAt(i + 1)
+      if (!(n >= 0xDC00 && n <= 0xDFFF)) naiveLone.push(i)
+    } else if (c >= 0xDC00 && c <= 0xDFFF) {
+      const p = naive.charCodeAt(i - 1)
+      if (!(p >= 0xD800 && p <= 0xDBFF)) naiveLone.push(i)
+    }
+  }
+  assert.ok(naiveLone.length > 0, "自证：按 UTF-16 单元截断**必然**劈开代理对（否则本腿测的不是这件事）")
+  // ③ 行仍 ≤512（码点口径无妨：UTF-16 长度只可能 ≥ 码点数）
+  assert.ok(line.length <= 512, "行长仍须 ≤512，实得 " + line.length)
+})
+
 // 清理临时目录（best-effort；测试失败时不掩盖真错误）
 test("附录：临时目录清理", () => {
   try { rmSync(TMP, { recursive: true, force: true }) } catch { /* best-effort */ }
