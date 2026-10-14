@@ -700,6 +700,35 @@ test("尾-3 停滞阈值经配置面可读写（键名闭集 + 取值范围校�
   assert.equal(validateConfigWrite("stallRepeat", true).ok, false, "错型 ⇒ 拒")
 })
 
+// ═══════ L-11 旧目标的落章路径（此前是死路；本腿是它的回归锁 + 「能红」自证） ═══════
+
+test("尾-4 L-11：无 bound 记录的旧目标也能落章（必须给 summary），且有 bound 时仍严格", () => {
+  // ① 旧目标（从未写过判据）+ 改过产品代码 ⇒ complete 先被拒（本批有意）
+  const S = sid(80)
+  noteWrite(S, "lib/legacy.mjs", "edit")
+  const before = gateDecision({ toolName: "update_goal", args: { action: "complete" }, sessionId: S, config: on(), ...io() })
+  assert.equal(before.decision, "deny", "改过代码后直接完成必须先被拒")
+  // ② 旧目标 verify **不给 summary** ⇒ 拒（这条宽松路径不许变成"无凭据盖章"）
+  const loose = recordVerify({ sessionId: S, proofRef: "g-old", status: "passed" })
+  assert.equal(loose.ok, false, "无 bound 记录时必须给 summary（否则是无凭据盖章）")
+  assert.ok(/summary/u.test(loose.reason), "拒绝文案必须点名 summary")
+  // ③ 旧目标 verify + summary ⇒ ok（**这条此前走不通** —— 死路已通）
+  const okR = recordVerify({ sessionId: S, proofRef: "g-old", status: "passed", summary: "跑了 node --test，全绿" })
+  assert.equal(okR.ok, true, "旧目标带 summary 必须能落章（L-11 的修复点）")
+  stampVerified(S)
+  const after = gateDecision({ toolName: "update_goal", args: { action: "complete" }, sessionId: S, config: on(), ...io() })
+  assert.equal(after.decision, "allow", "旧目标落章后 complete 必须放行")
+  // ④ 反向：**有 bound 记录时必须严格**——写错 proofRef 一律拒（宽松路径不得泄漏到有判据的情形）
+  const S2 = sid(81)
+  setCriteria({ sessionId: S2, criteria: "交付可跑的东西", check: "node --test 全绿", ...io() })
+  promotePending({ sessionId: S2, goalId: "g-bound", ...io() })
+  const wrong = recordVerify({ sessionId: S2, proofRef: "g-WRONG", status: "passed", summary: "写了 summary 也不能蒙", ...io() })
+  assert.equal(wrong.ok, false, "有 bound 记录时 proofRef 必须一致（给 summary 也不能绕过）")
+  assert.ok(wrong.reason.includes("g-bound"), "拒绝文案必须点名在席的那个 goalId")
+  const right = recordVerify({ sessionId: S2, proofRef: "g-bound", status: "passed", summary: "对的那个", ...io() })
+  assert.equal(right.ok, true, "proofRef 相符必须能落章")
+})
+
 // 清理临时目录（best-effort；测试失败时不掩盖真错误）
 test("附录：临时目录清理", () => {
   try { rmSync(TMP, { recursive: true, force: true }) } catch { /* best-effort */ }
