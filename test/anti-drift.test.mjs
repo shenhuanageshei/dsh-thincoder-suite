@@ -22,7 +22,7 @@
 // node:test 零依赖；每例前 __resetAntiDriftState()（模块级进程内状态），走 tmp 目录不碰真实 $DSH_HOME。
 import { test, beforeEach } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -36,6 +36,7 @@ import {
   domainState, advanceTurn, stampVerified, noteWrite, noteShell, productFilesOf,
   gateDecision, renderAntiDriftLine, outstandingDebts,
   pickPushback, onTurnStopping, onAgentCreated, probeAntiDriftSurfaces,
+  noteToolCall, markStallNoticed, stallNotice,
   __resetAntiDriftState,
 } from "../lib/anti-drift.mjs"
 
@@ -558,6 +559,145 @@ test("附录 A-2 支撑：outstandingDebts 三谓词与 cap 无关（诚实句�
   stampVerified(S, { byAdvisor: true })
   assert.deepEqual(outstandingDebts({ sessionId: S, goalId: "g-x", ...io() }), ["criteriaMissing"],
     "落章后未验证/未评审两条消失")
+})
+
+// ═════════════ §8 负向断言 ①②④（收口轮补：此前只有设计承诺、无机器腿 —— L-10） ═════════════
+
+test("负控① 静态段冻结：注入必须挂 context 而非 section（section 调用点恒 2 处）", () => {
+  const src = readFileSync(join(HERE, "..", "lib", "index.mjs"), "utf8")
+  const sectionCalls = (src.match(/ctx\.systemPrompt\.section\(\{/g) ?? []).length
+  assert.equal(sectionCalls, 2,
+    "systemPrompt.section 调用点必须恰 2 处（discipline / main）——本批注入若被误挂 section 即红，实测 " + sectionCalls)
+  const contextCalls = (src.match(/ctx\.systemPrompt\.context\(\{/g) ?? []).length
+  assert.equal(contextCalls, 1, "本批的每步注入必须是**唯一**一条 systemPrompt.context（实测 " + contextCalls + "）")
+  assert.ok(src.includes('name: "thincoder:anti-drift"'), "注入源名必须在场")
+  // 最强的一条：**section 段内绝不得调用 renderAntiDriftLine**（否则静态段被运行期读数污染）
+  const polluted = /ctx\.systemPrompt\.section\(\{[\s\S]{0,500}?renderAntiDriftLine/.test(src)
+  assert.equal(polluted, false, "section 段内不得出现 renderAntiDriftLine（静态段冻结的实质判据）")
+  // 而 context 段内**必须**有它（否则注入面根本没接上——两侧都钉，才算真锁）
+  const wired = /ctx\.systemPrompt\.context\(\{[\s\S]{0,700}?renderAntiDriftLine/.test(src)
+  assert.equal(wired, true, "context 段内必须调用 renderAntiDriftLine（注入确实接在 context 上）")
+})
+
+test("负控② 模糊输入下 steer 计数不超各族 caps 与硬上限（四种 caps 极值组合 × 40 次按压）", () => {
+  const combos = [
+    { pending: 0, verify: 0, advisor: 0 },
+    { pending: 6, verify: 6, advisor: 6 }, // 每族到上界
+    { pending: 1, verify: 0, advisor: 0 },
+    { pending: 0, verify: 3, advisor: 0 },
+  ]
+  for (const caps of combos) {
+    const cfg = resolveAntiDriftConfig({ antiDrift: { pushback: true, caps } })
+    const S = "fuzz-" + caps.pending + caps.verify + caps.advisor
+    const sum = caps.pending + caps.verify + caps.advisor
+    const hard = turnSteerHardMax(caps)
+    assert.equal(hard, sum + 1, "硬上限恒 = Σ族 + 1（caps=" + JSON.stringify(caps) + "）")
+    // 混乱夹具：有目标但无 bound 判据（P1）+ 改了产品代码（P2/P3）——"什么都想触发"
+    noteWrite(S, "lib/fuzz.mjs", "edit")
+    let steers = 0
+    const perKind = {}
+    for (let i = 0; i < 40; i++) { // 远超任何上限的按压
+      const r = onTurnStopping({ sessionId: S, turn: 1, goalId: "g-fuzz-" + S, config: cfg, ...io() })
+      if (r.steer) { steers += 1; perKind[r.kind] = (perKind[r.kind] ?? 0) + 1 }
+    }
+    assert.ok(steers <= hard, "单回合 steer 总数必须 ≤ 硬上限 " + hard + "，实测 " + steers + "（caps=" + JSON.stringify(caps) + "）")
+    assert.ok((perKind.criteriaMissing ?? 0) <= caps.pending, "criteriaMissing 不得超 caps.pending")
+    assert.ok((perKind.unverified ?? 0) <= caps.verify, "unverified 不得超 caps.verify")
+    assert.ok((perKind.unreviewed ?? 0) <= caps.advisor, "unreviewed 不得超 caps.advisor")
+    assert.ok((perKind.honesty ?? 0) <= 1, "诚实句每回合至多 1 句")
+  }
+})
+
+test("负控④ 两插件之间零运行时 import（结构检查 + 谓词自证，防恒真）", () => {
+  const here = join(HERE, "..")
+  const tlDir = join(here, "..", "dsh-team-link")
+  const suiteLib = readdirSync(join(here, "lib")).filter((f) => f.endsWith(".mjs"))
+  let tlLib = []
+  try { tlLib = readdirSync(join(tlDir, "lib")).filter((f) => /\.(mjs|js)$/.test(f)) } catch { /* 兄弟仓缺席 ⇒ 见下方 fail 方向 */ }
+  const offenders = []
+  const importRe = /^\s*(?:import|export)[^\n]*?from\s+["']([^"']+)["']/gm
+  for (const f of suiteLib) {
+    const src = readFileSync(join(here, "lib", f), "utf8")
+    for (const m of src.matchAll(importRe)) if (/dsh-team-link|team-link/.test(m[1])) offenders.push("suite/lib/" + f + " → " + m[1])
+  }
+  for (const f of tlLib) {
+    const src = readFileSync(join(tlDir, "lib", f), "utf8")
+    for (const m of src.matchAll(importRe)) if (/thincoder-suite/.test(m[1])) offenders.push("team-link/lib/" + f + " → " + m[1])
+  }
+  // 兄弟仓缺席时**不假装通过**：如实跳过并说明（fail-open 只在这里，且必须出声）
+  if (tlLib.length === 0) {
+    console.warn("[anti-drift] 负控④ 半程：兄弟仓 dsh-team-link/lib 不可读 ⇒ 只核了 suite 侧单向（实测 offenders=" + JSON.stringify(offenders) + "）")
+  }
+  assert.deepEqual(offenders, [], "两插件必须零运行时 import（D8：一期无跨插件读取）——实测越界：" + JSON.stringify(offenders))
+  // 反向自证（律 1：域错配 = 恒真断言）：谓词必须**真的**扫到了两边的档与 import 语句
+  assert.ok(suiteLib.length >= 20, "suite 侧扫到的 .mjs 档数必须非平凡，实测 " + suiteLib.length)
+  assert.ok(suiteLib.some((f) => /^\s*import\s/m.test(readFileSync(join(here, "lib", f), "utf8"))),
+    "谓词自证：suite 侧必须存在被该正则扫到的 import 语句（否则本腿是空转）")
+  if (tlLib.length > 0) {
+    assert.ok(tlLib.some((f) => /^\s*import\s/m.test(readFileSync(join(tlDir, "lib", f), "utf8"))),
+      "谓词自证：team-link 侧同样必须存在被扫到的 import 语句")
+  }
+})
+
+// ═════════════ 停滞检测（连续 N 次完全相同调用；夜班补做 · 吸收清单第 8 项） ═════════════
+
+test("尾-1 停滞检测：同签名连续 3 次触发；换参数即归零；易变字段被剔除；阈值 0 ⇒ 关", () => {
+  const S = "stall-a"
+  // ① 同签名连续 3 次 ⇒ 第三次触发
+  assert.deepEqual(noteToolCall(S, "read", { file_path: "x.mjs" }).count, 1)
+  assert.deepEqual(noteToolCall(S, "read", { file_path: "x.mjs", timeout: 1000 }).count, 2)
+  const third = noteToolCall(S, "read", { file_path: "x.mjs", timeout: 9999 })
+  assert.equal(third.count, 3)
+  assert.equal(third.stalled, true, "第三次相同调用必须判定停滞")
+  // ② 易变字段（timeout/signal/requestId/id/index/seq）被剔除 ⇒ 上面三次算同签名
+  assert.equal(noteToolCall(S, "read", { signal: "abc", id: "zzz", file_path: "x.mjs" }).count, 4,
+    "易变字段差异不得让签名不同（否则此机制永不触发 = 恒真断言）")
+  // ③ 换参数 ⇒ 归零重计
+  assert.equal(noteToolCall(S, "read", { file_path: "y.mjs" }).count, 1, "参数变了就是另一次调用")
+  // ④ 换工具 ⇒ 归零
+  assert.equal(noteToolCall(S, "grep", { file_path: "y.mjs" }).count, 1)
+  // ⑤ 阈值 0/负 ⇒ 关该机制（返回不判定）
+  assert.deepEqual(noteToolCall(S, "read", { file_path: "y.mjs" }, 0), { stalled: false, count: 0, signature: null })
+  assert.deepEqual(noteToolCall(S, "read", { file_path: "y.mjs" }, -1), { stalled: false, count: 0, signature: null })
+  // ⑥ 空工具名不参与判定
+  assert.equal(noteToolCall(S, "  ", {}).signature, null)
+  // ⑦ 键序不同 ⇒ 同签名（键排序）
+  const A = "stall-order"
+  assert.equal(noteToolCall(A, "edit", { a: 1, b: 2 }).count, 1)
+  assert.equal(noteToolCall(A, "edit", { b: 2, a: 1 }).count, 2, "键序不同必须算同一个签名（键排序）")
+})
+
+test("尾-2 停滞提醒：确定性文案 · 每回合至多一条（回合域闩）· 回合前进即复位", () => {
+  const S = "stall-b"
+  assert.equal(stallNotice("read", 3), stallNotice("read", 3), "同输入必须逐字同输出")
+  assert.ok(stallNotice("read", 3).includes("read"), "文案必须点名工具")
+  assert.ok(!/\d{4}-\d{2}-\d{2}/.test(stallNotice("read", 3)), "文案禁时间戳（同 A-6 的确定性纪律）")
+  // 闩：每回合至多一条
+  assert.equal(markStallNoticed(S), true, "本回合第一条 ⇒ true")
+  assert.equal(markStallNoticed(S), false, "同回合第二条 ⇒ false（不再打扰）")
+  // 回合前进 ⇒ 计数与闩都复位（与停滞计数同属回合域）
+  noteToolCall(S, "read", { f: 1 })
+  noteToolCall(S, "read", { f: 1 })
+  assert.equal(domainState(S).turn.repeatCount, 2)
+  advanceTurn(S, 777)
+  const d = domainState(S)
+  assert.equal(d.turn.repeatCount, 0, "回合前进 ⇒ 连续计数归零")
+  assert.equal(d.turn.stallNoticed, false, "回合前进 ⇒ 提醒闩复位")
+  assert.equal(d.turn.lastToolSig, null, "回合前进 ⇒ 上一签名清空")
+  assert.equal(markStallNoticed(S), true, "新回合可以再提醒一次")
+})
+
+test("尾-3 停滞阈值经配置面可读写（键名闭集 + 取值范围校验）", () => {
+  assert.ok(ANTI_DRIFT_KEYS.includes("stallRepeat"), "stallRepeat 必须在键名闭集里（否则配不了）")
+  assert.equal(resolveAntiDriftConfig({}).stallRepeat, 3, "默认 3")
+  assert.equal(resolveAntiDriftConfig({ antiDrift: { stallRepeat: 0 } }).stallRepeat, 0, "0 合法（= 关该机制）")
+  assert.equal(resolveAntiDriftConfig({ antiDrift: { stallRepeat: -1 } }).stallRepeat, 3, "负数 ⇒ 回落默认")
+  assert.equal(resolveAntiDriftConfig({ antiDrift: { stallRepeat: 1.5 } }).stallRepeat, 3, "非整数 ⇒ 回落默认")
+  assert.equal(validateConfigWrite("stallRepeat", 5).ok, true)
+  assert.equal(validateConfigWrite("stallRepeat", 0).ok, true)
+  assert.equal(validateConfigWrite("stallRepeat", -1).ok, false, "越界 ⇒ 拒（零写）")
+  assert.equal(validateConfigWrite("stallRepeat", 21).ok, false)
+  assert.equal(validateConfigWrite("stallRepeat", true).ok, false, "错型 ⇒ 拒")
 })
 
 // 清理临时目录（best-effort；测试失败时不掩盖真错误）
