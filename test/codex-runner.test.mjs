@@ -15,9 +15,13 @@ import { writeFileSync, mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import {
-  normalizeRunnerValue, validateRunnerValue, resolveCodexCliGlobals,
+  normalizeRunnerValue, validateRunnerValue, resolveCodexCliGlobals, CODEX_RUNNER_VALUE_HINT,
   buildCodexArgs, resolveExecutableFile, runCodexTask, discoverCodexModels, codexRowLabel, sweepStaleCodexTempDirs,
 } from "../lib/codex-adapter.mjs"
+// 批 33：codex 的第二条通道（app-server 腿，独立成档）——标签函数 + 行任务入口 + 常量
+import {
+  runCodexAppServerRow, codexAppServerRowLabel, CODEX_APP_SERVER_PROVIDER, CODEX_APP_SERVER_MODEL_EFFORT_NOTE,
+} from "../lib/codex-app-server.mjs"
 import { resolveAdvisorRoute, advisorGenerationOf, bumpAdvisorGeneration, sessionStateViewWithGeneration, checkInFlightJob,
   generateDesignToken, validateDesignToken, designApprovalCode, designTokenShape, designTokenFailureReason,
   expiryLabel, renewDesignToken, TOKEN_TTL_DEFAULT_MS, tokenExpiryMs } from "../lib/advisor.mjs"
@@ -118,6 +122,28 @@ test("runner: 字符串简写两种 + B2 未知 kind fail-closed", () => {
   const bad = normalizeRunnerValue("claude-cli")
   assert.equal(bad.ok, false)
   assert.ok(bad.errors[0].includes("codex-cli"))
+  // —— 批 33（FR-1）：新 kind `codex-app-server` 两形态归一 + 提示串同批同步 ——
+  assert.equal(normalizeRunnerValue("codex-app-server").runner.kind, "codex-app-server", "字符串简写接受新 kind")
+  const objNew = normalizeRunnerValue({
+    kind: "codex-app-server", model: "gpt-x", effort: "high", timeoutMs: 600000, executable: "codex-ignored",
+    proxy: "none", agentsMd: "disable", sandbox: "read-only", idleTimeoutMs: 300000,
+  })
+  assert.equal(objNew.ok, true)
+  assert.equal(objNew.runner.kind, "codex-app-server")
+  // 保留面：model/effort（只入展示标签 + FR-4 告知）/ timeoutMs（预算仍生效）
+  assert.equal(objNew.runner.model, "gpt-x")
+  assert.equal(objNew.runner.effort, "high")
+  assert.equal(objNew.runner.timeoutMs, 600000)
+  // 去掉面：CLI 腿专属字段**无消费点** ⇒ 去掉 + 如实 warn（B4 同款纪律，不静默保留）
+  for (const f of ["executable", "proxy", "agentsMd", "sandbox", "idleTimeoutMs"]) {
+    assert.equal(objNew.runner[f], undefined, "app-server 行不得保留 CLI 专属字段 " + f)
+  }
+  assert.ok(objNew.warnings.some((w) => w.includes("executable") && w.includes("codex-cli 专属字段")),
+    "去掉的字段如实 warn： " + objNew.warnings.join("|"))
+  // 字段级校验（B12）对新 kind 同样生效（不因通道不同而放宽）
+  assert.equal(normalizeRunnerValue({ kind: "codex-app-server", timeoutMs: 5 }).ok, false)
+  // N-5/FR-1：合法集提示串同批同步（advisor_config 的 expected 文案与 PUT 报错同源）
+  assert.ok(CODEX_RUNNER_VALUE_HINT.includes("codex-app-server"), "RUNNER_VALUE_HINT 含新 kind：" + CODEX_RUNNER_VALUE_HINT)
 })
 
 test("runner: B4 dsh 行带 codex 专属字段 → 忽略 + warn", () => {
@@ -282,6 +308,10 @@ test("codexRowLabel: 有 model 用 model，否则回落全局/默认", () => {
   assert.equal(codexRowLabel({ kind: "codex-cli", model: "codex-model-a" }), "codex-cli:codex-model-a")
   assert.equal(codexRowLabel({ kind: "codex-cli" }, { model: "gpt-5.6-terra" }), "codex-cli:gpt-5.6-terra")
   assert.equal(codexRowLabel({ kind: "codex-cli" }), "codex-cli:default")
+  // —— 批 33（设计档 §6 @post）：app-server 行标签 = "codex-app-server:<model|default>" ——
+  assert.equal(codexAppServerRowLabel({ kind: "codex-app-server", model: "gpt-x" }), "codex-app-server:gpt-x")
+  assert.equal(codexAppServerRowLabel({ kind: "codex-app-server" }, { model: "gpt-6.1-sol" }), "codex-app-server:gpt-6.1-sol")
+  assert.equal(codexAppServerRowLabel({ kind: "codex-app-server" }), "codex-app-server:default")
 })
 
 // ————————————— advisor 路由 codex 分支 —————————————
@@ -364,6 +394,78 @@ test("runAdvisorReview: codex runner → 走 adapter 返回评本文（llm 不�
   assert.ok(!out.startsWith("Advisor:"), "completed review should not carry error prefix")
   assert.ok(out.includes("Issue"), "review table text should flow through")
   dropSession(sid)
+
+  // ═══════════ 批 33（设计档 §8 行为腿 · FR-3/FR-4/FR-5）：advisor 的 app-server 腿 ═══════════
+  // ① 同一入口按 runner.kind 分派到平台 provider（不 spawn CLI 子进程、不碰 llm）；键集合逐字四键；
+  // ② 成功正文入评审结果 + run 句柄 dispose；③ FR-4：行配 model ⇒ 用户可见面如实告知「不消费」；
+  // ④ 平台失败 ⇒ "Advisor:" 前缀失败文本带**平台原文**（不吞、不是「不可诊断」）。
+  {
+    const appCalls = []
+    let appDisposed = 0
+    const sidApp = "b33-advisor-app"
+    const agentApp = { session: { id: sidApp, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+    const appDeps = {
+      llm: { stream: () => { throw new Error("LLM must not be used for the app-server runner") } },
+      spawn: () => { throw new Error("app-server 行不得 spawn 本地 codex 子进程") },
+      platform: "linux", env: {},
+      ctx: {
+        subagents: {
+          async start(kind, req) {
+            appCalls.push({ kind, req })
+            return {
+              result: Promise.resolve({ output: [{ type: "text", text: "| # | Issue |\n|---|---|\n| 1 | app-server body |" }], stopReason: "completed" }),
+              dispose: async () => { appDisposed++ },
+            }
+          },
+        },
+      },
+    }
+    const outApp = await runAdvisorReview(appDeps, {
+      agent: agentApp,
+      config: { advisor: { round1: { runner: { kind: "codex-app-server", model: "gpt-app", effort: "high" } } } },
+      reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false,
+    })
+    assert.equal(appCalls.length, 1, "app-server 腿经平台 provider 派发恰一次")
+    assert.equal(appCalls[0].kind, CODEX_APP_SERVER_PROVIDER, "provider 注册名 = codex")
+    assert.deepEqual(Object.keys(appCalls[0].req).sort(), ["label", "parent", "prompt", "signal"],
+      "★ 键集合逐字：只发 prompt/parent/signal/label（多一个键即红）")
+    for (const forbidden of ["agentOptions", "toolFilter", "persona", "maxDepth", "outputSchema"]) {
+      assert.equal(forbidden in appCalls[0].req, false, "不得带 " + forbidden + "（平台能力闸会拒）")
+    }
+    assert.ok(!outApp.startsWith("Advisor:"), "成功评审不带失败前缀：" + outApp.slice(0, 80))
+    assert.ok(outApp.includes("app-server body"), "评审正文入结果")
+    assert.ok(outApp.includes(CODEX_APP_SERVER_MODEL_EFFORT_NOTE),
+      "★ FR-4：行里配了 model/effort ⇒ 用户可见面如实告知「不消费」（结果后缀，与 effNote 同管道）")
+    assert.equal(appDisposed, 1, "平台 run 句柄恰好 dispose 一次")
+    dropSession(sidApp)
+  }
+  // ② 平台失败面原样上浮（FR-5）：stopReason 原文进失败行，诊断带 provider 名与平台细节
+  {
+    const sidFail = "b33-advisor-app-fail"
+    const agentFail = { session: { id: sidFail, header: { cwd: tmpdir() }, deriveMessages: () => [] }, options: {} }
+    const failDeps = {
+      llm: { stream: () => { throw new Error("LLM must not be used for the app-server runner") } },
+      spawn: () => { throw new Error("app-server 行不得 spawn 本地 codex 子进程") },
+      platform: "linux", env: {},
+      ctx: {
+        subagents: {
+          async start() {
+            return { result: Promise.resolve({ output: [], stopReason: "max-tokens" }), dispose: async () => { } }
+          },
+        },
+      },
+    }
+    const outFail = await runAdvisorReview(failDeps, {
+      agent: agentFail,
+      config: { advisor: { round1: { runner: { kind: "codex-app-server" } } } },
+      reviewType: "code", paths: [], documents: [], signal: undefined, configDefaultEngineering: false,
+    })
+    assert.ok(outFail.startsWith("Advisor:"), "失败结果必须以 Advisor: 开头（不烧轮次）")
+    assert.ok(outFail.includes("codex-app-server max-tokens"), "★ 平台 stopReason 原文进失败行：" + outFail.slice(0, 160))
+    assert.ok(outFail.includes("contextWindowExceeded"), "★ codexErrorInfo 映射关系上浮（FR-5）：" + outFail.slice(0, 240))
+    assert.equal(outFail.includes("不可诊断"), false, "★ 不得出现「不可诊断」这类空话（FR-5）")
+    dropSession(sidFail)
+  }
 })
 
 // ═════════ 批 3（评审协议增强）：AC-V12 —— code 评审不设宿主门禁（决策 D-d）═════════
@@ -1293,6 +1395,118 @@ test("R1 接线 consult codex 行：effort 经 codex catalog 校验（argv 最�
   assert.ok(digest.includes("codex opinion"))
   assert.ok(digest.includes("falling back to nearest supported effort"))
   dropSession(sid)
+
+  // ═══════════ 批 33（设计档 §8 行为腿 · FR-2/FR-4/FR-5）：consult 的 app-server 腿 ═══════════
+  // ① 键集合**逐字**断言：stub `ctx.subagents.start` 收到且**仅收到** prompt/parent/signal/label
+  //   （多一个键即红——平台 provider 不声明任何可选能力，N-1/硬约束 1）；
+  // ② 四键之外不出现 agentOptions/toolFilter/persona/maxDepth/outputSchema（同一条判据的展开）；
+  // ③ FR-4：行里配了 model/effort ⇒ 不消费但**用户可见面**（digest 行）如实告知；
+  // ④ 本通道不提供 usage ⇒ digest 里不得出现任何 usage 占位；⑤ run 句柄必须 dispose。
+  {
+    const appStarted = []
+    let appDisposed = 0
+    const j = consultJobs()
+    const sidApp = "b33-consult-app"
+    const stateApp = sessionState(sidApp)
+    const appDeps = {
+      ctx: {
+        get: (svc) => (svc === "jobs" ? j.jobs : null),
+        subagents: {
+          list: () => ["spawn", CODEX_APP_SERVER_PROVIDER], // D5：装配清单含 provider ⇒ 照常派发
+          async start(kind, req) {
+            appStarted.push({ kind, req })
+            return {
+              result: Promise.resolve({ output: [{ type: "text", text: "app-server opinion" }], stopReason: "completed" }),
+              dispose: async () => { appDisposed++ },
+            }
+          },
+        },
+      },
+      agent: { session: { id: sidApp, header: { cwd: tmpdir() }, deriveMessages: () => [] } },
+      config: { consultModels: [{ runner: { kind: "codex-app-server", model: "gpt-app", effort: "high" } }] },
+      state: stateApp, signal: undefined,
+      spawn: () => { throw new Error("app-server 行不得 spawn 本地 codex 子进程") },
+      platform: "linux", env: {},
+      dshHome: mkdtempSync(join(tmpdir(), "b33-home-")),
+    }
+    const rApp = await startConsultSession(appDeps, "problem brief", undefined)
+    const digestApp = await consultDigestOf(stateApp, rApp.id)
+    assert.equal(appStarted.length, 1, "app-server 行经平台 provider 派发恰一次")
+    assert.equal(appStarted[0].kind, CODEX_APP_SERVER_PROVIDER, "provider 注册名 = codex")
+    assert.deepEqual(Object.keys(appStarted[0].req).sort(), ["label", "parent", "prompt", "signal"],
+      "★ 键集合逐字：只发 prompt/parent/signal/label（多一个键即红）")
+    for (const forbidden of ["agentOptions", "toolFilter", "persona", "maxDepth", "outputSchema"]) {
+      assert.equal(forbidden in appStarted[0].req, false, "不得带 " + forbidden + "（平台能力闸会拒）")
+    }
+    assert.ok(String(appStarted[0].req.label).startsWith("consult codex-app-server:"),
+      "平台侧 label 带通道名： " + String(appStarted[0].req.label))
+    assert.equal(appStarted[0].req.prompt.length, 1, "任务 = 单块文本序列")
+    assert.equal(appStarted[0].req.prompt[0].type, "text", "块类型 = text（provider 只接受文本块）")
+    assert.ok(appStarted[0].req.prompt[0].text.includes("problem brief"), "问题正文真正进了 prompt")
+    assert.equal(appStarted[0].req.parent, appDeps.agent, "parent = 调用方 agent（平台据此定子进程 cwd）")
+    assert.ok(digestApp.includes("app-server opinion"), "正文入 digest")
+    assert.ok(digestApp.includes("codex-app-server:gpt-app"), "行标签带通道名与 model（用户可辨）")
+    assert.ok(digestApp.includes(CODEX_APP_SERVER_MODEL_EFFORT_NOTE),
+      "★ FR-4：行里配了 model/effort ⇒ 用户可见面如实告知「不消费」（digest 行）")
+    assert.equal(/\busage\b/i.test(digestApp), false, "★ 本通道不提供 usage ⇒ 不留任何 usage 占位")
+    assert.equal(appDisposed, 1, "平台 run 句柄恰好 dispose 一次（app-server 进程树拆除）")
+    dropSession(sidApp)
+  }
+  // ④ FR-5 / US-3：提供方未注册（stub 抛 NO_PROVIDER）⇒ 行级失败行**点名 provider 名与平台原文**，
+  //   且**不得**出现「不可诊断」这类空话。装配清单不可读（stub 无 list）⇒ 池预检 fail-open 照常派发。
+  {
+    const j = consultJobs()
+    const sidNp = "b33-consult-noprovider"
+    const stateNp = sessionState(sidNp)
+    const npDeps = {
+      ctx: {
+        get: (svc) => (svc === "jobs" ? j.jobs : null),
+        subagents: {
+          async start() {
+            const e = new Error('no subagent provider registered for "codex"')
+            e.code = "NO_PROVIDER"
+            throw e
+          },
+        },
+      },
+      agent: { session: { id: sidNp, header: { cwd: tmpdir() }, deriveMessages: () => [] } },
+      config: { consultModels: [{ runner: { kind: "codex-app-server" } }] },
+      state: stateNp, signal: undefined,
+      spawn: () => { throw new Error("app-server 行不得 spawn 本地 codex 子进程") },
+      platform: "linux", env: {},
+      dshHome: mkdtempSync(join(tmpdir(), "b33-home-")),
+    }
+    const rNp = await startConsultSession(npDeps, "problem brief", undefined)
+    const digestNp = await consultDigestOf(stateNp, rNp.id)
+    assert.ok(digestNp.includes("codex-app-server NO_PROVIDER"), "失败行点名平台错误码：" + digestNp.split("\n").slice(-4).join(" / "))
+    assert.ok(digestNp.includes('no subagent provider registered for "codex"'), "平台原文逐字上浮（provider 名在场）")
+    assert.equal(digestNp.includes("不可诊断"), false, "★ 不得出现「不可诊断」这类空话（FR-5）")
+    dropSession(sidNp)
+  }
+  // ⑤ D5 池预检的**已装配判读**：清单可读且不含 provider ⇒ 该行**不派发**（拒发文案具名）。
+  {
+    const j = consultJobs()
+    let started = 0
+    const sidSk = "b33-consult-skip"
+    const skDeps = {
+      ctx: {
+        get: (svc) => (svc === "jobs" ? j.jobs : null),
+        subagents: { list: () => ["spawn"], async start() { started++; throw new Error("不得派发") } },
+      },
+      agent: { session: { id: sidSk, header: { cwd: tmpdir() }, deriveMessages: () => [] } },
+      config: { consultModels: [{ runner: { kind: "codex-app-server", model: "gpt-app" } }] },
+      state: sessionState(sidSk), signal: undefined,
+      spawn: () => { throw new Error("app-server 行不得 spawn 本地 codex 子进程") },
+      platform: "linux", env: {},
+      dshHome: mkdtempSync(join(tmpdir(), "b33-home-")),
+    }
+    const rSk = await startConsultSession(skDeps, "problem brief", undefined)
+    assert.ok(rSk.error, "全池被预检拦下 ⇒ 拒发（不派发）")
+    assert.ok(rSk.error.includes("codex-app-server:gpt-app"), "拒发文案点名是哪一行")
+    assert.ok(rSk.error.includes("未装配 provider") || rSk.error.includes("平台未装配"), "拒发原因具名：" + rSk.error)
+    assert.equal(started, 0, "★ 零派发（预检拦下，没走到 provider）")
+    dropSession(sidSk)
+  }
 })
 
 test("R1 接线 escalate dsh 行：effort 按行 provider/model 解析（agentOptions）+ note 入术后报告尾部", async () => {
@@ -3474,6 +3688,42 @@ test("R4 D-13: advisor_config set/reset runner——白名单接受（normalizeR
   out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":"codex-wrong"}', deps)
   assert.ok(out.startsWith("advisor_config: invalid input") && out.includes("dsh"), "字符串非枚举拒收（错误信息含合法域）: " + out)
   assert.equal(JSON.stringify(state.advisorOverride), before, "拒收不改 state（N4）")
+
+  // ═══ 批 33（FR-1 · 设计档 §8 负向腿 · §9 守卫行）：新 kind 的配置面与「写任务档位」拒绝 ═══
+  // ① 配置面（FR-1/US-4）：新 kind 两形态都进可设路径并归一化存储；解析链按**实际 kind** 出路由。
+  out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":"codex-app-server"}', deps)
+  assert.ok(out.startsWith("advisor_config: set round1.runner"), "新 kind 进可设路径：" + out)
+  assert.deepEqual(state.advisorOverride.round1.runner, { kind: "codex-app-server" }, "字符串简写 → 归一化结构")
+  out = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":{"kind":"codex-app-server","model":"gpt-app"}}', deps)
+  assert.ok(out.startsWith("advisor_config: set round1.runner"))
+  assert.deepEqual(state.advisorOverride.round1.runner, { kind: "codex-app-server", model: "gpt-app" })
+  const routeApp = resolveAdvisorRoute({ config: deps.config, override: state.advisorOverride, agentOpts: {}, advisorRound: 0 })
+  assert.equal(routeApp.ok, true)
+  assert.equal(routeApp.provider, "codex-app-server", "路由 provider = 实际 kind（app-server 行不再冒称 codex-cli）")
+  assert.equal(routeApp.model, "gpt-app")
+  // 非法值仍被拒，且**列出合法集**（含新 kind——N4 不变式不放宽）
+  const badApp = runAdvisorConfigTool('{"action":"set","path":"round1.runner","value":"codex-app-srvr"}', deps)
+  assert.ok(badApp.startsWith("advisor_config: invalid input"), "非法值仍拒收：" + badApp)
+  assert.ok(badApp.includes("codex-app-server"), "错误信息列出合法集（含新 kind）")
+  // ② eng 档位（`codexCli.engCoderRunner`）：写任务档位配**只读通道** ⇒ 配置面具名 fail-closed 拒绝
+  const vEng = validateGlobalUserConfig({ codexCli: { engCoderRunner: "codex-app-server" } }, [])
+  assert.equal(vEng.ok, false, "eng 档位不得接受只读通道")
+  assert.ok(vEng.errors.some((e) => e.includes("只读") && e.includes("codex-cli")),
+    "eng 拒绝文案具名（只读 + 指引改回 codex-cli）：" + vEng.errors.join("|"))
+  assert.equal(validateGlobalUserConfig({ codexCli: { engCoderRunner: "codex-cli" } }, []).ok, true, "对照组：合法值照常通过")
+  // ③ escalate 档位（consultModels 行的 runner）：写任务行配只读通道 ⇒ 本地具名 fail-closed 拒绝（**零派发**）
+  const sidGuard = "b33-escalate-guard"
+  let guardSpawned = 0
+  const guardOut = await runEscalate(
+    makeEscDeps(sidGuard, () => { guardSpawned++; throw new Error("guard must not spawn") },
+      { consultModels: [{ runner: { kind: "codex-app-server", model: "gpt-app" } }] }),
+    "implement the thing", "codex-app-server:gpt-app",
+  )
+  assert.ok(guardOut.startsWith("Error:"), "具名 fail-closed 拒绝（不派发）：" + guardOut.slice(0, 140))
+  assert.ok(guardOut.includes("只读") && guardOut.includes("codex-cli"),
+    "拒绝文案具名（只读 + 指引改回 codex-cli）：" + guardOut.slice(0, 200))
+  assert.equal(guardSpawned, 0, "★ 零派发（守卫在 spawn/子代理路径之前）")
+  dropSession(sidGuard)
 })
 
 test("R4 D-13: runner 会话覆盖持久化往返——set runner → 落盘 → 模拟重启恢复 → 仍在且解析链继续生效（session-store 白名单此前丢弃）", async () => {
@@ -4609,6 +4859,28 @@ test("AC-3: static — advisor.mjs has no secret-chain remnant and the export su
   assert.equal(typeof mod.generateDesignToken, "function")
   assert.equal(typeof mod.designApprovalCode, "function")
   assert.equal(typeof mod.validateDesignToken, "function")
+  // —— 批 33（设计档 §8「负向断言」）：app-server 腿**独立成档**，档内不得出现 CLI 腿的形状字面 ——
+  //   （临时输出文件开关 / 事件流开关 / codexCli 全局节的可执行字段名——三者都属 codex-cli 通道；
+  //    若两条腿同档，整档 grep 会恒红 ⇒ 该腿必须自己一档。）
+  const appSrc = readFileSync(new URL("../lib/codex-app-server.mjs", import.meta.url), "utf8")
+  for (const needle of ["-o", "--json", "codexCli.executable"]) {
+    assert.equal(appSrc.includes(needle), false,
+      "codex-app-server.mjs 不得出现 CLI 腿形状字面 " + JSON.stringify(needle) + "（§8 grep 作用域）")
+  }
+  // [负] 防「顺手删过头」：新档必须真的在（导出两函数 + provider 名 + FR-4 告知句）
+  assert.equal(typeof runCodexAppServerRow, "function")
+  assert.equal(typeof codexAppServerRowLabel, "function")
+  assert.equal(CODEX_APP_SERVER_PROVIDER, "codex", "平台 provider 注册名（设计档 §2 E4 实测）")
+  assert.ok(CODEX_APP_SERVER_MODEL_EFFORT_NOTE.includes("不消费 model/effort"), "FR-4 告知句在位")
+  // 空/畸形 prompt 的**请求前本地校验**（§9：失败即回、不下发）——零 provider 触碰
+  const emptyRes = await runCodexAppServerRow({ subagents: { async start() { throw new Error("不得下发") } } }, { taskText: "   ", parent: {} })
+  assert.equal(emptyRes.ok, false)
+  assert.ok(emptyRes.errorInfo.includes("任务文本为空"), "空任务本地拦下并具名：" + emptyRes.errorInfo)
+  // 平台 subagents 服务缺失 ⇒ 具名 fail-closed（provider 名 + 指引换回 codex-cli），不静默降级
+  const noSvc = await runCodexAppServerRow({}, { taskText: "ping", parent: {} })
+  assert.equal(noSvc.ok, false)
+  assert.ok(noSvc.errorInfo.includes('"codex"') && noSvc.errorInfo.includes("codex-cli"),
+    "服务缺失 ⇒ 具名原因 + 指引：" + noSvc.errorInfo)
 })
 
 test("AC-4: no DSH_HOME + no env → mint + validate succeed with NO warning; setting THINCODER_TOKEN_SECRET changes nothing", async () => {
