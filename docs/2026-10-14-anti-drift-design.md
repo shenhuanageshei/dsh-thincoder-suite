@@ -4,7 +4,7 @@
 - 需求档：[`2026-10-14-anti-drift-requirements.md`](./2026-10-14-anti-drift-requirements.md)
 - 会诊：[`docs/consult-minutes/2026-10-14-consult-74-minutes.md`](./consult-minutes/2026-10-14-consult-74-minutes.md)（consult **#74**；交付 **4 / 5**，有效 **4 / 5**；逐条处置 = **44** 条，`adopted` **43** · `rejected` **1** · `pending` **0**；分歧裁定 **6** 处）
 - 设计评审：**轮次 1 `FAIL`**（🔴4 · 🟡6 · 🔵3）⇒ 修正轮 1；**轮次 2 `FAIL`**（🔴2 · 🟡8 · 🔵4）⇒ 修正轮 2；**轮次 3 未过**（🔴3 · 🟡6 · 🔵3；评审员未给 `VERDICT` 行、正文判"须先解决"）⇒ **修正轮 3** 落地。（「腿 1」纪律：本行不写「N 条：」形计数，计数与列表一律住在 §15）
-- 状态：**设计稿 · 待用户发起设计评审**（成文流程 = 需求档 + 设计档 → 用户确认 → 实施计划 → 用户确认 → 实施）
+- 状态：**已实施（2026-10-14；实现提交 = `899f4e9`）· 待用户决定重启时机**（成文流程 = 需求档 + 设计档 → 用户确认 → 实施计划 → 用户确认 → 实施；本批四轮评审后签发令牌，用户当轮拍板「实施；先不重启」）
 - 事实基线（2026-10-14 父侧实读，非转述）：
   - 装机面 = `D:\DSH-Desktop-Official\resources\app.asar` → `@deepseek-ai/dsh` **0.2.0-rc.2**（父侧字节扫描）
   - 源码面 = `D:\workspace\deepseek-harness` @ `d743267388` → `@deepseek-ai/dsh-root` **0.2.1-alpha.2**
@@ -169,7 +169,15 @@ flowchart TD
   | P2 | `codeMutatedSinceStamp ∧ ¬verifiedSinceStamp` **∧ ¬verifyRanThisTurn** | **2** | 点名改动文件（≤3 个）+ 指路跑判据 / `goal_verify` |
   | P3 | `codeMutatedSinceStamp ∧ ¬advisorSinceStamp` | **3** | 指路调 `advisor`（带上轮次与剩余次数） |
 
-  > **单回合 steer 预算（解评审轮 4 🟡1：把"6"的记账一次定死）**：三族 caps 回合前进各归零 ⇒ 单回合族推回上限 **1+2+3 = 6**；**诚实句占第 7 条**（`honestySent` 保证每回合至多一句）⇒ **单回合 steer 总数硬上限 = 7**（≤7 不变式）。为何不把诚实句塞进 6：三族之和恰为 6 且每族"恰好推满"是 A-4 的断言，若诚实句也记账在同一 6 里，三族推满后诚实句**永不可达**（评审轮 4 抓到的算术矛盾）。三族 caps 之和**仍**为 6 = 族预算；`steerTotal` 的硬上限为 **7**。
+  > **单回合 steer 预算（解评审轮 4 🟡1：把记账一次定死；实施轮二次定死，见下）**：三族 caps 回合前进各归零 ⇒ 单回合族推回上限 **1+2+3 = 6**；**诚实句占第 7 条**（`honestySent` 保证每回合至多一句）⇒ **单回合 steer 总数硬上限 = 7**（≤7 不变式）。为何不把诚实句塞进 6：三族之和恰为 6 且每族"恰好推满"是 A-4 的断言，若诚实句也记账在同一 6 里，三族推满后诚实句**永不可达**（评审轮 4 抓到的算术矛盾）。
+  >
+  > ★ **实施轮定案：`caps` 只有三个族键，没有 `total`**（2026-10-14 实施时时发现并删除）。原稿在 `caps` 里另设一个 `total`，实施时发现它在**两种取值下都不成立**：
+  > - `total ≤ Σ族`（默认即 `6 = 1+2+3`）⇒ 族预算先被三族耗光 ⇒ **诚实句永不可达**（轮 4 的矛盾原地复活）；
+  > - `total > Σ族` ⇒ 它就成了**第二套族预算**，与三族各自的上限语义重叠，徒增歧义。
+  >
+  > ⇒ **唯一事实源 = 三族上限**；诚实句的名额 = **Σ族 + 1**（由 `turnSteerHardMax(caps)` 现算，不落配置）。`test/anti-drift.test.mjs` 的腿 A-14 显式断言「传 `total` ⇒ 拒（未知子键）」，把这条钉成机器可检——**勿再加回 `total`**。
+  >
+  > **另一条实施轮发现（同类：默认值让某支不可达）**：把 `honestySent` 放在**会话域**会让「每回合至多一句诚实句」变成「每会话至多一句」⇒ 会话封顶 3 永不生效。已改回**回合域**（§7 三域表为准）。
 
 - **P1 的定义变更（解评审轮 1 🔴3）**：原稿 P1 写"本会话有未收口欠账（`plan` 无 `done` 等）"，而该数据源来自 `team.md`——一期已裁**不读跨插件台账**（§4 D8 / §14 L-1）⇒ 原 P1 **不可达**（其内容要么无源、要么与 P2/P3 重复）。修正为**纯本插件可判**的 `criteriaMissing`：它正对 US-1 的痛点（"立了目标却没说清怎么算完"），且与 P2/P3 语义不相交（前者是"目标缺判据"，后者是"改动缺证据"）。
 - **前置条件**（全部满足才生效）：配置 `antiDrift.pushback === true` ∧ 非工程模式 ∧ **存在活跃目标** ∧ `!signal.aborted`。**注意**：本前置**不含** `honestyCount`/`steerTotal` 的数值门槛——那两条是**步骤内的短路**（见 §6 步骤 2 与 FR-4 后置），把数值门槛放进前置会让"用尽后仍要发诚实句"这一支永不可达（评审轮 3 🔴2 / 🟡7）。
@@ -216,7 +224,7 @@ flowchart TD
 **开关面 = 配置文件 + 工具面两处（解评审轮 1 🔴4；「设置页」本批不做，US-6 已相应收窄）**
 
 - **配置落点（base-only）**：六键全部读**插件配置**（`advisor_config` 同一配置面，即 TH `lib/config-store.mjs` 已有的那一层）——
-  - suite 五键：`antiDrift.inject`（默认 `true`）· `antiDrift.completeGate`（默认 `true`）· `antiDrift.pushback`（默认 `false`）· `antiDrift.verifyHeuristic`（默认 `true`）· `antiDrift.caps`（默认 `{pending:1, verify:2, advisor:3, total:6}`）。
+  - suite 五键：`antiDrift.inject`（默认 `true`）· `antiDrift.completeGate`（默认 `true`）· `antiDrift.pushback`（默认 `false`）· `antiDrift.verifyHeuristic`（默认 `true`）· `antiDrift.caps`（默认 `{pending:1, verify:2, advisor:3}`——**只有三族键，无 `total`**，理由见 FR-4 的记账定案）。
   - team-link 一键：`antiDrift.ledgerTransitionGate`（默认 `false`）。
 - **为什么本批只做「配置文件 + 工具面」而**不**做设置页**（如实声明，逐条）：
   1. 本仓对**用户层**（`settings.yaml` 白名单）键的既有纪律是三面同步 = `config-store.mjs` ⊕ `index.mjs` 的 PUT 校验 ⊕ 设置页表单（`METHODOLOGY.md` D-29 行；`docs/2026-09-02-settings-ui-design.md`）——那是一条**独立完整的交付面**，塞进本批会让「机制本体」与「UI 面」互相拖累；
@@ -350,7 +358,7 @@ boardTasksGate(newKind, taskNo, rows):       # FR-7（team-link；落点 = tasks
 | **A-11** | **会话域封顶**：连续多回合各自耗尽 caps ⇒ 每回合各发 **1** 句诚实句（`honestySent` 随回合复位）且 `honestyCount` **递增**；累计达 3 ⇒ 其后整机静默 + warn **恰一行**（`silenceWarned` 跨回合不复位） | 多回合夹具序列（评审轮 2 🔴2 + 轮 3 🔴2 的回归锁） |
 | **A-12** | **探测降级**：stub ctx 缺 `systemPrompt.context` ⇒ 注入面关且 warn **恰一行**；缺 `agent/turn-stopping` 可注册面 ⇒ 推回面关且 warn 恰一行；两面均缺 ⇒ **两行**（每面各一行）且零行为 | stub ctx 三态（评审轮 2 🟡8） |
 | **A-13** | **默认值分档**（解评审轮 2 🔴1）：全新安装（无配置）⇒ `inject`/`completeGate` 读回 **true**，`pushback`/`ledgerTransitionGate` 读回 **false**；`anti_drift_config set` 各键可翻转并读回 | 配置面直调 + 默认值断言 |
-| **A-14** | **`caps` 子键校验**（解评审轮 3 🔵12）：`caps` 的每个子键（pending/verify/advisor）为 **0–6 的整数**，`total` 为 **1–6 的整数**且 `≥` 三者之和；越界/非整数/未知子键 ⇒ 拒 + 零写入 | 配置面表驱动 |
+| **A-14** | **`caps` 子键校验**（解评审轮 3 🔵12 + 实施轮定案）：`caps` 的**三个族键**（pending/verify/advisor）各为 **0–6 的整数且全部必填**；**传 `total` ⇒ 拒（未知子键）**——它曾让诚实句永不可达（见 FR-4 记账定案）；越界/非整数/缺键/未知子键 ⇒ 拒 + 零写入 | 配置面表驱动 |
 | **A-15** | **每标记单域**（解评审轮 3 🔴1/🔴2 的结构锁 + 轮 4 🟡2 的全文腿）：① §7 三域行的**标记名集合两两不相交** ⇒ 一个标记出现在两行即红；② **全文腿**：在 §15 以外的正文里检索被 §7 判定为某域的标记名，**不得**出现在另一域的括号枚举中（轮 4 曾在 §9 复发一次） | 源码级：解析设计档 §7 三行取标记名求交 + 全文正则扫「域名…标记名」共现 |
 
 **负向断言（每条新腿都有对应的「关掉即红」负控）**：① 跑完整回合后，系统提示 `section` 文本哈希**不变**（静态段冻结）；② 模糊输入下任何 steer 计数**不超过** caps 与总上限；③ 注入串**不含**时间戳/百分比/步数；④ 两插件之间**零运行时 import**（结构检查）；⑤ `agent/turn-stopping` 监听器抛错注入后，回合以**正常**（非 error）结束且 warn 恰一行。
