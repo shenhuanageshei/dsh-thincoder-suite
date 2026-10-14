@@ -896,6 +896,29 @@ test("尾-9 跨重启文本稳定：同状态下注入行逐字节相同，且�
   assert.ok(withGoalId && withGoalId.check === "node --test 全绿", "传 goalId 时能读到盘上判据")
 })
 
+// ═══ pending 槽不得被旧 bound 记录遮蔽（否则"为下一个目标设判据"静默不生效） ═══
+
+test("尾-10 待绑槽可见性：已有一个 bound 目标时，再 set 的判据必须**读得到**（不得被遮蔽）", () => {
+  const S = sid(130)
+  // ① 先给 g1 一份判据（走完整链路：设 ⇒ 提升）
+  setCriteria({ sessionId: S, criteria: "A-判据", check: "A-check", ...io() })
+  promotePending({ sessionId: S, goalId: "g1", ...io() })
+  assert.equal(getCriteria({ sessionId: S, goalId: "g1", ...io() })?.check, "A-check", "夹具：g1 的判据应已落盘")
+  // ② 会话仍绑着 g1，此时**为下一个目标**再设一份判据
+  const rB = setCriteria({ sessionId: S, criteria: "B-判据", check: "B-check", ...io() })
+  assert.equal(rB.ok, true, "set 应成功")
+  assert.equal(rB.shape, "pending", "不带 goal_id ⇒ 进待绑槽")
+  // ③ ★ 核心：**不传 goalId 的读必须看到 B**（修复前它被 g1 的 bound 记录遮蔽）
+  const seen = getCriteria({ sessionId: S, ...io() })
+  assert.equal(seen?.shape, "pending", "无 goalId 的读应优先返回待绑槽（修复前这里是 bound/g1）")
+  assert.equal(seen?.check, "B-check", "读到的必须是**刚设的那份**（修复前是 A-check ⇒ 静默不生效）")
+  // ④ 显式按 g1 查**不受影响**
+  assert.equal(getCriteria({ sessionId: S, goalId: "g1", ...io() })?.check, "A-check", "显式查询仍应按该 id 读 bound")
+  // ⑤ 反向自证：两个不同值确实同时存在，本腿测的是"读哪一个"而不是"哪个被覆盖"
+  assert.notEqual(getCriteria({ sessionId: S, goalId: "g1", ...io() })?.check, seen?.check,
+    "自证：bound(A) 与 pending(B) 是两份不同内容（否则本腿无意义）")
+})
+
 // 清理临时目录（best-effort；测试失败时不掩盖真错误）
 test("附录：临时目录清理", () => {
   try { rmSync(TMP, { recursive: true, force: true }) } catch { /* best-effort */ }
