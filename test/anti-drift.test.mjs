@@ -842,6 +842,32 @@ test("尾-7 截断按码点：星平面字符（emoji/星平面汉字）在截�
   assert.ok(line.length <= 512, "行长仍须 ≤512，实得 " + line.length)
 })
 
+// ═══ 判据记录的清理：重启后靠内存反查会失效 ⇒ 必须能按显式 goalId 清（否则盘上永久滞留） ═══
+
+test("尾-8 判据清理：只给 sessionId 在**重启后**清不掉；显式 goalId 必须能清掉", () => {
+  const S = sid(110)
+  setCriteria({ sessionId: S, criteria: "c", check: "k", ...io() })
+  promotePending({ sessionId: S, goalId: "g-orphan", ...io() })
+  assert.equal(hasBoundCriteria("g-orphan", TMP, TMP), true, "夹具：记录应已落盘")
+  // ① **模拟重启**：内存态清空（盘上记录仍在）
+  __resetAntiDriftState()
+  assert.equal(hasBoundCriteria("g-orphan", TMP, TMP), true, "重启后盘上记录仍在（这正是滞留的来源）")
+  // ② 只给 sessionId ⇒ 清不掉（内存 boundGoalId 已随重启消失）
+  const bySession = clearCriteria({ sessionId: S, ...io() })
+  assert.deepEqual(bySession.cleared, [], "只给 sessionId 时清不掉——这是**已知行为**，腿钉的是它不能是唯一路径")
+  assert.equal(hasBoundCriteria("g-orphan", TMP, TMP), true, "该记录此时仍在盘上")
+  // ③ **显式 goalId ⇒ 必须清掉**（生产的 complete/blocked 路径走这条）
+  const byGoal = clearCriteria({ sessionId: S, goalId: "g-orphan", ...io() })
+  assert.deepEqual(byGoal.cleared, ["g-orphan"], "显式 goalId 必须能清掉（否则记录永久滞留）")
+  assert.equal(hasBoundCriteria("g-orphan", TMP, TMP), false, "清完盘上不得再有该记录")
+  // ④ 接线锁：生产的 update_goal 分支必须**传 goalId**（只传 sessionId 是原来的泄漏写法）
+  const indexSrc = readFileSync(join(HERE, "..", "lib", "index.mjs"), "utf8")
+  assert.ok(indexSrc.includes("goal_id ?? \"\").trim() || extractGoalId(result)"),
+    "生产接线必须从 update_goal 的参数/结果取 goalId")
+  assert.equal(/clearCriteria\(\{\s*sessionId:\s*sid,\s*cwdHint/.test(indexSrc), false,
+    "生产接线**不得**只传 sessionId 给 clearCriteria（重启后清不掉 ⇒ 盘上永久滞留）")
+})
+
 // 清理临时目录（best-effort；测试失败时不掩盖真错误）
 test("附录：临时目录清理", () => {
   try { rmSync(TMP, { recursive: true, force: true }) } catch { /* best-effort */ }
