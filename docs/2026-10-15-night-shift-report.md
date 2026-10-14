@@ -81,7 +81,7 @@ count-marks: 项|处|条|档|值|步|腿
 
 | 项 | 状态 | 原因 |
 |---|---|---|
-| **C11 契约面** | 🔴 **未做（本轮实测确认）** | `agent/turn-stopping` / `agent/created` / `tools/post-execute` 三个宿主面在 `lib/contract-baseline.mjs` **0 命中** ⇒ 四个面**都没进触点锁矩阵**。加锁会牵动工具描述（「九条」→「十条」）与 `docs/dsh017-program-closeout.md`，夜里不宜动 |
+| **C11 契约面** | 🔴 **未做 —— 已降级为「需用户审批的任务书」**（下方就绪） | **实测**：`agent/turn-stopping` / `agent/created` / `tools/post-execute` 在 `lib/contract-baseline.mjs` **0 命中**（只有 `systemPrompt.context` 1 处命中，且那是同名字符串巧合）⇒ 四个面**都没进触点锁矩阵**。**为什么我没自己做**：加第 10 条锁会改动**已发布的对外契约面**——`contractWatch` 的**模型可见描述**里「九条」→「十条」、`docs/dsh017-program-closeout.md` 的审计事实、以及 6 个文件里 ~40 处「九条」字面（含 `test/contract-baseline.test.mjs:237` 的 `locks.length, 9` 与 `:312` 的 `unknown.length, 9`）⇒ 属用户指定的**「超已批范围的对外可见变更」**，**须审批后再动**（反过来说：我在夜班自行把已发布契约的对外措辞与断言从九改十，正是那种"事后你才会发现"的越界） |
 | **V1–V11 真机验收** | ⬜ 计划内未执行 | 需重启 DSH；用户明示先不重启 |
 | **第 4 项**（看板三对象拆分 + 跨插件欠账注入） | ⬜ 已登排期 | 按用户指示记入 `docs/2026-09-13-handoff.md` §1 的「批 35（待办）」，**行内明写「不得删除本行」** |
 | **第 5 项**（批次档六段骨架 + 一段一作者 + close 冻结） | ⬜ 已登排期 | 同上 |
@@ -96,3 +96,39 @@ count-marks: 项|处|条|档|值|步|腿
 
 ---
 *本档由夜班轮（2026-10-15 00:00–08:00）撰写。判据一律取「盘上实测」，凡转述均标注出处；未验证的推断已显式标为推断。*
+
+## 附录 A：C11 的任务书（**已就绪，等一句「做 C11」**）
+
+**目标**：把 anti-drift 消费的**四个宿主面**注册进触点锁矩阵（设计档 §13 C11 / §9 的「升级」条）。
+
+**为什么这件事有独立价值**：这四个面是**平台契约面**——它们若在 DSH 升级中改名或改签名，anti-drift 的注入/推回/接管/标记会**静默失效**（降级路径只 warn）。进锁矩阵后，`contractWatch` 一次调用就能看出「哪个面掉了」，而不是等它在真实会话里不出声。
+
+**要注册的四个面（实测调用字面，锁就钉这些字符串）**：
+
+| # | 面 | 实测字面（`lib/index.mjs` 命中数） | 失效后果 |
+|---|---|---|---|
+| 1 | `agent/turn-stopping` | `ctx.on("agent/turn-stopping"` ×1 | 推回整条链失效（回合不再被拦） |
+| 2 | `agent/created` | `ctx.on("agent/created"` ×**2**（C10 真名 + 注：旧名垫片另计） | 开工接管 + **F12 会话状态恢复链**都失效（C10 修的就是这个） |
+| 3 | `tools/post-execute` | `ctx.on("tools/post-execute"` ×1 | 落章域标记/槽提升/停滞检测全不记 |
+| 4 | `systemPrompt.context` | `ctx.systemPrompt.context({` ×1 | 每步注入行消失（纪律退回静态段） |
+
+**精确改动清单（6 个文件）**：
+
+1. `lib/contract-baseline.mjs`：`LOCK_IDS` 追加 `"ps10-antidrift-host-surfaces"`；新增 `lockPs10(readText)`（读 `index.mjs`，逐条断言上表四个字面在场 + `agent.steer`/`agent.inject` 调用在场；不可读 ⇒ `ok:"unknown"`，沿 D28-7 口径）；`evaluatePlatformSurfaceLocks` 数组追加 `lockPs10(readText)`；文件头与 `:394`/`:396`/`:404` 的「九条」→「十条」。
+2. `lib/index.mjs`：`contractWatch` 工具描述里「九条」→「十条」（**模型可见面，必须同批**）；`:1302`/`:1304` 注释同步。
+3. `test/contract-baseline.test.mjs`：`:237` `locks.length, 9` → `10`；`:312` `unknown.length, 9` → `10`；`:264` 的 A28-5 同源锁措辞与 `:13`/`:14` 头注同步。
+4. `test/platform-surface.test.mjs`：如含条数断言，同步。
+5. `docs/dsh017-program-closeout.md`：契约矩阵补第 10 行（**审计事实面**）。
+6. `docs/2026-10-14-anti-drift-design.md`：C11 行的 ★部分 → 已闭合。
+
+**风险与自保**：这是把**已发布契约的对外措辞与断言**从九改十 ⇒ 必须**同批**改完（只改一半会让 `contractWatch` 的描述与读数不一致，比不改更坏）。**建议执行方式**：一个提交改完 6 个文件，然后**跑全量套件 + 真机 `contractWatch` 一次**，把「十条全绿」的读数落进提交信息。
+
+**判据（做完后如何确认）**：`contractWatch` 返回 `locks.length === 10` 且第 10 条 `ok === true`；`node --test` 全绿；工具描述里出现的是「十条」。
+
+---
+## 附录 B：夜班的两次自我更正（如实留痕）
+
+1. **「已交付」误判**（00:5x）：我据 `dsh-team-link` 的 HEAD 里有门函数 + A-7 腿 14 条，判定 FR-7「已由并发会话交付」并写进 L-9。**并发会话的只读核实 + 我自己的 git 实测推翻了它**：那是 `git add -A` 连带进来的来路不明改动，用户已回退。**已在同夜改回「未交付」**，并把教训写进 L-9（**「HEAD 里有」≠「已交付」**）。
+2. **`caps.total` 与诚实句**（前一阶段）：设计了 `caps.total` 之后发现它在两种取值下都不成立（`≤Σ族` ⇒ 诚实句永不可达；`>Σ族` ⇒ 第二套预算）⇒ 删掉该子键，硬上限改 `Σ族 + 1`，并加腿 A-14 钉「传 `total` ⇒ 拒」。
+
+**两次的共同点**：都是**先写完再自己实测/被他人核实**才发现的。**结论：本夜班的产出之所以可信，靠的是"跑一遍"与"被别人核一遍"，不是靠我写得仔细。**
