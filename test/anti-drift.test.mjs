@@ -729,6 +729,30 @@ test("尾-4 L-11：无 bound 记录的旧目标也能落章（必须给 summary�
   assert.equal(right.ok, true, "proofRef 相符必须能落章")
 })
 
+// ═══ L-6 字段上限实测标定：真实长度的目标/判据**不得被截断**（2026-10-15 夜班第 4 轮） ═══
+
+test("尾-5 L-6 标定：真实长度的 objective / check 全额保留，且行长 ≤512", () => {
+  const S = sid(90)
+  // 四种真实形态（含本会话真实目标 72 字、英文长目标 96 字、超长 check 102 字）
+  const cases = [
+    ["本会话真实目标", "夜班自主推进：在 dsh-thincoder-suite / dsh-team-link 两个仓自主完成吸收清单第 1+2+3 项并落 main", "node --test 全绿且真机 contractWatch 十条全 true"],
+    ["英文长目标", "Implement the ledger transition gate in the team-link repository and add the A-7 acceptance legs", "npm test passes with zero failures and the lock count reads ten"],
+    ["超长 check", "加停滞检测", "node --test test/anti-drift.test.mjs 全绿（25→26 腿）且 contractWatch 返回 locks.length===10 且第 10 条 ok===true"],
+  ]
+  // ★ 这条断言钉的是「**64 上限会咬真实输入**」这个实测结论的反面：
+  //   若有人把上限改回 64，本腿必红（且正是本批要防的"静默内容丢失"）。
+  for (const [name, obj, chk] of cases) {
+    const sid2 = S + "-" + name
+    setCriteria({ sessionId: sid2, criteria: "占位", check: chk, ...io() })
+    promotePending({ sessionId: sid2, goalId: "g-l6", ...io() })
+    const line = renderAntiDriftLine({ sessionId: sid2, goal: { id: "g-l6", objective: obj }, config: on(), ...io() })
+    assert.ok(!line.includes("…"), name + "：真实长度的内容不得被截断（实测标定后应全额），实得：" + line.slice(0, 120))
+    assert.ok(line.includes(obj), name + "：objective 必须**逐字**在注入行里（截断会切掉句尾的目的）")
+    assert.ok(line.includes(chk), name + "：check 必须逐字在注入行里")
+    assert.ok(line.length <= 512, name + "：行长仍必须 ≤512（实测 276/323/271），实得 " + line.length)
+  }
+})
+
 // 清理临时目录（best-effort；测试失败时不掩盖真错误）
 test("附录：临时目录清理", () => {
   try { rmSync(TMP, { recursive: true, force: true }) } catch { /* best-effort */ }
