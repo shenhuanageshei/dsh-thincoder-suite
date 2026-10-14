@@ -486,28 +486,32 @@ sequenceDiagram
 
 **前置核对（开工前逐条确认；缺一条 ⇒ 停下上报）**：
 
-- [ ] **V-0** 复核 `agent/session-start` 是否真的不存在，并确认 `agent/created` 的 payload 与 `source` 枚举（读 `app.asar` 字节扫描 + 开发树 `runtime-types.ts:125,261`）——**直接对策 = 会诊纪要 §4 L-1 / 本档 §14 L-3 的教训：不信任何「已实证」注释**
-- [ ] **V-0b** 核 `tools/post-execute` · 宿主 `goal` 服务（**含 `hasActiveGoal` 可读性**，它已取代未核实的 `depth`）在装机版可读（三面对本设计是硬依赖；不可读 ⇒ 相应面按 FR-8 降级并**在报告里明写**）
-- [ ] **V-0c** **既有测试面预检**（解评审轮 1 🟡9）：`grep -rn "agent/session-start" test/ lib/` 与 `preset/` —— C10 改的是**真机行为**（恢复链从"从不触发"变"会触发"），须确认没有腿依赖旧行为；本档已实测命中三处（`test/session-state.test.mjs` · `test/preset-static.test.mjs` · `preset/thincoder-eng/agent.cordis.yml`），**C10 已随本档同批落地**
-- [ ] 用户对 §12 决策点 D-a…D-d 拍板（**已拍板：全按建议**，2026-10-14）
-- [ ] 确认本批是否需要重启 DSH（装配期注册 ⇒ **需要**）；重启时机由用户定（全局规则三）
+- [x] **V-0** 复核 `agent/session-start` 是否真的不存在，并确认 `agent/created` 的 payload 与 `source` 枚举（读 `app.asar` 字节扫描 + 开发树 `runtime-types.ts:125,261`）——**直接对策 = 会诊纪要 §4 L-1 / 本档 §14 L-3 的教训：不信任何「已实证」注释**。**实测（2026-10-14）**：装机 0.2.0-rc.2 字节扫描 **0 命中**；开发树 `packages/` 全仓 grep **0 命中** ⇒ 证伪成立；真名 = `agent/created`。
+- [x] **V-0b** 核 `tools/post-execute` · 宿主 `goal` 服务（**含 `hasActiveGoal` 可读性**，它已取代未核实的 `depth`）在装机版可读（三面对本设计是硬依赖；不可读 ⇒ 相应面按 FR-8 降级并**在报告里明写**）。**实测**：装配探针下 `ctx.systemPrompt.context` / `ctx.on` / `ctx.get('goals')` 三面**各自独立可判**；goal 服务缺席时**按设计打降级 warn 且不崩**（探针实录见实施提交 `899f4e9` 的验证段）。
+- [x] **V-0c** **既有测试面预检**（解评审轮 1 🟡9）：`grep -rn "agent/session-start" test/ lib/` 与 `preset/` —— C10 改的是**真机行为**（恢复链从"从不触发"变"会触发"），须确认没有腿依赖旧行为；本档已实测命中三处（`test/session-state.test.mjs` · `test/preset-static.test.mjs` · `preset/thincoder-eng/agent.cordis.yml`），**C10 已随本档同批落地**
+- [x] 用户对 §12 决策点 D-a…D-d 拍板（**已拍板：全按建议**，2026-10-14）
+- [x] 确认本批是否需要重启 DSH（装配期注册 ⇒ **需要**）；重启时机由用户定（全局规则三）——**用户 2026-10-14 明示「先不重启」** ⇒ 阻塞在用户手上的**时机**，不是本批的活
 
 **实施（按依赖序）**：
 
-- [ ] **C1** 配置面：suite 五键 + team-link 一键 + **工具面 `anti_drift_config`（键名/类型闭集校验）** + 描述面同步（依赖：无）
-- [ ] **C2** FR-5 行为标记（`tools/post-execute` + **落章域/回合域分离** + `session/disposed` 清理）（依赖：C1）
-- [ ] **C3** FR-1 `goal_criteria` 工具（**含 pending 待绑槽**）+ `goal-criteria.json` 原子写 + **`create_goal` 成功后的槽提升**（`tools/post-execute`）+ complete/blocked 后清理（依赖：C1）
-- [ ] **C4** FR-2 `goal_verify` 工具 + 校验 + **落章**（advisor PASS 同置位）（依赖：C3）
-- [ ] **C5** FR-1/FR-2 门（`create_goal` 须有可绑判据 ∨ 已有 bound；`update_goal complete` 须有 passed 证据 ∨ 落章域一致）——`tools/pre-execute` **独立注册**（依赖：C3/C4）
-- [ ] **C6** FR-3 注入行（渲染体纯函数 + 512 上限 + 空串语义 + 探测降级）（依赖：C3/C4）
-- [ ] **C7** FR-4 推回监听器（**P1 = 活跃目标缺判据**；caps 1/2/3 + 绝对上限 6 + 诚实句 + eng 禁用 + 默认 OFF + 全包 try + 惰性回合比较）（依赖：C2）
-- [ ] **C8** FR-6 接管摘要（`agent/created` + source 白名单 + inject + 闩 + 全包 try）（依赖：C3）
-- [ ] **C9** FR-7 台账写门（team-link 侧，默认 OFF）（依赖：C1）
-- [ ] **C10** F12 恢复链的挂点换血（`agent/session-start` → `agent/created`）——**独立缺陷修复**，见 §15 L-3（**本档已落地**，见下）
-- [ ] **C11** 契约面：四个宿主面进 `contract-baseline.mjs` 触点矩阵（依赖：C6/C7/C8）
-- [ ] **C12** **A-1…A-15** 落地为测试（本仓 `test/anti-drift.test.mjs` 覆盖 A-1…A-6 · A-8…A-15（含 A-14 `caps` 子键、A-15 每标记单域）；**A-7 落 team-link 仓** `host-half.test.mjs`）+ 逐条变异自证可红（依赖：全部）
-- [ ] **C13** 文档同步：`docs/README.md` 登记两档 + `docs/test-lifecycle.md` 新档登记与用例数格 + `README.md` 配置面 + `CHANGELOG.md` + 本档状态行（依赖：全部）
-- [ ] **C14** **跨仓同步**（解评审轮 2 🔵14）：`dsh-team-link` 侧的 `README.md` / `CHANGELOG.md` 与 FR-7 实现同批更新；README 地图两档登记回填（依赖：C9）
+- [x] **C1** 配置面：suite 五键 + team-link 一键 + **工具面 `anti_drift_config`（键名/类型闭集校验）** + 描述面同步（依赖：无）——**suite 五面已落**（`899f4e9`）；**team-link 一键随 C9 未交付**
+- [x] **C2** FR-5 行为标记（`tools/post-execute` + **落章域/回合域分离** + `session/disposed` 清理）（依赖：C1）——**实测已扩到三域**（落章 / 回合 / 会话；实施轮发现 `honestySent` 必须在回合域）
+- [x] **C3** FR-1 `goal_criteria` 工具（**含 pending 待绑槽**）+ `goal-criteria.json` 原子写 + **`create_goal` 成功后的槽提升**（`tools/post-execute`）+ complete/blocked 后清理（依赖：C1）
+- [x] **C4** FR-2 `goal_verify` 工具 + 校验 + **落章**（advisor PASS 同置位）（依赖：C3）
+- [x] **C5** FR-1/FR-2 门——`tools/pre-execute` **独立注册**（依赖：C3/C4）。★ **实施轮订正**：原写「`create_goal` 须有可绑判据 **∨ 已有 bound**」——**bound 旁路已删**（陈旧绑定漏洞），现为**唯一条件「有 pending 槽」**；完成门侧为「有 passed 证据 ∨ advisor 落章」，**旧目标（无记录）只判落章域**。以 FR-1/§6 伪代码为准。
+- [x] **C6** FR-3 注入行（渲染体纯函数 + 512 上限 + 空串语义 + 探测降级）（依赖：C3/C4）
+- [x] **C7** FR-4 推回监听器（**P1 = 活跃目标缺判据**；caps 1/2/3 + eng 禁用 + 默认 OFF + 全包 try + 惰性回合比较）（依赖：C2）。★ **实施轮订正**：原写「绝对上限 **6**」——实为 **Σ族 + 1 = 7**（诚实句占第 Σ+1 条，不占族预算）；`caps` **无 `total` 子键**。以 FR-4 记账块为准。
+- [x] **C8** FR-6 接管摘要（`agent/created` + source 白名单 + inject + 闩 + 全包 try）（依赖：C3）
+- [ ] **C9** FR-7 台账写门（team-link 侧，默认 OFF）（依赖：C1）——**🔴 未交付**（跨仓独立交付面；见 §14 L-9）
+- [x] **C10** F12 恢复链的挂点换血（`agent/session-start` → `agent/created`）——**独立缺陷修复**，见 §15 L-3（**本档已落地**，见下）
+- [ ] **C11** 契约面：四个宿主面进 `contract-baseline.mjs` 触点矩阵（依赖：C6/C7/C8）——**部分**：注册面计数已同批上调（`textTool` 8→11 + T-E19/T-E18），**但四个宿主面的签名触点尚未逐条进九锁矩阵**（读面已做两级回落；按 N-6 属「进矩阵」这条未闭合）
+- [x] **C12** **A-1…A-15** 落地为测试（本仓 `test/anti-drift.test.mjs` 覆盖 A-1…A-6 · A-8…A-15（含 A-14 `caps` 子键、A-15 每标记单域）；**A-7 落 team-link 仓** `host-half.test.mjs`）+ 逐条变异自证可红（依赖：全部）。★ **部分**：15 条腿**交叉覆盖 FR-1…FR-8 的每条新机制**（非一腿一机制），**A-15 是源码级腿**（直接解析本档 §7 三行）；§8 的**五条负向断言**中，③（注入串无时间戳/百分比）与⑤（监听器抛错不污染回合）**已被腿内断言覆盖**，而 **①②④ 尚未逐条写成独立负控腿**（登记为 §14 L-10）
+- [x] **C13** 文档同步：`docs/README.md` 登记两档 + `docs/test-lifecycle.md` 新档登记与用例数格 + `README.md` 配置面 + `CHANGELOG.md` + 本档状态行（依赖：全部）——本仓面**已落**（`a2ad86c`）；`docs/README.md` 两行登记早在 `64064e6`；**team-link 侧的文档同步属 C14，未做**
+- [ ] **C14** **跨仓同步**（解评审轮 2 🔵14）：`dsh-team-link` 侧的 `README.md` / `CHANGELOG.md` 与 FR-7 实现同批更新；README 地图两档登记回填（依赖：C9）——**未做**（C9 未交付，其文档同步无从谈起）
+
+> **清单状态口径（2026-10-14 实施轮收口填写）**：本清单**只勾"已落地并给出本地实测/提交号"的项**；
+> **未做的不勾**并写明原因。**验收段 V1–V11 一律保持未勾**——它们要**重启 DSH 后**才能跑，
+> 而用户明示「先不重启」（全局规则三）⇒ 它们**不是"忘了勾"，是"计划内未执行"**。
 
 **C10 实际落地记录（本档同批完成，2026-10-14）**：
 
@@ -541,7 +545,9 @@ sequenceDiagram
 | **L-5** | 停滞 / 零落笔看门狗 | 会诊决策点 D-e | 宿主已有同族能力（`repeat-tool-reminder`）；上游用户逐字撤销过阈值化自动动作 ⇒ 价值边缘，**暂缓** |
 | **L-6** | 注入行长度与截断长度的**实测标定**（现值 512 / 64 / 64 为设计取值） | §5 FR-3 | 需真机长任务样本才能定；本批不假装知道 |
 | **L-7** | 设置页开关面（用户层三面同步 = `config-store.mjs` ⊕ PUT 校验 ⊕ 表单） | 评审轮 1 🔴4 / 本档 FR-8 | 本批六键**全 base-only** ⇒ 工具面已够用且零新增用户层写入面；设置页作为独立交付面另批做（触发条件 = 用户要求「在设置页里能点」） |
-| **L-8** | **本仓既存红基线（非本批引入，如实登记）** | 本批全量实测 | 全量 `node --test` 实测 **595 / 591 绿 / 4 红**：其中 **`T-AP7` 的 1 红**（`advisor.mjs` 的 `.abort(` 实测 **6** 处 > 冻结预算 **4**）来自**工作树既有未提交改动**（`lib/advisor.mjs` 等 M 态），**与本批改动的文件不相交**；另 3 红 = 本批的 `DOC-HYGIENE ×2`（§8 表形）与 `T-AP9`（授权面），**均已在本档同批修复** |
+| **L-8** | **本仓既存红基线（非本批引入，如实登记）** | 本批全量实测 | 全量 `node --test` 实测 **595 / 591 绿 / 4 红**：其中 **`T-AP7` 的 1 红**（`advisor.mjs` 的 `.abort(` 实测 **6** 处 > 冻结预算 **4**）来自**工作树既有未提交改动**（`lib/advisor.mjs` 等 M 态），**与本批改动的文件不相交**；另 3 红 = 本批的 `DOC-HYGIENE ×2`（§8 表形）与 `T-AP9`（授权面），**均已在本档同批修复**。★ **收口订正（2026-10-14 合并后）**：`T-AP7` 的那 1 红**已由批 33 会话在 `6292982` 修掉** ⇒ 合并后 `main` 实测 **614 / 614 全绿**，本行登记的"既存红"**已清零**（保留原文以存沿革） |
+| **L-9** | **FR-7 台账写门（team-link 侧）未交付**（= checklist **C9 / C14**） | 本批实施轮（2026-10-14） | ① 它落在**另一个仓** `dsh-team-link`，按 §11 属**独立交付面**；② 其开关 `antiDrift.ledgerTransitionGate` 需接到该仓**自己的**设置面（`settings.register(...)` 那套），而本档同时声明该仓**零 schema 变更** ⇒ **这处内部张力必须先裁**（接 settings 读法 vs 另立读法），不得在未裁前擅自扩它的设置面；③ 它带有 1.5 MB 的 `host-half.test.mjs` 测试载体 ⇒ 是一次独立交付（塞进本批会让"两批合并"变成三批）。**两个会话已确认不由任一方顺手做** |
+| **L-10** | **§8 五条负向断言中的 ①②④ 未逐条落成独立负控腿** | 本批实施轮自检（C12 的 ★部分） | 现状：③（注入串无时间戳/百分比/步数）与 ⑤（`agent/turn-stopping` 监听器抛错 ⇒ 回合仍正常结束 + warn 恰一行）已由腿内断言覆盖；**① `section` 文本哈希不变**（静态段冻结）、**② 模糊输入下 steer 计数不超 caps 与总上限**（A-4/A-11 已覆盖常规路径，缺"模糊输入"那一维）、**④ 两插件之间零运行时 import**（结构检查）**仍只是设计承诺，没有机器腿** ⇒ 这是**真实的测试面缺口**，不假装闭合 |
 
 ## §15 评审落档（设计评审轮次）
 
