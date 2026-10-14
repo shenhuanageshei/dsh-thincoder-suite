@@ -919,6 +919,51 @@ test("尾-10 待绑槽可见性：已有一个 bound 目标时，再 set 的判�
     "自证：bound(A) 与 pending(B) 是两份不同内容（否则本腿无意义）")
 })
 
+// ═══ 判据状态机两个静默路径：空 goalId 提升（数据丢失）· 校验器缺席时 fail-open ═══
+
+test("尾-11 promotePending 空 goalId：不得谎报成功、不得写空 id 记录、不得吃掉待绑槽", () => {
+  const S = sid(140)
+  setCriteria({ sessionId: S, criteria: "c", check: "k", ...io() })
+  // ① 空 id ⇒ 如实报未提升 + 原因
+  const blank = promotePending({ sessionId: S, goalId: "", ...io() })
+  assert.equal(blank.promoted, false, "空 goalId 不得谎报 promoted:true")
+  assert.ok(/goalId 为空/u.test(blank.reason ?? ""), "必须给出原因")
+  // ② 待绑槽**必须还在**（修复前它被吃掉 ⇒ 判据与会话绑定双丢）
+  const still = getCriteria({ sessionId: S, ...io() })
+  assert.equal(still?.shape, "pending", "空 id 之后待绑槽必须仍在")
+  assert.equal(still?.check, "k", "槽内容必须原样")
+  // ③ 随后**有效** id 仍能正常提升（修复前这一步得 promoted:false）
+  const ok = promotePending({ sessionId: S, goalId: "g-real", ...io() })
+  assert.equal(ok.promoted, true, "有效 id 必须仍能提升")
+  assert.equal(getCriteria({ sessionId: S, goalId: "g-real", ...io() })?.check, "k", "提升后可读")
+  // ④ 盘上不得存在**空字符串** key
+  const raw = JSON.parse(readFileSync(join(TMP, "goal-criteria.json"), "utf8"))
+  assert.equal(Object.prototype.hasOwnProperty.call(raw.goals, ""), false, "盘上不得有空 id 记录")
+  assert.deepEqual(Object.keys(raw.goals), ["g-real"], "盘上只应有那一条有效记录")
+})
+
+test("尾-12 setCriteria 显式 goalId：校验器缺席 ⇒ fail-closed（不铸无法核验的绑定）", () => {
+  const S = sid(141)
+  // ① 校验器缺席 ⇒ 拒（修复前 ok:true 并落盘一个无法核验的绑定）
+  const noVerifier = setCriteria({ sessionId: S, criteria: "c", check: "k", goalId: "g-unverifiable", ...io() })
+  assert.equal(noVerifier.ok, false, "没有校验器时必须拒（fail-closed），不得静默铸绑定")
+  assert.ok(/无法核验/u.test(noVerifier.reason ?? ""), "文案必须说明是'无法核验'")
+  assert.ok(/省略 goal_id|goal_verify/u.test(noVerifier.reason ?? ""), "文案必须给出至少一条可行路径（不把人锁死）")
+  let raw = {}
+  try { raw = JSON.parse(readFileSync(join(TMP, "goal-criteria.json"), "utf8")) } catch { raw = {} }
+  assert.equal(Object.prototype.hasOwnProperty.call(raw.goals ?? {}, "g-unverifiable"), false, "拒写 ⇒ 盘上不得有该记录")
+  // ② 校验器说"不存在"⇒ 拒（这是原有的正确行为，一起钉住）
+  const notExist = setCriteria({ sessionId: S, criteria: "c", check: "k", goalId: "g-ghost", hostHasGoal: () => false, ...io() })
+  assert.equal(notExist.ok, false, "校验器说不存在 ⇒ 拒")
+  // ③ 校验器说"存在"⇒ 放行
+  const exists = setCriteria({ sessionId: S, criteria: "c", check: "k", goalId: "g-ok", hostHasGoal: () => true, ...io() })
+  assert.equal(exists.ok, true, "校验器说存在 ⇒ 放行")
+  assert.equal(exists.shape, "bound", "显式 id 且校验通过 ⇒ bound")
+  // ④ 省略 goal_id 仍走待绑槽（不受本次收紧影响）
+  const pending = setCriteria({ sessionId: sid(142), criteria: "c", check: "k", ...io() })
+  assert.equal(pending.shape, "pending", "省略 goal_id ⇒ 待绑槽（本条路径不得被误伤）")
+})
+
 // 清理临时目录（best-effort；测试失败时不掩盖真错误）
 test("附录：临时目录清理", () => {
   try { rmSync(TMP, { recursive: true, force: true }) } catch { /* best-effort */ }
