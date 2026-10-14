@@ -209,7 +209,7 @@ test("A28-3: 四源皆不可得 ⇒ 标 unknown + 告警 + 不崩；读取链按
 
 // ═════════ A28-4：contractWatch 返回形状稳定（AC-2） ═════════
 
-test("A28-4: contractWatch 返回 {platformVersion, versionSource, versionEvidence, locks=9×{id,ok,evidence}(ok 三态), jobsDir}——形状钉死", async () => {
+test("A28-4: contractWatch 返回 {platformVersion, versionSource, versionEvidence, locks=10×{id,ok,evidence}(ok 三态), jobsDir}——形状钉死", async () => {
   const { apply } = await import("../lib/index.mjs")
   const registered = []
   const fakeCtx = {
@@ -234,7 +234,7 @@ test("A28-4: contractWatch 返回 {platformVersion, versionSource, versionEviden
   assert.ok(VERSION_SOURCES.includes(out.versionSource), "versionSource ∈ 钉死枚举")
   assert.equal(typeof out.versionEvidence, "string")
   assert.ok(out.versionEvidence.includes("ctx.pkg"), "versionEvidence 给出该值的出处：" + out.versionEvidence)
-  assert.equal(out.locks.length, 9, "locks 恒 9 条（实测 " + out.locks.length + "）")
+  assert.equal(out.locks.length, 10, "locks 恒 10 条（批 34 C11 起 9→10；实测 " + out.locks.length + "）")
   assert.deepEqual(out.locks.map((l) => l.id), [...LOCK_IDS], "id 集合与顺序 = LOCK_IDS")
   for (const l of out.locks) {
     assert.deepEqual(Object.keys(l).sort(), ["evidence", "id", "ok"], "每条形如 { id, ok, evidence }：" + JSON.stringify(Object.keys(l)))
@@ -261,7 +261,7 @@ test("A28-4: contractWatch 返回 {platformVersion, versionSource, versionEviden
 
 // ═════════ A28-5：静态同源锁——不存在第二份字面（AC-3） ═════════
 
-test("A28-5: 九条谓词实现 grep 唯一（lib/contract-baseline.mjs）；测试档与 index.mjs 均 import 而非复刻", () => {
+test("A28-5: 十条谓词实现 grep 唯一（lib/contract-baseline.mjs）；测试档与 index.mjs 均 import 而非复刻", () => {
   const baselineSrc = readFileSync(LIB("contract-baseline.mjs"), "utf8")
   const psSrc = readFileSync(join(PLUGIN_DIR, "test", "platform-surface.test.mjs"), "utf8")
   const indexSrc = readFileSync(LIB("index.mjs"), "utf8")
@@ -307,9 +307,9 @@ test("A28-5: 九条谓词实现 grep 唯一（lib/contract-baseline.mjs）；测
 // ═════════ D28-7：谓词三态（unknown 而非 false）+ 判别力自证 ═════════
 
 test("D28-7: 取不到源文本 ⇒ ok=\"unknown\"（而非 false）；塞回旧形状 ⇒ 该条立红（谓词可独立转红）", () => {
-  // ① 全部不可读 ⇒ 九条全 unknown，evidence 说明原因
+  // ① 全部不可读 ⇒ 十条全 unknown，evidence 说明原因
   const unknown = evaluatePlatformSurfaceLocks({ readText: () => null, listFiles: () => [] })
-  assert.equal(unknown.length, 9)
+  assert.equal(unknown.length, 10)
   for (const l of unknown) {
     assert.equal(l.ok, "unknown", l.id + " 取不到文本 ⇒ unknown（D28-7）")
     assert.ok(l.evidence.includes("unknown"), "evidence 说明未知原因：" + l.id)
@@ -323,7 +323,9 @@ test("D28-7: 取不到源文本 ⇒ ok=\"unknown\"（而非 false）；塞回旧
   const ps1 = mixed.find((l) => l.id === LOCK_IDS[0])
   assert.equal(ps1.ok, false, "旧形状在场 ⇒ ps1 立红")
   assert.ok(ps1.evidence.length > 0, "转红 evidence 指明违规点：" + ps1.evidence.slice(0, 80))
-  assert.ok(mixed.filter((l) => l.ok === "unknown").length === 8, "其余取不到文本的条目仍如实 unknown")
+  // ★ 本条为**派生计数**：总条数 − 那条被塞回旧形状而转红的（10 − 1 = 9）；
+  //   批 34 C11 把总条数 9→10 时，这里必须同批从 8 改到 9（否则"其余仍 unknown"这句就假了）。
+  assert.ok(mixed.filter((l) => l.ok === "unknown").length === 9, "其余取不到文本的条目仍如实 unknown")
 })
 
 // ═════════ jobsDirStats：只读盘点（US-3 的 jobsDir 腿） ═════════

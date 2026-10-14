@@ -1,9 +1,9 @@
 // platform-surface.test.mjs — 批 26：契约面常设锁（设计档 docs/dsh017-batch26-design.md §2.3）。
 //
-// ★ 批 28 迁移登记（docs/dsh017-batch28-design.md §2.3 / D28-2 / A28-5）：九条触点谓词的**实现**
+// ★ 批 28 迁移登记（docs/dsh017-batch28-design.md §2.3 / D28-2 / A28-5）：触点谓词的**实现**
 //   已整体迁往 lib/contract-baseline.mjs（单一事实源；contractWatch 工具与本档共用同一份，
 //   不存在第二份字面——A28-5 静态锁在该基线档的机验锚档里守护）。本档保留：
-//   ① 九条锁的**独立断言腿**（每条一个 test——A26-4「各自独立转红」；夹具文本腿由本档把
+//   ① **十条**锁的**独立断言腿**（批 34 C11 起 9→10：ps10 = anti-drift 四个宿主面）（每条一个 test——A26-4「各自独立转红」；夹具文本腿由本档把
 //     自己的源文本传给 #6——夹具形状也是契约面）；
 //   ② 行为腿 A26-6 / A26-7 / A26-8（逐字未动）。
 // 纪律不变：零网络、零真实 LLM、零子进程（A26-7 行为腿只桩服务面，兜底定时器用毫秒级小值；
@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto"
 import { runEngCoder, buildCoderBrief, validateStages } from "../lib/eng.mjs"
 import { runHostStageChecks } from "../lib/host-check.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
-// 批 28（A28-5）：九条谓词的唯一实现——本档是消费方，不是第二份字面。
+// 批 28（A28-5）：谓语词唯一实现（批 34 C11 起共十条：+ps10）——本档是消费方，不是第二份字面。
 import { evaluatePlatformSurfaceLocks, LOCK_IDS } from "../lib/contract-baseline.mjs"
 
 // 隔离契约（对齐既有测试档）：A26-7 的驱动会 settle 一个真 job ⇒ jobOutcome 尝试落盘（D-45）
@@ -43,7 +43,7 @@ function assertLock(id) {
   assert.ok(lock.evidence.length > 0, "evidence 非空（读自哪个文件/片段）：" + id)
 }
 
-// ————————————— 九条触点：独立断言腿（谓词实现 = lib/contract-baseline.mjs，A28-5 同源） —————————————
+// ————————————— 触点：独立断言腿（批 26 九条 + 批 34 ps10 = 十条）（谓词实现 = lib/contract-baseline.mjs，A28-5 同源） —————————————
 
 test("#1 llm 工具结果消息: advisor 构造独立 tool 角色消息（消息级 toolCallId/isError/source），全档零处旧形状", () => {
   assertLock("ps1-llm-tool-result-msg")
@@ -79,6 +79,11 @@ test("#8 webServer 信任栅栏: 处理函数首个业务调用是 requestReject
 
 test("#9 读取面插件侧取向: 派发文案首选落盘文件、job_output 降为附加（文本锁）", () => {
   assertLock("ps9-dispatch-copy-persisted-path")
+})
+
+// ★ 批 34 C11 追加第 10 条 —— 独立断言腿（A26-4「各自独立转红」要求每条一个 test）。
+test("#10 anti-drift 宿主面: 四个平台触点逐点在位（agent/turn-stopping ×1 · agent/created ×2 · tools/post-execute ×1 · systemPrompt.context ×1）", () => {
+  assertLock("ps10-antidrift-host-surfaces")
 })
 
 // ═══════════════ A26-7（D48-3）：兜底信封自带 check 命令原文与取证指路（行为腿） ═══════════════

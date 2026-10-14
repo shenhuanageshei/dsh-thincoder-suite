@@ -1,8 +1,8 @@
 # dsh017 结项说明（program closeout · 批 24–28）
 
 - 定位：DSH 0.1.7 契约对齐程序（批 24→28）的**常设交接页**——会话会丢，档不会（D28-5）。将来任何会话接手，从本页进入：批次脉络 → 触点矩阵指针 → 护栏机制 → 平台再换契约时的标准动作。
-- 权威源声明：九条触点锁的**唯一权威实现** = `lib/contract-baseline.mjs`（批 28 / D28-2 单一事实源）；本页对矩阵**只做指针 + 摘要**，批次历史细节链回各批设计档（批 28 评审 #7：避免三处并存漂移）。
-- 平台版本基线：`0.2.0-rc.2`（记录时点 2026-09-30；**批 31 抬基线**：九条锁逐条对 0.2.0-rc.1 平台源码复核 + 真机派发冒烟；随后桌面版 nightly 自动升到 rc.2 ⇒ **复跑同一套复核**，并对两个 `app.asar` 做 sha256 全量对照证明**运行时面逐字节未变**）。**支持门槛**：本仓当前版本**只支持 DSH ≥ 0.2.0-rc.1**（组合包在 `package.json` 声明 `peerDependencies @deepseek-ai/dsh` ⇒ 低版平台由**平台自己的**组合兼容闸门在装配前拦下、给豁免指引）；**DSH 低于 `0.2.0-rc.1` 请改用旧版 release**——[v0.29.11](https://github.com/shenhuanageshei/dsh-thincoder-suite/releases/tag/v0.29.11)（及更早）支持 `0.1.7-rc.2`。哨兵在装配期对照该基线（`runVersionSentinel`），不一致/取不到 ⇒ 一条响亮告警、不阻断（D28-1）；用户侧常驻提示落在 `contractWatch` 工具描述（A28-2 评审 #8）。**版本读取链自批 31 起为四源**（`ctx.pkg` → profile manifest → `pluginManager` 服务 → 平台包解析；批次前为三源，见 [dsh017-batch28-design.md](dsh017-batch28-design.md) §2.2 的 as-of 记录），且 **`contractWatch` 返回 `versionEvidence`**（批 31 起：版本出处，或四个源各自为何读不到）。
+- 权威源声明：触点锁的**唯一权威实现** = `lib/contract-baseline.mjs`（批 28 / D28-2 单一事实源）；本页对矩阵**只做指针 + 摘要**，批次历史细节链回各批设计档（批 28 评审 #7：避免三处并存漂移）。
+- 平台版本基线：`0.2.0-rc.2`（记录时点 2026-09-30；**批 31 抬基线**：九条锁（批 31 时点的九条）逐条对 0.2.0-rc.1 平台源码复核 + 真机派发冒烟；随后桌面版 nightly 自动升到 rc.2 ⇒ **复跑同一套复核**，并对两个 `app.asar` 做 sha256 全量对照证明**运行时面逐字节未变**）。**支持门槛**：本仓当前版本**只支持 DSH ≥ 0.2.0-rc.1**（组合包在 `package.json` 声明 `peerDependencies @deepseek-ai/dsh` ⇒ 低版平台由**平台自己的**组合兼容闸门在装配前拦下、给豁免指引）；**DSH 低于 `0.2.0-rc.1` 请改用旧版 release**——[v0.29.11](https://github.com/shenhuanageshei/dsh-thincoder-suite/releases/tag/v0.29.11)（及更早）支持 `0.1.7-rc.2`。哨兵在装配期对照该基线（`runVersionSentinel`），不一致/取不到 ⇒ 一条响亮告警、不阻断（D28-1）；用户侧常驻提示落在 `contractWatch` 工具描述（A28-2 评审 #8）。**版本读取链自批 31 起为四源**（`ctx.pkg` → profile manifest → `pluginManager` 服务 → 平台包解析；批次前为三源，见 [dsh017-batch28-design.md](dsh017-batch28-design.md) §2.2 的 as-of 记录），且 **`contractWatch` 返回 `versionEvidence`**（批 31 起：版本出处，或四个源各自为何读不到）。
 
 ## 一、批次脉络（24/25/26/27/28）
 
@@ -16,9 +16,9 @@
 
 缺陷登记（D-41…D-48）见 [2026-09-05-defect-registry.md](2026-09-05-defect-registry.md)；**三条**平台问题报告的上游报告包见 [upstream-2026-09-26-platform-issues.md](upstream-2026-09-26-platform-issues.md)（**★ 2026-09-28：其中问题一已撤回——真因是本机第三方插件，非平台；其余两条仍有效**）。
 
-## 二、九条触点矩阵（指针 + 摘要；权威源 = lib/contract-baseline.mjs）
+## 二、十条触点矩阵（指针 + 摘要；权威源 = lib/contract-baseline.mjs）
 
-- **机验权威**：`evaluatePlatformSurfaceLocks()`（`lib/contract-baseline.mjs`）——九条一律按源码文本/夹具文本求值，恒返回九条 `{ id, ok: true|false|"unknown", evidence }`（D28-7：取不到文本记 unknown 而非 false）。
+- **机验权威**：`evaluatePlatformSurfaceLocks()`（`lib/contract-baseline.mjs`）——**十条**一律按源码文本/夹具文本求值，恒返回九条 `{ id, ok: true|false|"unknown", evidence }`（D28-7：取不到文本记 unknown 而非 false）。
 - **消费方**：`test/platform-surface.test.mjs`（每条一个独立转红的断言腿 + A26-6/7/8 行为腿）与 `contractWatch` 工具（一次调用出全量巡检报告）。同源由 A28-5 静态锁守护（实现标记 grep 唯一）。
 - 下表是**摘要**；每条断言什么、怎么算转红，以基线档内实现与其 evidence 为准。
 
@@ -33,17 +33,18 @@
 | ps7-registration-surface | 注册面期望计数 = 实测基线（批 28 上调 textTool 7→8：contractWatch，D28-6） | 批 26 §2.3 #7 · D28-6（登记处 = REGISTRATION_SURFACE_BASELINE 注释） |
 | ps8-request-rejection-fence | web 路由处理函数首个业务调用 = 信任栅栏（先取 connection 再问请求拒绝，契约外 503） | 批 22/24 矩阵 #8（D-39）· 批 26 §2.3 #8 |
 | ps9-dispatch-copy-persisted-path | 派发文案首选落盘文件、job_output 降为附加（★ 2026-09-28 更正：「读取面不在本仓」的前提已撤回——真因是第三方插件；取向本身不变） | 批 26（D-45）§2.3 #9 |
+| **ps10-antidrift-host-surfaces** | **anti-drift 消费的四个宿主面逐点在位**：`ctx.on("agent/turn-stopping"` ×1 · `ctx.on("agent/created"` ×**2**（C10 真名 + 双名垫片）· `ctx.on("tools/post-execute"` ×1 · `ctx.systemPrompt.context({` ×1。失效后果 = 注入 / 推回 / 开工接管 / 落章标记**静默失效**（降级只 warn，不报错） | **批 34 新增**（设计档 `2026-10-14-anti-drift-design.md` §9「升级」条 / §13 **C11**；C10 见同档 §13） |
 
 ## 三、四道护栏
 
 1. **设计令牌 + 文档集指纹（docHash）**：`advisor(type='design')` 通过后签发两段式令牌（uuid:expiresAt）并绑定**当时文档集的指纹**；`eng_coder` 只认令牌；评审窗口内文档漂移 ⇒ 预闸冻结窗口拦截 + 结算侧不签发（guard E：`test/guard-e.test.mjs`）。令牌不是密钥，是「这份设计评审过」的精确事实。
 2. **锚 / AC（每批设计档 §5）**：机验锚（A-批号-N）与验收标准（AC-批号-N）逐条可独立转红——「改了契约面却不改档」会在锚上红，「交付了却没达成验收」在 AC 上红。
-3. **常驻锁**：九条平台触点锁（§二）+ 登记闸（T-E19：新增测试档必须登记）+ 执行面计数（T-SG4）+ 台账四方一致（`test/test-lifecycle.test.mjs`：台账 ↔ fs ↔ T-E19 ↔ 退役授权面）+ U+FFFD/登记完备等文档纪律锁（`test/doc-hygiene.test.mjs`）。被合法变更撞到的锁**同批上调并在档内写明理由**（先例：批 26 §2.5 对 T-SG4；批 28 D28-6 对 #7）。
+3. **常驻锁**：**十条**平台触点锁（§二；批 34 C11 起 9→10，第 10 条 = `ps10-antidrift-host-surfaces`）+ 登记闸（T-E19：新增测试档必须登记）+ 执行面计数（T-SG4）+ 台账四方一致（`test/test-lifecycle.test.mjs`：台账 ↔ fs ↔ T-E19 ↔ 退役授权面）+ U+FFFD/登记完备等文档纪律锁（`test/doc-hygiene.test.mjs`）。被合法变更撞到的锁**同批上调并在档内写明理由**（先例：批 26 §2.5 对 T-SG4；批 28 D28-6 对 #7）。
 4. **宿主验收回执**：dsh 路径的 check 命令缺省 `checkMode:"host"`——**宿主**在交付后逐条执行，回执（退出码 + 尾部输出 + 验收：PASS/FAIL）写进交付报告（D48-2）；执行面独立超时 120s（`lib/host-check.mjs`），失败不改作业终态；兜底超时的信封自带 check 命令原文与取证指路（D48-3）。
 
 ## 四、平台换契约时的标准动作
 
-1. **先跑巡检**：调 `contractWatch` 工具（一次调用 = 平台版本 + 来源 evidence + 九条锁 + 落盘目录盘点）。装配期哨兵告警的文案会把人指到这里与基线档。
+1. **先跑巡检**：调 `contractWatch` 工具（一次调用 = 平台版本 + 来源 evidence + **十条**锁 + 落盘目录盘点）。装配期哨兵告警的文案会把人指到这里与基线档。
 2. **对照矩阵**：拿红了的锁 id 对照 §二矩阵与 `lib/contract-baseline.mjs` 内该锁的实现/evidence，定位平台改的是哪个触点、波及哪些消费面（derived 锁注明「两处同改」的伙伴档）。
 3. **开新批**：写设计档（来源 = 一手实测证据；哪些锁会被撞、哪些基线要上调，**在档内写明**——先例：批 26 §2.5 对 T-SG4、批 28 D28-6 对 #7）→ 设计评审（advisor）→ 实现（eng_coder，宿主验收）→ 登记级联（台账 · CHANGELOG · 版本 · 事实 id）由主代理收口。
 4. **不要做的事**：不要绕过锁临场解释（被自家锁打红 = 先改锁理由后改代码，次序不能反）；不要让哨兵/巡检阻断装配（只警告不阻断——D28-1，拒启动会成为新的砖化源）；不要手工修平台侧问题（上游问题只出报告与只读复现——D28-3，见上游报告包）。
