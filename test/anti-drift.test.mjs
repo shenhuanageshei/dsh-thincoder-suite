@@ -868,6 +868,34 @@ test("尾-8 判据清理：只给 sessionId 在**重启后**清不掉；显式 g
     "生产接线**不得**只传 sessionId 给 clearCriteria（重启后清不掉 ⇒ 盘上永久滞留）")
 })
 
+// ═══ 重启后同状态必须渲染**逐字节相同**的注入行（否则宿主去重失效 ⇒ 每步重发） ═══
+
+test("尾-9 跨重启文本稳定：同状态下注入行逐字节相同，且判据段仍读得到盘上记录", () => {
+  const S = sid(120)
+  setCriteria({ sessionId: S, criteria: "c", check: "node --test 全绿", ...io() })
+  promotePending({ sessionId: S, goalId: "g-restart", ...io() })
+  const goal = { id: "g-restart", objective: "把台账写门做完" }
+  const before = renderAntiDriftLine({ sessionId: S, goal, config: on(), ...io() })
+  assert.ok(before.includes("node --test 全绿"), "夹具：重启前判据段应含盘上判据")
+  // ① 同进程内连读 3 次逐字节相同（宿主去重的前提）
+  assert.equal(renderAntiDriftLine({ sessionId: S, goal, config: on(), ...io() }), before)
+  assert.equal(renderAntiDriftLine({ sessionId: S, goal, config: on(), ...io() }), before)
+  // ② **模拟重启**：内存态全清（盘上判据仍在）
+  __resetAntiDriftState()
+  assert.equal(hasBoundCriteria("g-restart", TMP, TMP), true, "重启后盘上记录仍在")
+  // ③ ★ 核心断言：重启后**同状态**必须渲染出**逐字节相同**的文本。
+  //    修复前这里会变成「（无判据记录…先调 goal_criteria set）」⇒ ①宿主去重失效（每步重发）
+  //    ②注入行自相矛盾（催人写盘上已经有的判据）③与完成门读到的判据不一致。
+  const after = renderAntiDriftLine({ sessionId: S, goal, config: on(), ...io() })
+  assert.equal(after, before, "重启后同状态必须逐字节相同（否则每步重发 + 自相矛盾）")
+  assert.equal(after.includes("（无判据记录"), false, "重启后不得谎报「无判据记录」（盘上明明有）")
+  // ④ 反向自证：若不传 goalId，就**会**丢失判据段 —— 证明本腿测的正是"传没传 goalId"
+  const withoutGoalId = getCriteria({ sessionId: S, ...io() })
+  assert.equal(withoutGoalId, null, "自证：只给 sessionId（不传 goalId）时读不到 ⇒ 正是修复前的病灶")
+  const withGoalId = getCriteria({ sessionId: S, goalId: "g-restart", ...io() })
+  assert.ok(withGoalId && withGoalId.check === "node --test 全绿", "传 goalId 时能读到盘上判据")
+})
+
 // 清理临时目录（best-effort；测试失败时不掩盖真错误）
 test("附录：临时目录清理", () => {
   try { rmSync(TMP, { recursive: true, force: true }) } catch { /* best-effort */ }
