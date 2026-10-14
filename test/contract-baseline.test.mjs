@@ -354,8 +354,10 @@ test("基线常量: 版本非空且 recorded-at 为 ISO 日期；来源枚举钉
   assert.match(BASELINE_RECORDED_AT, /^\d{4}-\d{2}-\d{2}$/)
   assert.deepEqual([...VERSION_SOURCES], ["ctx.pkg", "profile-manifest", "plugin-manager", "package-json", "unknown"],
     "来源枚举 = 批 31 扩源后的四源 + unknown（顺序即读取链的钉死顺序）")
-  assert.deepEqual(REGISTRATION_SURFACE_BASELINE, { toolsRegister: 1, systemPromptSection: 3, textTool: 8 },
-    "#7 基线 = 批 28 上调值（textTool 7→8：contractWatch，D28-6；上调登记见 REGISTRATION_SURFACE_BASELINE 注释）")
+  assert.deepEqual(REGISTRATION_SURFACE_BASELINE, { toolsRegister: 1, systemPromptSection: 3, textTool: 11 },
+    "#7 基线 = 批 34 上调值（批 28 的 8 → 11：goal_criteria / goal_verify / anti_drift_config，D28-6 同口径；"
+    + "上调登记见 REGISTRATION_SURFACE_BASELINE 注释）。★ systemPromptSection **仍为 3**：批 34 的每步注入走 "
+    + "`systemPrompt.context`（不是 section，设计档 D2）⇒ 本条谓词只数 section；注入若被误挂 section，本条即红。")
 })
 
 // ═════════ A29-6（批 29 单② / US-4 🔵④⑤⑥）：源②键过滤化简 · once 标记的共用语义 · 版本词元大小写 ═════════

@@ -844,6 +844,15 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
     // 授权面 = **只改本清单数组与本注释**，不动本档其它任何断言（本单任务书明文；先例 = 批 27 / 28 / 29 单① 同款登记行）。
     // 台账行 docs/test-lifecycle.md 由主代理同批登记（批 27 §3 分工裁定）。
     "repro-script-readonly.test.mjs",
+    // 批 34（防漂 · 设计令牌 9c126ca2-…，轮 4 `VERDICT: PASS`）新增档——**在其落地的同一 stage 内登记**
+    // （批 9 §七 纪律：T-E19 的「fs ↔ 本表」等值腿会在「fs 已 +1 而本表未登记」时先红）。
+    // 理由与裁定引用：
+    //   ④ anti-drift.test.mjs —— 腿 A-1…A-6 · A-8…A-15（**A-7 不在本仓**：按设计档 §11，
+    //      FR-7 台账写门与其腿落 team-link 仓的 host-half.test.mjs）。覆盖：判据门/完成门/
+    //      推回记账（Σ族 + 诚实句第 Σ+1 条）/会话域封顶/探测降级/默认值分档/caps 三族校验/
+    //      三域"每标记单域"结构锁（**对设计档 §7 的真实解析**）。裁定引用：用户 2026-10-14
+    //      「实施（先不重启）」· 设计档 docs/2026-10-14-anti-drift-design.md §8 与 §13 C12。
+    "anti-drift.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」
@@ -1040,9 +1049,16 @@ test("T-E18 (AC-E18, 锚 A3/A4/A5/A6/A9): 全深度拦截 · 不查 eng 模式 �
   assert.ok(gateSrc.slice(iDecideTry).includes('kind: "deny"'), "判定区抛错 ⇒ deny（fail-closed）")
   assert.ok(gateSrc.includes('console.warn("[thincoder-suite] 守卫 E 预闸：'), "窗口判定故障必须 warn（禁静默 fail-open）")
 
-  // —— A5：两闸独立（恰 2 个监听器，各自绑定） ——
+  // —— A5：两闸独立（**各自绑定**） ——
+  // ★ 批 34 计数订正（同 D28-6 口径：随新增监听器同批上调并写明理由，**不留"被自家锁打红后临场解释"**）：
+  //   原断言 = 「恰 2 个监听器」。批 34（防漂，设计档 §5 FR-1/FR-2 + §6）在**同一事件**上**独立注册**了
+  //   第三个监听器（`goalCriteriaGate`：goal 判据门 / 完成门）⇒ 实测 3。
+  //   **为什么是独立监听器而不是并进既有两闸的函数体**：设计档 D4 明文——三条闸的**失败朝向不同**
+  //   （写门 fail-closed / 冻结门 fail-closed / anti-drift 门在**读状态抛错时 fail-open**，
+  //   见 FR-2 伪代码第 4 步），并进一个函数体会让三种朝向纠缠，正是本仓「不同失败朝向不得共用一条
+  //   函数体」的既有纪律。本行的**语义**（"各闸独立绑定、不合并"）逐字不变，只上调计数。
   const listenerCount = (indexSrc.match(/ctx\.on\("tools\/pre-execute"/g) ?? []).length
-  assert.equal(listenerCount, 2, "A5: tools/pre-execute 恰 2 个监听器")
+  assert.equal(listenerCount, 3, "A5: tools/pre-execute 恰 3 个监听器（写门 + 冻结门 + 批 34 anti-drift 门，各自独立）")
   assert.ok(indexSrc.includes('ctx.on("tools/pre-execute", makeWriteGate(() => configDefaultEngineering))'), "A5: 其一为写门禁")
   assert.ok(indexSrc.includes('ctx.on("tools/pre-execute", makeDocFreezeGate(() => designFreezeSet()))'), "A5: 其二为守卫 E 预闸")
   assert.ok(/const offFreezeGate = ctx\.on\("tools\/pre-execute", makeDocFreezeGate[\s\S]{0,80}disposes\.push\(offFreezeGate\)/.test(indexSrc),
