@@ -906,7 +906,8 @@ test("T-AP6 (AC-AP6): 超时尾含 rounds/tool calls/review text produced + 预�
 // **逐字**比对；若机器有 git，再与 `git show HEAD:<file>` 的实测表达式交叉核验（证明字面锚不是
 // 事后编的——本批不改任何定时器，故 HEAD 的表达式与本表恒等，提交前后都成立）。
 const TIMER_ARGS_PRE_BATCH6 = {
-  "advisor.mjs": ["windowMs", "deadlineMs", "2000", "1000 * attempt", "backstopMs"],
+  // ★ 批 33 **有意改锁**（与同用例的 T-AP7 (a) 同族，用户裁定认可）：`advisor.mjs` 的期望数组补 `"timeoutMs"`——站点 = app-server 腿 `runAdvisorAppServerTask` 的**预算定时器**（组 `timeoutMs` 墙钟），对应设计档 `docs/2026-10-14-codex-app-server-design.md` §9 的「超时」行；上一条「本批不改任何定时器」与断言文案的「批 6 前逐字」是批 6 口径，批 33 是**已登记的例外**（本表项同时被下方 `git show HEAD:` 交叉核验腿消费）。
+  "advisor.mjs": ["windowMs", "deadlineMs", "2000", "1000 * attempt", "timeoutMs", "backstopMs"],
   "eng.mjs": ["backstopMs", "budgetCap"],
   "escalate.mjs": ["backstopMs", "budgetCap"],
   "consult.mjs": ["timeoutMs"],
