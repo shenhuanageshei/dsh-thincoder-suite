@@ -10,7 +10,7 @@
 //   A-5 eng 模式零推回 + 默认关零推回 + **eng 下 anti_drift_config 写 ⇒ 拒 + 零写**
 //   A-6 注入行：去重语义（同输入同输出）+ 无时间戳/百分比 + ≤512
 //   A-7 FR-7 台账门 —— **落 team-link 仓**（不在本档）
-//   A-8 agent/created：startup/resume 各一次注入；compact/clear 零注入
+//   A-8 agent/created：startup/resume 各一次注入；compact/clear 零注入；**+ v4 source 归属锁**（三处调用点）
 //   A-9 纯文档改动 ⇒ 推回谓词不触发
 //   A-10 跨回合不泄漏：第 N 回合改动 → 第 N+1 回合 complete 仍拒
 //   A-11 会话域封顶：跨回合诚实句恰 ≤3 ⇒ 其后静默 + warn 恰一行
@@ -36,7 +36,7 @@ import {
   domainState, advanceTurn, stampVerified, noteWrite, noteShell, productFilesOf,
   gateDecision, renderAntiDriftLine, outstandingDebts,
   pickPushback, onTurnStopping, onAgentCreated, probeAntiDriftSurfaces,
-  noteToolCall, markStallNoticed, stallNotice,
+  noteToolCall, markStallNoticed, stallNotice, producerSource, PRODUCER_SOURCE_KIND,
   turnIndexOf, dropTurnShapeWarn,
   __resetAntiDriftState,
 } from "../lib/anti-drift.mjs"
@@ -263,6 +263,33 @@ test("A-8 agent/created：startup/resume 各一次注入；compact/clear 零注�
   }
   const clean = onAgentCreated({ sessionId: sid(4), source: "startup", config: cfg, ...io() })
   assert.equal(clean.inject, null, "无欠账 ⇒ 零注入")
+
+  // ★ 2026-10-15 热修（session format v4 source 归属 · 🔴）回归锁：
+  //   三条注入/推回路径（停滞 inject / 推回 steer / 开工接管 inject）原先都写
+  //   `source: { kind: "plugin" }` —— 而 v4 **明令拒绝**这个裸 kind，且**同步 try/catch 兜不住**
+  //   （校验在异步写盘层）⇒ 回合直接 `message.turnError` 收场，其后事件全不落盘。
+  //   这里钉**语义**（平台原文那条规则），不是钉措辞：
+  //   ① 行为腿：producerSource() 必须给「非空字符串 且 ≠ "plugin"」的 kind（v4 的唯一硬约束）；
+  //   ② 结构腿：全 lib 的**调用点**不得再出现裸 `kind: "plugin"` 字面（注释里的反例说明不算）。
+  const src1 = producerSource()
+  assert.equal(typeof src1.kind, "string", "source.kind 必须是字符串（v4：typeof kind !== 'string' ⇒ 抛）")
+  assert.ok(src1.kind.length > 0, "source.kind 必须非空（v4：kind.length === 0 ⇒ 抛）")
+  assert.notEqual(src1.kind, "plugin", "**裸 `plugin` 是 v4 唯一被点名拒绝的 kind**（真机事故的根因）")
+  assert.match(src1.kind, /^plugin:.+/, "取 `plugin:<包名>` 形状：与平台 v3→v4 迁移 producerKind() 产出的 kind 同形")
+  assert.notEqual(producerSource(), src1, "每次必须返回新对象（共享可变字面量无收益）")
+  assert.deepEqual(producerSource(), src1, "但内容恒等 ⇒ 同一生产者")
+
+  const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1")
+  const libDir = join(HERE, "..", "lib")
+  const libFiles = readdirSync(libDir).filter((f) => f.endsWith(".mjs"))
+  let callSites = 0
+  for (const f of libFiles) {
+    const src = stripComments(readFileSync(join(libDir, f), "utf8"))
+    assert.ok(!/source:\s*\{\s*kind:\s*["']plugin["']/.test(src),
+      "lib/" + f + " 不得再把裸 `plugin` 当 source kind 写（v4 写盘层会打红整个回合）")
+    callSites += (src.match(/source:\s*producerSource\(\)/g) || []).length
+  }
+  assert.equal(callSites, 3, "三条注入/推回路径必须**全部**改用 producerSource()，实测 " + callSites)
 })
 
 // ═════════════════════ A-9 纯文档改动不触发 ═════════════════════

@@ -69,6 +69,25 @@
 
 **七、环境面处置（非本仓改动，登记于此仅供追溯）**——① `~/.dsh/profiles/desktop/package.json` 曾声明 **3 个盘上不存在的 bundle**（`@deepseek-ai/dsh-experimental-agent-team-profile` / `-auto-review` / `-schedule-bundle`）⇒ `loadProfile` 解析失败会中止整棵 profile 树。已删（bundles 39 → 36；备份 `package.json.bak-deadbundles-20261015-175106`）。② 废弃的 `web` profile 原有 14 条声明了却不存在于盘上的 bundle，已清（备份 `profiles\web\package.json.bak-suitefix-20261015-170132`）。两处均只删"声明了但盘上不存在"的名字。
 
+### 同版热修：注入/推回消息的 source 归属 —— 裸 `kind:"plugin"` 被 session format v4 拒绝，**整个回合报错**（2026-10-15）
+
+> **一句话（人话）**：反漂移的**停滞提醒**（你连续 3 次做同一个调用时它提示你换法子）本身是想救命的，结果那条提醒**把整个回合打死了**——界面显示「本轮运行失败：format v4 message requires a producer-owned source kind」，会话日志停在触发那一刻，**后面的事件一个都没落盘**。
+
+**一、根因（平台契约）**——三条注入/推回路径（停滞 `inject` / 推回 `steer` / 开工接管 `inject`）原先都写 `source: { kind: "plugin" }`。而 session format **v4 明令拒绝**这个裸 kind —— 平台原文（`lib/types/message-sources.js`）：`if (... || value["kind"] === "plugin") throw new SessionFormatError("format v4 message requires a producer-owned source kind")`；V4 admission 文档同款口径：「Interpreted message slots require an object source with a nonempty, **non-`plugin`** kind」。
+
+**二、为什么同步 `try/catch` 兜不住（三处调用点**都**包了 `try/catch`，回合还是死了）**——① `Session.append()` 的**同步**校验 `validateSessionEventData` **不查 message source** ⇒ `inject` 当场**不抛**、事件进内存 log、调用点的 `catch` 无事发生；② 该校验在**持久化编解码层**（`assertV4RowAdmission` → `assertV4SourceRowAdmission`），走的是**异步** `async append(events) → persistContiguous` ⇒ 异常在**写盘时**才炸，逃出调用点；③ 写盘链一断，其后的所有事件**都不落盘**。
+
+**三、真机取证（证据链，可复核）**——会话 `session-55c8bfa4…` 的会话日志（**493 帧 zstd 全解 · 4.0 MB · 831 行**）**终止在 seq 828**：seq 824/826/828 是**三次完全相同**的 `anti_drift_config {"action":"get"}`，同批配置读出 `stallRepeat: 3` ⇒ 第三次必触发停滞提醒；turn 6 **没有 `turn/end`**；全档 **零处** `"kind":"plugin"`（被拒的事件根本写不进去）——三条与"写盘层拒绝"逐条吻合。
+
+**四、修法**——新增 `lib/anti-drift.mjs` 的 `PRODUCER_SOURCE_KIND = "plugin:@dsh-external/dsh-thincoder-suite"` 与 `producerSource()`（**每次返回新对象**）；三处调用点全部改用。形状取 `plugin:<包名>`：这正是平台自己的 v3→v4 迁移函数 `producerKind(plugin)` 对第三方插件产出的 kind（`"plugin:" + plugin`），故新旧两代行读回归一到**同一个生产者**（同族先例：`dsh-better-sidebar` 的 `SIDE_INJECTION_SOURCE_KIND = 'plugin:dsh-better-sidebar'`，其注释逐字写明了同一约束）。平台侧只强制「非空字符串 且 ≠ `"plugin"`」，未知 kind 与自有 JSON 元数据都会被保留。
+
+**五、验证读数**——`node --test` **631/631 全绿 · 0 fail · exit 0**；**变异证明**：临时副本上把三处改回裸 `plugin` ⇒ 回归锚 **A-8 立刻转红**，失败原文即该锚自己的断言消息（`lib/index.mjs 不得再把裸 \`plugin\` 当 source kind 写（v4 写盘层会打红整个回合）`）；清理后恢复绿。
+
+**六、有意改锁 / 计数**——**未新增顶层 `test(` 块**：回归锚**并入既有 A-8 块**（行为腿：`producerSource()` 的 kind 非空、≠ `"plugin"`、与迁移同形、每次新对象；结构腿：全 `lib/*.mjs` **剥离注释后**零处 `source: { kind: "plugin" }`，且恰 **3** 处 `source: producerSource()`）⇒ 计数行仍 **631/631**，台账与文档计数零漂移。
+
+**七、同批捎带（如实登记）**——上一会话遗留的**未提交**评审 #5 修复（`goal_verify` 调用点转发 `cwdHint`，与 `goal_criteria` 对齐）**随本批一并**跑过全量后提交。
+
+
 ## [0.30.1] — 2026-10-09
 
 > **一句话**：修掉**工程模式实施通道的「派发即死」**——`eng_coder` 把子代理派到**用户早已切换掉的旧模型通道**上（插件拿「建会话那一刻的模型」当「会话现在用的模型」，并**显式覆写**给子代理），并对这次死亡**一个字都不留**（全文只有 `eng_coder ended: error` + 空 partial）。设计档 [`docs/2026-10-09-eng-route-live-design.md`](./docs/2026-10-09-eng-route-live-design.md)。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。
