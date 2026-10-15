@@ -169,7 +169,7 @@ svc.read = async (...a) => {
 | M3 | 全 asar **7535** 个 `.js` 扫描：`job_output` 注册点恰 **1** 处；`LocalJobRegistry` 恰 **1** 处；`.job.output` 消费点恰 **3** 处 | 自写 asar 扫描器 | 无重复注册、无第二实现 |
 | M4 | 被移出的 `dsh-jobs-local@0.0.1-rc.3`：`read()`（`:187-196`）返回 `{text, snapshot}`；`events` 命中 0、`subscribe` 命中 0、`attachController` 命中 2 | 读 profile 备份目录副本 | 形状**吻合观测错误**，但**无法注册工具** ⇒ 排除 |
 | M5 | 运行时：未知 id → 干净 `unknown job X`；已完成作业 / 运行中作业 / `wait:true` → **同错** | `job_output` 四次调用 | 崩点在「查到作业之后」的读路径，且与结算无关 |
-| M6 | `.pnpm` 内 jobs 族目录 **0**；`C:\Users\huangchaowen\node_modules` 存在但**无** `@deepseek-ai`；磁盘可达的 `dsh-jobs-local` 仅 profile 备份目录 / `dsh-browser` 店 / `rollbacks` 归档（均不在解析路径） | 磁盘扫描 | 残余 skew 与祖先遮蔽**均不成立** |
+| M6 | `.pnpm` 内 jobs 族目录 **0**；`C:\Users\<user>\node_modules` 存在但**无** `@deepseek-ai`；磁盘可达的 `dsh-jobs-local` 仅 profile 备份目录 / `dsh-browser` 店 / `rollbacks` 归档（均不在解析路径） | 磁盘扫描 | 残余 skew 与祖先遮蔽**均不成立** |
 
 **★ M1 × M5 的张力（本轮最重要的新事实）**：打包源码**正确**，运行时**不正确** ⇒ 差异产生在「包 → 工具」之间，而不是「包写错了」。
 
@@ -181,7 +181,7 @@ svc.read = async (...a) => {
 |---|---|---|
 | §1 报错形状反解：`read.job` 本身 undefined（否则属性名会是 `'spillPaths'`） | **采纳** | 与 `readBody` 逐字对读成立，且参数求值序独立证实：`read.chunks` / `read.lossy` 先求值不抛 ⇒ `read` 是非空对象、`read.job` 缺失。**这是本次会诊最有用的一条**，一次性排除「输出太小没 spill」与「作业查不到」两候选 |
 | §2 Q1 服务侧信封组装、生产者 `spec.run` 够不着 | **采纳** | 与 asar 取证一致：信封由 `readJob()` 组装，插件侧只写环与 `outcome.result` |
-| §2 Q2「批 26 的证伪没证完，`.pnpm` 的 `dsh-jobs@0.1.7-rc.1` 仍可能在线」 | **不采纳**（**有据否定**） | 三条读数：① 本机 `.pnpm` 内 jobs 族目录数 = **0**；② profile 用 `nodeLinker: hoisted`，`.pnpm` 不在解析路径上（其 `pnpm-workspace.yaml` 自述如此）；③ 祖先 `C:\Users\huangchaowen\node_modules` 存在但**无 `@deepseek-ai` 作用域**。⇒ E4「清场」为**空操作**，跳过 |
+| §2 Q2「批 26 的证伪没证完，`.pnpm` 的 `dsh-jobs@0.1.7-rc.1` 仍可能在线」 | **不采纳**（**有据否定**） | 三条读数：① 本机 `.pnpm` 内 jobs 族目录数 = **0**；② profile 用 `nodeLinker: hoisted`，`.pnpm` 不在解析路径上（其 `pnpm-workspace.yaml` 自述如此）；③ 祖先 `C:\Users\<user>\node_modules` 存在但**无 `@deepseek-ai` 作用域**。⇒ E4「清场」为**空操作**，跳过 |
 | §3 E1/E2/E3（判定实验） | **待定** | 三条都需在 link 挂载的插件里加临时诊断工具 + 重启桌面版，属**用户决策**，本轮不擅自实施（见 §5） |
 | §3 E5 运行中调 `job_output` | **采纳（已实测执行）** | 父侧已跑：运行中（`pwsh-37`，未结算）与已完成（`pwsh-4`）**同错** ⇒ 「`job` 只在活作业信封上存在、settle 剥离」这一支**被否定** |
 

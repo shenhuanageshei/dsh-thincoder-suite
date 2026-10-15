@@ -18,7 +18,7 @@ count-marks: 项|处|条|档|值|步|腿
 |---|---|---|
 | E1 | `codex exec` + 工具任务：`exec_command failed: CreateProcess { message: "Rejected(\"Failed to create unified exec process: helper_unknown_error: setup refresh had errors\")" }` | Windows 执行助手起不来（与 `~/.codex/config.toml` 的 `[windows] sandbox = "elevated"` 吻合；**本轮按用户要求不动该配置**） |
 | E2 | 同通道 stderr 反复 `codex_models_manager: failed to refresh available models: request timed out` + `rmcp: http/request failed … chatgpt.com/backend-api/ps/mcp` | 联网子系统降级；加本机代理（7897）后**能跑完一轮**（123s, code=OK）但工具仍失败 ⇒ 网络半通、助手仍断 |
-| E3 | `codex app-server --stdio` 冒烟（2026-10-14）：`initialize` 返回 `{"id":1,"result":{"userAgent":"dsh-smoke/0.162.1 (Windows 10.0.26200; x86_64)…","codexHome":"C:\\Users\\huangchaowen\\.codex"}}`，进程存活 15s，另有服务端通知 `remoteControl/status/changed` | **平台那条传输面（app-server）在本机可用** |
+| E3 | `codex app-server --stdio` 冒烟（2026-10-14）：`initialize` 返回 `{"id":1,"result":{"userAgent":"dsh-smoke/0.162.1 (Windows 10.0.26200; x86_64)…","codexHome":"C:\\Users\\<user>\\.codex"}}`，进程存活 15s，另有服务端通知 `remoteControl/status/changed` | **平台那条传输面（app-server）在本机可用** |
 | E4 | 本机已装配 `@deepseek-ai/dsh-subagent-codex@0.0.1-rc.1`（profile `package.json` L9 声明 + `cordis.patch.yml` L12 insert 行；注释指向 `.agent-presets/thincoder-eng/agent.cordis.yml` 的 `tool-subagent-codex`） | 提供方注册名 = **`codex`** |
 
 **根因一句话**：不是插件适配器的缺陷，是 `codex exec` 子进程通道在本机**执行面**不可用；而平台提供的 app-server 通道**可用**，且它本来就是「无人值守委托」的形态。
