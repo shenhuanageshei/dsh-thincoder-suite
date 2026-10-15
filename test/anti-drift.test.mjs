@@ -22,7 +22,7 @@
 // node:test 零依赖；每例前 __resetAntiDriftState()（模块级进程内状态），走 tmp 目录不碰真实 $DSH_HOME。
 import { test, beforeEach } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, readdirSync } from "node:fs"
+import { mkdtempSync, rmSync, readdirSync, existsSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -38,8 +38,11 @@ import {
   pickPushback, onTurnStopping, onAgentCreated, probeAntiDriftSurfaces,
   noteToolCall, markStallNoticed, stallNotice, producerSource, PRODUCER_SOURCE_KIND,
   turnIndexOf, dropTurnShapeWarn,
+  antiDriftStateView, restoreAntiDriftState, VERIFY_FIELD_MAX_CHARS,
+  resolveCriteriaStorePath, readCriteriaStore,
   __resetAntiDriftState,
 } from "../lib/anti-drift.mjs"
+import { saveSessionState, loadSessionState } from "../lib/session-store.mjs"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DESIGN_DOC = join(HERE, "..", "docs", "2026-10-14-anti-drift-design.md")
@@ -50,6 +53,12 @@ beforeEach(() => {
   TMP = mkdtempSync(join(tmpdir(), "anti-drift-"))
 })
 const io = () => ({ dshHomeOverride: TMP })
+/** 判据存储落点（**设计档 FR-1:133**：与 token-store 同址 = `<home>/.thincoder/`）。 */
+const criteriaFile = (home = TMP) => join(home, ".thincoder", "goal-criteria.json")
+/** 剥离注释（结构锁用：避免注释/文档串里的示例代码造成误报）。 */
+const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1")
+/** index.mjs 源码（多块共用；负控① 与 A-10 都读它）。 */
+const indexSrc = () => readFileSync(join(HERE, "..", "lib", "index.mjs"), "utf8")
 const on = () => resolveAntiDriftConfig({ antiDrift: { pushback: true } })
 const sid = (n = 1) => "sess-" + n
 
@@ -145,6 +154,19 @@ test("A-3 goal_verify：伪造 / 已清 proofRef ⇒ 拒；skipped 无 summary �
   clearCriteria({ sessionId: sid(), ...io() })
   const afterClear = recordVerify({ sessionId: sid(), proofRef: "g-1", status: "passed", ...io() })
   assert.equal(afterClear.ok, false, "记录已清 ⇒ 同值 proofRef 必须拒")
+
+  // ★ 2026-10-15 收口（L-12）：`summary` / `command` **码点上限**（超限**拒**，不静默截断）。
+  //   收口前实测 200 KB 的 summary 被原样接受；本轮起这些记录还要**落盘进 session-state.json**
+  //   （用户裁定「该记」）⇒ 上限从"低价值加固"升级为必需。
+  const tooBig = "x".repeat(VERIFY_FIELD_MAX_CHARS + 1)
+  const overSum = recordVerify({ sessionId: sid(), proofRef: "g-1", status: "passed", summary: tooBig, ...io() })
+  assert.equal(overSum.ok, false, "summary 超上限必须拒（不静默截断）")
+  assert.match(overSum.reason, new RegExp(String(VERIFY_FIELD_MAX_CHARS)))
+  const overCmd = recordVerify({ sessionId: sid(), proofRef: "g-1", status: "passed", summary: "ok", command: tooBig, ...io() })
+  assert.equal(overCmd.ok, false, "command 超上限必须拒")
+  const atCap = recordVerify({ sessionId: sid(), proofRef: "g-1", status: "passed", summary: "y".repeat(VERIFY_FIELD_MAX_CHARS), ...io() })
+  assert.equal(atCap.ok, true, "恰好等于上限必须放行（上限是闭区间——否则边界语义是猜的）")
+  assert.equal(listVerify(sid()).length, 3, "三次调用里只有边界那次落账（超限两次零写入）")
 })
 
 // ═════════════════════ A-4 推回记账 ═════════════════════
@@ -308,6 +330,20 @@ test("A-9 纯文档改动 ⇒ 推回谓词不触发（isProductCodePath 权威�
   noteWrite(S, "lib/foo.mjs", "edit")
   assert.equal(domainState(S).stamp.codeMutatedSinceStamp, true, "产品代码改动必须置位")
   assert.deepEqual(productFilesOf(S), ["lib/foo.mjs"])
+
+  // ★ 2026-10-15 收口（评审 #5 · 🟡）：FR-4 前置里那两条此前**完全缺失**——
+  //   ① 设计档 :183「**存在活跃目标**」：无活跃目标 ⇒ 零推回（与 US-3 的收窄一致；
+  //      :184 明令移除的 `depth === 0` 守卫正是被这一条取代的）。
+  //   ② 同款前置 `!signal.aborted`。
+  const S2 = sid(150)
+  noteWrite(S2, "lib/pre.mjs", "edit") // 落章域已置位 =「什么都想触发」的夹具
+  assert.equal(onTurnStopping({ sessionId: S2, turn: 1, goalId: null, config: cfg, ...io() }).steer, null,
+    "无活跃目标 ⇒ 零推回（FR-4 前置；补它之前这里会推出 unverified）")
+  assert.ok(onTurnStopping({ sessionId: S2, turn: 1, goalId: "g-live", config: cfg, ...io() }).steer,
+    "**负控**：同一状态下有活跃目标时**必须**推回（否则上面那条是恒真断言）")
+  assert.equal(
+    onTurnStopping({ sessionId: S2, turn: 1, goalId: "g-live", config: cfg, signal: { aborted: true }, ...io() }).steer,
+    null, "signal.aborted ⇒ 零推回（FR-4 前置）")
 })
 
 // ═════════════════════ A-10 跨回合不泄漏 ═════════════════════
@@ -332,6 +368,51 @@ test("A-10 跨回合不泄漏：第 N 回合改动 → 第 N+1 回合 complete �
   const g = gateDecision({ toolName: "update_goal", args, sessionId: S, config: cfg, ...io() })
   assert.equal(g.decision, "deny", "跨回合后仍必须拒（G2 封闭门的回归锁）")
   assert.match(g.reason, /未验证的产品代码改动/)
+
+  // ★ 2026-10-15（**用户裁定「该记」**）回归锁：落章域与验证证据**跨重启存活**。
+  //   不落盘时重启后两个标记双双归零 ⇒ 完成门读到「没改过代码」⇒ **无证据放行**（fail-open）。
+  const S2 = sid(160)
+  const home2 = mkdtempSync(join(tmpdir(), "anti-drift-persist-"))
+  const io2 = () => ({ dshHomeOverride: home2 })
+  setCriteria({ sessionId: S2, criteria: "c", check: "k", ...io2() })
+  promotePending({ sessionId: S2, goalId: "g-p", ...io2() })
+  recordVerify({ sessionId: S2, proofRef: "g-p", status: "passed", summary: "ok", ...io2() })
+  noteWrite(S2, "lib/persist.mjs", "edit") // 落章之后又改动 ⇒ 完成门应当拒
+  const view = antiDriftStateView(S2)
+  assert.equal(view.stamp.codeMutatedSinceStamp, true, "视图必须带上落章域")
+  assert.equal(view.verifyRecords.length, 1, "视图必须带上验证证据")
+  assert.equal(saveSessionState(S2, view, home2), true, "落盘必须成功（临时 home）")
+  assert.equal(saveSessionState(S2, view, home2, undefined), true, "带 cwdHint 的写点同样成功")
+  // 模拟**重启**：清空进程内三域（刻意**不走** removeSessionState——重启不是 dispose）
+  __resetAntiDriftState()
+  assert.equal(domainState(S2).stamp.codeMutatedSinceStamp, false, "前提自证：重启后内存态确实归零")
+  const snap = loadSessionState(S2, home2)
+  assert.ok(snap && snap.stamp, "盘上必须留下落章域")
+  assert.equal(restoreAntiDriftState(S2, snap).restored, true, "恢复必须生效")
+  assert.equal(domainState(S2).stamp.codeMutatedSinceStamp, true, "★ 落章域跨重启存活")
+  assert.equal(hasPassed(S2, "g-p"), true, "★ 验证证据同批跨重启存活")
+  // 回合域与会话域**绝不恢复**（设计档 §7/§9：重启清零是"接受的代价"）
+  assert.equal(domainState(S2).sess.honestyCount, 0, "会话域不得被恢复")
+  assert.equal(domainState(S2).turn.steerTotal, 0, "回合域不得被恢复")
+  // 只填空槽（与 restoreSessionState 同口径）：内存已推进 ⇒ 盘不覆盖
+  assert.deepEqual(restoreAntiDriftState(S2, snap), { restored: false }, "已有内存态 ⇒ 恢复必须跳过")
+  // 畸形快照：逐字段回落、绝不抛（这是恢复路径，不得让会话起不来）
+  __resetAntiDriftState()
+  assert.doesNotThrow(() => restoreAntiDriftState(S2, { stamp: "not-an-object", verifyRecords: 42 }))
+  assert.equal(domainState(S2).stamp.codeMutatedSinceStamp, false, "畸形 stamp ⇒ 回落默认（不抛、不臆造）")
+  rmSync(home2, { recursive: true, force: true })
+
+  // ★ 结构锁（同批）：**每一处** `saveSessionState` 调用都必须经 `sessionViewFor`。
+  //   `saveSessionState` 是**整条替换**（`sessions[id] = {...v}`）⇒ 任何绕过它的新写盘点
+  //   都会把落章域与验证记录**静默抹掉**。谓词 = 全档 `sessionStateViewWithGeneration(` 的
+  //   调用点**恰 1 处**（即 `sessionViewFor` 的组装点）；新增写盘点只要绕过它就立刻 ≥2 ⇒ 红。
+  const idxCode = stripComments(indexSrc())
+  const rawGen = [...idxCode.matchAll(/sessionStateViewWithGeneration\s*\(/g)].length
+  const rawSaves = [...idxCode.matchAll(/saveSessionState\s*\(/g)].length
+  assert.ok(rawSaves >= 3, "谓词自证：index.mjs 必须存在足量 saveSessionState 写盘点，实测 " + rawSaves)
+  assert.equal(rawGen, 1,
+    "sessionStateViewWithGeneration 的调用点必须恰 1 处（= sessionViewFor 组装点）：新增写盘点必须经 sessionViewFor，"
+    + "否则会抹掉落章域与验证记录，实测 " + rawGen)
 })
 
 // ═════════════════════ A-11 会话域封顶 ═════════════════════
@@ -365,6 +446,41 @@ test("A-11 会话域封顶：跨回合诚实句恰 ≤3 ⇒ 其后整机静默 +
   // 反证：会话封顶**不能**靠"只 warn 不拦"实现——若第 4 回合仍发诚实句，
   // 上面 honestyByTurn 的末项会是 1（这条断言就是那个回归锁）。
   assert.equal(honestyByTurn[3], 0, "第 4 回合必须零诚实句（封顶是**拦**，不是只记账）")
+
+  // ★ 2026-10-15 收口（评审 #4 · 🔴）：上面**只数了 `kind === "honesty"`**——族推回是否也停了
+  //   根本看不出来。这正是「整机静默」漏实现却一直绿的原因 ⇒ 现在**数全部 steer**（不分族）。
+  const S2 = sid(170)
+  setCriteria({ sessionId: S2, criteria: "c", check: "k", ...io() })
+  promotePending({ sessionId: S2, goalId: "g-2", ...io() })
+  noteWrite(S2, "lib/silence.mjs", "edit")
+  const allSteers = []
+  for (const turn of [1, 2, 3, 4, 5]) {
+    let n = 0
+    for (let i = 0; i < 9; i++) {
+      if (onTurnStopping({ sessionId: S2, turn, goalId: "g-2", config: cfg, ...io() }).steer) n += 1
+    }
+    allSteers.push(n)
+  }
+  assert.ok(allSteers[0] > 0 && allSteers[1] > 0 && allSteers[2] > 0,
+    "**负控**：前 3 回合必须确有推回（否则下面那条是恒真断言），实测 " + JSON.stringify(allSteers))
+  assert.deepEqual(allSteers.slice(3), [0, 0],
+    "会话封顶之后必须**一条 steer 都不发**——「整机静默」含族推回，不只是诚实句，实测 " + JSON.stringify(allSteers))
+
+  // ★ 2026-10-15 收口（评审 #8 · 🔵）：单回合硬上限的 warn 必须有自己的**回合域**闩，
+  //   不得提前置位**会话域**的静默闩（否则"一个回合用满" = 整个会话永久静音）。
+  const S3 = sid(171)
+  noteWrite(S3, "lib/hardmax.mjs", "edit")
+  const cfgNarrow = resolveAntiDriftConfig({ antiDrift: { pushback: true, caps: { pending: 0, verify: 0, advisor: 0 } } })
+  // caps 全 0 ⇒ 一族都推不出；硬上限 = Σ0 + 1 = 1，那 1 条被诚实句占 ⇒ 同回合第二次按压即撞硬上限
+  assert.ok(onTurnStopping({ sessionId: S3, turn: 1, goalId: "g-hm", config: cfgNarrow, ...io() }).steer, "首位是诚实句")
+  const hitHard = onTurnStopping({ sessionId: S3, turn: 1, goalId: "g-hm", config: cfgNarrow, ...io() })
+  assert.equal(hitHard.steer, null, "同回合第二次按压 ⇒ 撞硬上限，零 steer")
+  assert.match(hitHard.warn ?? "", /硬上限/, "硬上限必须有一行 warn")
+  assert.equal(domainState(S3).turn.hardMaxWarned, true, "硬上限 warn 用**回合域**闩")
+  assert.equal(domainState(S3).sess.silenceWarned, false,
+    "★ 单回合撞硬上限**不得**置位会话静默闩（否则一个回合 = 整个会话永久静音）")
+  assert.ok(onTurnStopping({ sessionId: S3, turn: 2, goalId: "g-hm", config: cfgNarrow, ...io() }).steer,
+    "★ 下一回合仍必须能推回（会话未被误静音）")
 })
 
 // ═════════════════════ A-12 探测降级 ═════════════════════
@@ -656,7 +772,6 @@ test("负控① 静态段冻结：注入必须挂 context 而非 section（secti
   //   而 `node --check`（只查语法）与全部用例**照样全绿**——“名字都在、机制悄悄不工作”。
   //   谓词：本地模块的**导出名**中，凡在 index.mjs 里以 `NAME(` 形式被调用、却不在
   //   该模块 import 名单里的 ⇒ 红。注释先剥离（避免注释/文档串误报）。
-  const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1")
   const idxCode = stripComments(src)
   // 按**模块路径**合并 names（同一模块可能有多条 import 语句——例如 escalate.mjs 分两条引入；
   // 按单条语句判会产生假阳性，本腿第一次跑就被 `clearCodexThread` 撞到过）。
@@ -999,6 +1114,21 @@ test("尾-9 跨重启文本稳定：同状态下注入行逐字节相同，且�
   assert.equal(withoutGoalId, null, "自证：只给 sessionId（不传 goalId）时读不到 ⇒ 正是修复前的病灶")
   const withGoalId = getCriteria({ sessionId: S, goalId: "g-restart", ...io() })
   assert.ok(withGoalId && withGoalId.check === "node --test 全绿", "传 goalId 时能读到盘上判据")
+
+  // ★ 2026-10-15 收口（评审 #3 · 🔴）：判据存储落点必须与 `token-store.mjs` **同址**（设计档
+  //   FR-1:133）= `pickDshHome` + `.thincoder/`。旧写法两处偏离：无子目录、且绕过 pickDshHome
+  //   ⇒ 在"插件进程无 DSH_HOME"的桌面构建下会落进**会话 cwd**（污染用户工作区、按 cwd 碎片化）。
+  const home3 = mkdtempSync(join(tmpdir(), "anti-drift-path-"))
+  assert.equal(resolveCriteriaStorePath(home3), criteriaFile(home3),
+    "落点必须与 token-store 同址（<home>/.thincoder/goal-criteria.json）")
+  // 旧位置**兼容读**：升级不能让既有判据记录凭空消失（读到即一次性迁移到新位置）
+  writeFileSync(join(home3, "goal-criteria.json"),
+    JSON.stringify({ version: 1, goals: { "g-legacy": { criteria: "c", check: "k", setAt: "t" } } }, null, 2) + "\n")
+  const legacyRead = readCriteriaStore(home3)
+  assert.equal(legacyRead.goals["g-legacy"]?.check, "k", "旧位置的记录必须仍读得到（兼容读）")
+  assert.equal(existsSync(criteriaFile(home3)), true, "读到旧位置后必须**一次性迁移**到新位置")
+  assert.equal(readCriteriaStore(home3).goals["g-legacy"]?.check, "k", "迁移后仍读得到（搬而不丢）")
+  rmSync(home3, { recursive: true, force: true })
 })
 
 // ═══ pending 槽不得被旧 bound 记录遮蔽（否则"为下一个目标设判据"静默不生效） ═══
@@ -1042,7 +1172,7 @@ test("尾-11 promotePending 空 goalId：不得谎报成功、不得写空 id �
   assert.equal(ok.promoted, true, "有效 id 必须仍能提升")
   assert.equal(getCriteria({ sessionId: S, goalId: "g-real", ...io() })?.check, "k", "提升后可读")
   // ④ 盘上不得存在**空字符串** key
-  const raw = JSON.parse(readFileSync(join(TMP, "goal-criteria.json"), "utf8"))
+  const raw = JSON.parse(readFileSync(criteriaFile(), "utf8"))
   assert.equal(Object.prototype.hasOwnProperty.call(raw.goals, ""), false, "盘上不得有空 id 记录")
   assert.deepEqual(Object.keys(raw.goals), ["g-real"], "盘上只应有那一条有效记录")
 })
@@ -1055,7 +1185,7 @@ test("尾-12 setCriteria 显式 goalId：校验器缺席 ⇒ fail-closed（不�
   assert.ok(/无法核验/u.test(noVerifier.reason ?? ""), "文案必须说明是'无法核验'")
   assert.ok(/省略 goal_id|goal_verify/u.test(noVerifier.reason ?? ""), "文案必须给出至少一条可行路径（不把人锁死）")
   let raw = {}
-  try { raw = JSON.parse(readFileSync(join(TMP, "goal-criteria.json"), "utf8")) } catch { raw = {} }
+  try { raw = JSON.parse(readFileSync(criteriaFile(), "utf8")) } catch { raw = {} }
   assert.equal(Object.prototype.hasOwnProperty.call(raw.goals ?? {}, "g-unverifiable"), false, "拒写 ⇒ 盘上不得有该记录")
   // ② 校验器说"不存在"⇒ 拒（这是原有的正确行为，一起钉住）
   const notExist = setCriteria({ sessionId: S, criteria: "c", check: "k", goalId: "g-ghost", hostHasGoal: () => false, ...io() })
