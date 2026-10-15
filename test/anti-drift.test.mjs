@@ -647,6 +647,42 @@ test("负控① 静态段冻结：注入必须挂 context 而非 section（secti
   // 而 context 段内**必须**有它（否则注入面根本没接上——两侧都钉，才算真锁）
   const wired = /ctx\.systemPrompt\.context\(\{[\s\S]{0,700}?renderAntiDriftLine/.test(src)
   assert.equal(wired, true, "context 段内必须调用 renderAntiDriftLine（注入确实接在 context 上）")
+
+  // ★ 2026-10-15 热修（评审 #1 · 🔴）回归锁：**调了但没 import** 的一类缺陷。
+  //   真机症状（本腿写下的原因）：`targetPathOf(name, exec?.arguments)` 在 index.mjs 的
+  //   FR-5 标记面被调用，而 `./eng.mjs` 的 import 名单里**没有它** ⇒ 每次 `write`/`edit`
+  //   完成都抛 ReferenceError，被**同一监听器的 catch 吞掉** ⇒ 落章域（`codeMutatedSinceStamp`
+  //   / `touchedFiles`）在生产环境**从未置位**，完成门/推回谓词静默失效，
+  //   而 `node --check`（只查语法）与全部用例**照样全绿**——“名字都在、机制悄悄不工作”。
+  //   谓词：本地模块的**导出名**中，凡在 index.mjs 里以 `NAME(` 形式被调用、却不在
+  //   该模块 import 名单里的 ⇒ 红。注释先剥离（避免注释/文档串误报）。
+  const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1")
+  const idxCode = stripComments(src)
+  // 按**模块路径**合并 names（同一模块可能有多条 import 语句——例如 escalate.mjs 分两条引入；
+  // 按单条语句判会产生假阳性，本腿第一次跑就被 `clearCodexThread` 撞到过）。
+  const importedByModule = new Map()
+  for (const imp of idxCode.matchAll(/import\s*\{([^}]*)\}\s*from\s*"(\.[^"]*)"/g)) {
+    const set = importedByModule.get(imp[2]) ?? new Set()
+    for (const s of imp[1].split(",")) {
+      const n = s.trim().split(/\s+as\s+/)[0].trim()
+      if (n) set.add(n)
+    }
+    importedByModule.set(imp[2], set)
+  }
+  let checkedNames = 0
+  for (const [mod, imported] of importedByModule) {
+    let depSrc
+    try { depSrc = readFileSync(join(HERE, "..", "lib", mod.replace(/^\.\//, "")), "utf8") } catch { continue }
+    const exports = [...depSrc.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+([A-Za-z_$][\w$]*)/gm)].map((x) => x[1])
+    for (const name of exports) {
+      checkedNames += 1
+      const usedAsCall = new RegExp("(?<![\\w$.])" + name + "\\s*\\(").test(idxCode)
+      assert.ok(!usedAsCall || imported.has(name),
+        "index.mjs 调用了 " + mod + " 的 `" + name + "` 但**没有 import**——ReferenceError 会被监听器 catch 吞掉 ⇒ 机制静默死、用例全绿")
+    }
+  }
+  assert.ok(checkedNames >= 20, "谓词自证（律 1：防恒真）：必须真的枚举到足量跨模块导出名，实测 " + checkedNames)
+  assert.ok(importedByModule.size >= 5, "谓词自证：index.mjs 必须有足量本地模块 import，实测 " + importedByModule.size)
 })
 
 test("负控② 模糊输入下 steer 计数不超各族 caps 与硬上限（四种 caps 极值组合 × 40 次按压）", () => {

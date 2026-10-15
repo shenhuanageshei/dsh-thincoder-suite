@@ -88,6 +88,20 @@
 **七、同批捎带（如实登记）**——上一会话遗留的**未提交**评审 #5 修复（`goal_verify` 调用点转发 `cwdHint`，与 `goal_criteria` 对齐）**随本批一并**跑过全量后提交。
 
 
+### 同版热修 2：`tools/post-execute` 标记面的**两个「调了但没 import」**（2026-10-15）
+
+> **一句话（人话）**：反漂移里「记下你改过哪些代码」和「建目标后把判据绑上去」这两件事，在真机上**从来没生效过**——不是逻辑写错，是那两个函数**根本没被引入**，一调用就抛 `ReferenceError`，又被监听器自己的 `catch` 吞掉。用例全绿、`node --check` 也全绿，因为「只查语法」与「只测函数本体」都看不见**接线**。
+
+**一、根因（两处，同一物种）**——`lib/index.mjs` 的 `tools/post-execute` 监听体内：① `targetPathOf(name, exec?.arguments)`（`:1627`；`lib/eng.mjs:116` 导出）**不在 `./eng.mjs` 的 import 名单里**；② `promotePending({…})`（`:1637`；`lib/anti-drift.mjs:288` 导出）**不在 `./anti-drift.mjs` 的 import 名单里**。两处每次命中都抛 `ReferenceError`，被同一监听器的 `catch` 吞掉。后果：**落章域**（`codeMutatedSinceStamp` / `touchedFiles`）在生产环境**从未置位** ⇒ FR-2 完成门与 FR-4 推回谓词的落章侧失效；`create_goal` 成功后的**待绑槽提升从未发生**。
+
+**二、真机印证**——上一会话在 `session-55c8bfa4…` 实测的 **V1②**「建目标成功后，待绑槽**没有**被提升为 `bound`（仍是 `pending` / `goalId: null`）」——当时的怀疑是「`extractGoalId` 认不出宿主返回形状」，**真因是本条的 `ReferenceError`**（同一个 `catch` 把现场抹平了）。
+
+**三、同批修掉的 FR-5 朝向违规**——该监听器的 `catch` 原先统一 `return { kind: "accept" }`，等于「**标记段一出错就改写下游决定**」，违反设计档 :204 / :299「本监听器**永不改 decision**」。现把 `next()` 的决定提到 try 之外：`let d; try { d = await next(); …标记… } catch { warn } return d ?? { kind: "accept" }`——只有 `next()` **自身**抛错（`d` 仍为 `undefined`）时才回落 accept。
+
+**四、防回归：这次上的是通用锁，不是逐条钉名字**——`test/anti-drift.test.mjs` 的**负控①**新增断言：把 `index.mjs` 的本地模块 import **按模块路径合并**成名单，枚举各模块的 `export function|const|let|class`，凡在 `index.mjs` 里以 `NAME(` 形式被调用、却不在名单里的 ⇒ **红**（先剥离注释；两条谓词自证防恒真：导出名 ≥20、import 模块 ≥5）。该锁**第一次跑就抓到上面两条真缺陷**（失败原文即本档第一节的现场），并曾对 `clearCodexThread` 报过一次**假阳性**——原因是 `escalate.mjs` 分**两条** import 语句引入、谓词按「单条语句」判 ⇒ 已改为**按模块路径合并**（教训与修法同批落在代码注释里）。
+
+**五、验证读数**——`node --test` **631/631 全绿 · 0 fail · exit 0**；新锁的红→绿是**实测**而非构造（见上）。**未新增顶层 `test(` 块** ⇒ 计数行仍 **631/631**，台账零漂移。
+
 ## [0.30.1] — 2026-10-09
 
 > **一句话**：修掉**工程模式实施通道的「派发即死」**——`eng_coder` 把子代理派到**用户早已切换掉的旧模型通道**上（插件拿「建会话那一刻的模型」当「会话现在用的模型」，并**显式覆写**给子代理），并对这次死亡**一个字都不留**（全文只有 `eng_coder ended: error` + 空 partial）。设计档 [`docs/2026-10-09-eng-route-live-design.md`](./docs/2026-10-09-eng-route-live-design.md)。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。
