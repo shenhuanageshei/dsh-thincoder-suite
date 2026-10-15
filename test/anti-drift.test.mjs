@@ -442,6 +442,20 @@ test("A-13 默认值分档：注入/完成门 ON，推回/台账门 OFF；读取
   const clean2 = "sess-zero-clean"
   assert.equal(onTurnStopping({ sessionId: clean2, turn: 1, goalId: null, config: zeros, ...io() }).steer, null,
     "干净回合 ⇒ 零 steer 零诚实句")
+
+  // ★ 2026-10-15 热修（评审 #1 · 🔴）回归锁：开关的**写面**必须是本会话覆盖层，
+  //   绝不能回到 user 层 config.json —— 那条路被 `mergeGlobalConfig`（其白名单里**没有**
+  //   `antiDrift` 分支）静默丢弃，工具却回「已写入（本会话即时生效）」= **假声明**。
+  //   工具的 execute 不导出 ⇒ 只能钉源码面（钉的是**语义锚**，不是措辞）：
+  const idxSrc = readFileSync(join(HERE, "..", "lib", "index.mjs"), "utf8")
+  assert.ok(!idxSrc.includes("userCfg.antiDrift"),
+    "写面不得回到 user 层（userCfg.antiDrift）：该键会被 mergeGlobalConfig 丢弃 ⇒ 写了等于没写")
+  assert.ok(idxSrc.includes("adOverrides[args.key] = v.value"),
+    "写面必须落在本会话覆盖层 adOverrides（FR-8：本会话即时生效、零落盘、零新增用户层键）")
+  assert.ok(idxSrc.includes("...adOverrides"),
+    "读路径 antiDriftCfg 必须叠上覆盖层，否则写了读不回（V4 的反例）")
+  assert.ok(!idxSrc.includes("base config surface"),
+    "工具描述不得再宣称写到 base/user 配置面（描述面与实现必须一致）")
 })
 
 // ═════════════════════ A-14 caps 子键校验 ═════════════════════
