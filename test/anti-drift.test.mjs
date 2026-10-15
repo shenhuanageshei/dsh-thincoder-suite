@@ -39,7 +39,7 @@ import {
   noteToolCall, markStallNoticed, stallNotice, producerSource, PRODUCER_SOURCE_KIND,
   turnIndexOf, dropTurnShapeWarn,
   antiDriftStateView, restoreAntiDriftState, VERIFY_FIELD_MAX_CHARS,
-  resolveCriteriaStorePath, readCriteriaStore,
+  resolveCriteriaStorePath, readCriteriaStore, STALL_REPEAT_MAX,
   __resetAntiDriftState,
 } from "../lib/anti-drift.mjs"
 import { saveSessionState, loadSessionState } from "../lib/session-store.mjs"
@@ -400,6 +400,36 @@ test("A-10 跨回合不泄漏：第 N 回合改动 → 第 N+1 回合 complete �
   __resetAntiDriftState()
   assert.doesNotThrow(() => restoreAntiDriftState(S2, { stamp: "not-an-object", verifyRecords: 42 }))
   assert.equal(domainState(S2).stamp.codeMutatedSinceStamp, false, "畸形 stamp ⇒ 回落默认（不抛、不臆造）")
+
+  // ★ 2026-10-15 收口（**评审第 2 轮 #10 · 🔴**）：同一文件有**多个写者**（advisor / eng /
+  //   escalate / config API），它们的视图**不带**落章域；`saveSessionState` 是**整条替换**
+  //   ⇒ 后写者会把刚落盘的落章域抹掉 ⇒ 重启后完成门又变回「无证据放行」。
+  //   存储层因此实施「**条件字段：视图省略 ⇒ 保留盘上旧值**」。
+  const S3 = sid(161)
+  setCriteria({ sessionId: S3, criteria: "c", check: "k", ...io2() })
+  promotePending({ sessionId: S3, goalId: "g-q", ...io2() })
+  recordVerify({ sessionId: S3, proofRef: "g-q", status: "passed", summary: "ok", ...io2() })
+  noteWrite(S3, "lib/q.mjs", "edit")
+  assert.equal(saveSessionState(S3, antiDriftStateView(S3), home2), true)
+  // 模拟**别的写者**（advisor/escalate/eng 的视图：只有 state 面，不带落章域/证据）
+  assert.equal(saveSessionState(S3,
+    { advisorRound: 1, lastAdvisorOutput: "review text", lastReviewType: "code", mutatedThisRun: true, touchedFiles: [] },
+    home2), true)
+  const afterOther = loadSessionState(S3, home2)
+  assert.equal(afterOther.stamp?.codeMutatedSinceStamp, true, "别的写者**不得**抹掉落章域（评审第 2 轮 #10）")
+  assert.equal(afterOther.verifyRecords?.length, 1, "别的写者**不得**抹掉验证证据")
+  assert.equal(afterOther.advisorRound, 1, "**负控**：本次写者自己的字段必须落盘（合并不是把新值也丢了）")
+
+  // ★ 评审第 2 轮 #11：`stamp` 全 false 但带 `verifyRecords` 的快照**不得**丢证据
+  const S4 = sid(162)
+  __resetAntiDriftState()
+  const r4 = restoreAntiDriftState(S4, {
+    stamp: { codeMutatedSinceStamp: false, verifiedSinceStamp: false, advisorSinceStamp: false, touchedFiles: [] },
+    verifyRecords: [{ proofRef: "g-any", status: "passed", summary: "s", command: "c", at: "t" }],
+  })
+  assert.equal(r4.restored, true, "有证据就必须算「恢复了东西」")
+  assert.equal(hasPassed(S4, "g-any"), true, "证据不得因 stamp 全 false 而被丢掉")
+
   rmSync(home2, { recursive: true, force: true })
 
   // ★ 结构锁（同批）：**每一处** `saveSessionState` 调用都必须经 `sessionViewFor`。
@@ -919,6 +949,15 @@ test("尾-3 停滞阈值经配置面可读写（键名闭集 + 取值范围校�
   assert.equal(validateConfigWrite("stallRepeat", -1).ok, false, "越界 ⇒ 拒（零写）")
   assert.equal(validateConfigWrite("stallRepeat", 21).ok, false)
   assert.equal(validateConfigWrite("stallRepeat", true).ok, false, "错型 ⇒ 拒")
+
+  // ★ 评审 #9：**配置文件解析**与工具面必须共用同一闭区间 0..20。
+  //   此前上界只在工具面强制 ⇒ 手改配置写 `stallRepeat: 9999` 会被静默接受
+  //   （同一键两套语义）。这里把解析侧也钉在同一区间上。
+  assert.equal(STALL_REPEAT_MAX, 20, "上界常量必须与工具面一致（单一事实源）")
+  assert.equal(resolveAntiDriftConfig({ antiDrift: { stallRepeat: STALL_REPEAT_MAX } }).stallRepeat, 20, "上界 20 必须收")
+  assert.equal(resolveAntiDriftConfig({ antiDrift: { stallRepeat: STALL_REPEAT_MAX + 1 } }).stallRepeat, 3,
+    "超上界 ⇒ 回落默认（不得静默接受 9999）")
+  assert.equal(resolveAntiDriftConfig({ antiDrift: { stallRepeat: 9999 } }).stallRepeat, 3, "同上的极端值")
 })
 
 // ═══════ L-11 旧目标的落章路径（此前是死路；本腿是它的回归锁 + 「能红」自证） ═══════
