@@ -51,6 +51,24 @@
 
 **八、已知残留（诚实清单）**：① **跨插件欠账注入未交付**（不读 team-link 黑板，设计档 §14 L-1）——这是原始痛点的另一半；② **无轮次/预算读数**（可得性未验证，不造读数，L-2）；③ **判据「写了」≠「可机检」**（形状门不判语义，归评审）；④ 设置页开关面未做（六键全 base-only，工具面已够用，L-7）；⑤ **需重启 DSH 才生效**（装配期注册；重启时机由用户定）。
 
+### 同版热修：装配面 `inject` 白名单缺陷 —— 真机「插件装上了、但 11 个工具全不可用」（2026-10-15）
+
+> **一句话（人话）**：这次修的是「**插件看得见、用不了**」。它的模块**被正常加载**了、客户端设置页也渲染出来了，但服务端 `apply` 在**一处服务探测**上就抛了异常，于是 11 个工具、配置 API 路由、监听器**一个都没注册**。真因是一行属性读取，违反了本仓**早已写明**的 cordis 纪律。
+
+**一、根因（真机取证，异常原文）**——cordis 的属性读取是**白名单**：读一个**未在 `inject` 声明**的服务属性会**当场抛** `Error: cannot get property "goals" without inject`，且**可选链 `?.` 救不了**（抛在读取那一刻）。夜班新增的 `lib/anti-drift.mjs` 在探 goal 服务时写成 `Boolean(ctx?.goals?.get)` ⇒ 该异常把整个 `apply` 打断。**取证链**（前序会话以多次重启加装临时探针取得，现已全部撤除）：① in-module 探针证明**模块确被 import**；② `[apply ENTER]` 证明 `apply` **确被调用**；③ `[apply THREW] … cannot get property "goals" without inject` 给出**异常原文**。⇒「模块在、功能无」这种形态**不能**靠"模块是否被加载"定位，**必须拿到 `apply` 的异常**。
+
+**二、修法（两处，方向相反但同源）**——① `lib/anti-drift.mjs` 新增 `probeGoalService(ctx)`：**`ctx.get("goals")` 优先**（cordis 原文「Read a service from the store **without the inject requirement**」，未注册返回 `undefined` 而不抛），属性读取只作老式夹具回落且**必须兜 try/catch**。② `lib/index.mjs` 的 `inject` 由 `[tools, systemPrompt, webServer, llm, subagents, goals]` 收敛为 **`[tools, systemPrompt, webServer, llm, subagents]`** —— `goals` **刻意不声明**。**这不是退让而是纠偏**：本仓 `lib/index.mjs:717-720` 早就写死了这条纪律（取 `connection` 一律 `ctx.get`，且**刻意不写进 `inject`**——required 语义会让没有该服务的宿主**整个插件拒起**）；把可缺服务写成硬依赖 = **同一类缺陷复发**。运行时取值 `goalViewOf` 本就走的 `ctx.get("goals")`，与本次改动同向。
+
+**三、充分性证据（为什么「5 个声明」够，而不是猜）**——① **上界**：本次 boot 探针实测 `[apply OK]`。cordis 对任何未声明服务的属性读取都会抛，apply 能跑完 ⇒ **整个 apply 调用图的属性读取集合 ⊆ 当时声明的六个**。② **枚举**：`ctx.goals` 的**属性**读取全仓仅 3 处（`anti-drift.mjs` 的 FR-8 探测 + `index.mjs` 两处临时探针/warn），现已全部改为安全取值或删除。①② 相加 ⇒ 去掉 `goals` 后**不存在**未被覆盖的属性读取。③ **本地复刻**：以"读未声明服务即抛"的白名单代理驱动真实 `apply`（逐字复刻宿主报错），`inject = 5` 时 **11 工具全部注册 · 监听器齐全 · `dispose` 干净 · goals 缺席走降级不崩**。
+
+**四、有意改锁（1 处）**——`export const inject` 收敛为 5 项。**未改任何计数**：本次**不新增顶层 `test(` 块**，回归腿**并入既有 A-12 块**（用白名单代理直接驱动探测函数 + 一条"代理确实会抛"的负控）⇒ 计数行仍 **631/631**，台账与文档计数零漂移。
+
+**五、验证读数**——`node --test` **631/631 全绿 · 0 fail · exit 0**（含并入 A-12 的新断言）；本地白名单代理装配实测 **11 工具 / 监听器齐全 / dispose 干净**；`lib/index.mjs` 与 `lib/anti-drift.mjs` `node --check` 通过；临时探针**零残留**（全仓 grep `__diagAppend|module-load-probe` = 0）。
+
+**六、真机核验（已发生）**——本次重启后 `contractWatch` 与 `anti_drift_config` **均返回真实结果**（修复前同一会话内的 `contractWatch` 返回 `Error: unknown tool "contractWatch"`）；探针末行 `[apply OK]`、六个服务全在场。⇒ **装配面已恢复**。
+
+**七、环境面处置（非本仓改动，登记于此仅供追溯）**——① `~/.dsh/profiles/desktop/package.json` 曾声明 **3 个盘上不存在的 bundle**（`@deepseek-ai/dsh-experimental-agent-team-profile` / `-auto-review` / `-schedule-bundle`）⇒ `loadProfile` 解析失败会中止整棵 profile 树。已删（bundles 39 → 36；备份 `package.json.bak-deadbundles-20261015-175106`）。② 废弃的 `web` profile 原有 14 条声明了却不存在于盘上的 bundle，已清（备份 `profiles\web\package.json.bak-suitefix-20261015-170132`）。两处均只删"声明了但盘上不存在"的名字。
+
 ## [0.30.1] — 2026-10-09
 
 > **一句话**：修掉**工程模式实施通道的「派发即死」**——`eng_coder` 把子代理派到**用户早已切换掉的旧模型通道**上（插件拿「建会话那一刻的模型」当「会话现在用的模型」，并**显式覆写**给子代理），并对这次死亡**一个字都不留**（全文只有 `eng_coder ended: error` + 空 partial）。设计档 [`docs/2026-10-09-eng-route-live-design.md`](./docs/2026-10-09-eng-route-live-design.md)。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。

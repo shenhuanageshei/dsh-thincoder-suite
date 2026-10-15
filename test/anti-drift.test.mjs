@@ -371,6 +371,34 @@ test("A-12 探测降级：缺 context ⇒ 1 行；缺 on ⇒ 1 行；两面皆�
   assert.equal(both.surfaces.goals, false)
   // 面与行 **1:1** 的结构锁：每一行必须能唯一归因到一个缺席面
   assert.equal(new Set(both.lines).size, both.lines.length, "四行必须互不相同（不得重复同一句）")
+
+  // ★ 2026-10-15 缺陷回归锁（插件"bundle 装上了、客户端也在、11 个工具却全不可用"的真因）：
+  //   cordis 的属性读取是**白名单**——读未在 inject 声明的服务**当场抛**
+  //   `cannot get property "<n>" without inject`，且 `?.` 救不了（抛在读取那一刻）；该异常曾把
+  //   整个 apply 打断。所以探测函数**不得**用属性读探 goal 服务（一律 `ctx.get`，它不需要 inject）。
+  //   下面的代理逐字复刻宿主这套语义（负控在末尾证明它真的会抛）。
+  const declared = new Set(["systemPrompt", "tools", "webServer", "llm", "subagents"])
+  const svc = new Map([
+    ["systemPrompt", { context: () => "" }], ["tools", {}], ["webServer", {}],
+    ["llm", {}], ["subagents", {}], ["goals", { get: () => null }],
+  ])
+  const hostCtx = (services) => new Proxy({}, {
+    get(_t, k) {
+      if (k === "on") return () => () => {}
+      if (k === "get") return (n) => services.get(n)
+      if (typeof k === "symbol") return undefined
+      if (declared.has(k)) return services.get(k)
+      throw new Error(`cannot get property "${String(k)}" without inject`)
+    },
+  })
+  const withGoals = probeAntiDriftSurfaces(hostCtx(svc))
+  assert.equal(withGoals.surfaces.goals, true, "宿主注册了 goals ⇒ 经 ctx.get 探到（不得靠属性读）")
+  assert.equal(withGoals.lines.length, 0, "面齐全 ⇒ 零 warn")
+  const noGoals = probeAntiDriftSurfaces(hostCtx(new Map([...svc].filter(([k]) => k !== "goals"))))
+  assert.equal(noGoals.surfaces.goals, false, "未注册 goals ⇒ 如实报缺席，而不是抛错打断装配")
+  assert.equal(noGoals.lines.length, 1, "仅 goal 面缺席 ⇒ 恰一行 warn")
+  // 负控：证明这个代理**确实**复刻了宿主语义 —— 否则上面两条绿是假的
+  assert.throws(() => hostCtx(svc).goals, /without inject/, "负控：代理对未声明服务的属性读必须抛")
 })
 
 // ═════════════════════ A-13 默认值分档 ═════════════════════
