@@ -134,6 +134,31 @@
 - **验证**——`node --test` **631/631 全绿 · 0 fail · exit 0**；**变异证明**：M6 拆掉条件字段保留 ⇒ **A-10 红** · M7 拆掉 `stallRepeat` 上界 ⇒ **尾-3 红**。
 - **#6（🟡 · 沿袭未修，如实登记）**——提示装配路径每步两次同步读盘 + 一次 `loadUserConfig`。属**性能面、非缺陷**；要改需引入内存镜像（改的是热路径缓存语义），与本轮风险面不成比例 ⇒ **留下一批**。
 
+### 同版热修 4：注入/推回消息的 **content 槽** —— 裸字符串让会话**再也打不开**（session format v4 的第二道硬约束）（2026-10-16）
+
+> **一句话（人话）**：接上一个热修（source 归属）。上一次修的是「**名字**不对 ⇒ 回合当场被打死」；这一次修的是同三处调用点的另一半——**消息正文的形状**不对。这次的症状更阴：插件**零报错**、消息**照常写盘**、容器级体检也**全绿**，但你**再也打不开那个会话**了：点进去空白、再发消息没反应。因为平台只在**重新读取（seed）那一刻**才检查正文形状，**写的时候不查**。
+
+**一、根因（平台契约 · 第二道硬约束）**——三条注入/推回路径（停滞 `inject` / 推回 `steer` / 开工接管 `inject`）把 `content` 直接传成**裸字符串**。平台写盘层**确实会走到**这个槽（`@deepseek-ai/dsh-session-format-v3-to-v4` 的 `src/codec.ts` `encodeEvent` → `assertV4RowAdmission` → `src/retired-syntax.ts` 的 `case 'user/message'`），**但那个检查器是「有则检查、无则放过」**：`assertContent` 的 `if (Array.isArray(content)) …` **没有 else** ⇒ 裸字符串**静默穿过**写盘（上一个热修修的 source kind 是同一批检查里的另一半，那条**是**硬拒）。故 `agent.inject/steer` 当场**不抛**、消息**照常落盘**；直到 **seed/读取层**才抛 —— 平台原文（`@deepseek-ai/dsh-session` 的 `src/index.ts` `assertMessageEventShape`）：`if (!Array.isArray(messageRecord["content"])) throw new Error(\`${subject} message has invalid content\`)`。v4 里 user 消息的 content 槽**只认内容块数组**：平台自己的 inbox 投递（`agent/inbox/spliced` 的 `inserted[]`）与本仓 `lib/advisor.mjs:1213` 的 `userMessage()` 产出的都是 `[{type:"text",text}]`。
+
+**二、为什么这个形态极难自查（三条读数都指向"没坏"）**——① 插件侧**零异常**（写盘层那个 content 检查器对非数组静默放过，三处调用点包的 `try/catch` 全程无事发生）；② 盘上文件**容器级全绿**（zstd 帧完整、每行 JSON 合法 ⇒ `undo_scan` 一类体检报 `ok`）；③ 症状发生在**打开**那一刻、不在**写入**那一刻 ⇒ 与"谁写坏的"在时间上脱钩。
+
+**三、真机取证（全库扫描，可复核）**——对 `~/.dsh/sessions` 下 **1675** 个会话文件逐个做 content 槽形状校验（`Array.isArray(content)`，覆盖 `user/message` / `system/message` / `assistant/message` / `tool/result` 四个持久槽）：**仅 2 个**会话含非法消息，且两条的 `source.kind` 都是本插件（`plugin:@dsh-external/dsh-thincoder-suite`）——一条落在**停滞提醒**（`session-1220b9a6…` seq 1422），一条落在**开工接管**（`session-4aed6938…` seq 8125）。全库唯一来源。旁证：`team_link_export` 导出 `session-1220b9a6…` **直接失败**，原文 `seed user/message at index 1422 message has invalid content` —— 正是本节第一节那条规则。
+
+**四、修法**——新增 `lib/anti-drift.mjs` 的 `producerContent(text) => [{ type: "text", text: String(text) }]`（与 `producerSource()` **并列**、同样**每次返回新对象**）；`lib/index.mjs` 三处调用点全部改用（`:1693` 停滞 inject · `:1733` 推回 steer · `:1761` 开工接管 inject）。
+
+**五、验证读数**——`node --test` **631/631 全绿 · 0 fail · exit 0**。回归锚**并入既有 A-8 块**（不新增顶层 `test(`）：行为腿（`producerContent()` 必须返回**非空内容块数组** · 每块 `type` 为非空字符串 · 文本原样进 `text` 槽 · 每次新对象且内容恒等）+ 结构腿（全 `lib/*.mjs` **剥离注释后**零处 `content: r.steer` / `content: r.inject` / `content: stallNotice(`，且恰 **3** 处 `content: producerContent(`）。
+
+**六、有意改锁 / 计数**——**未新增顶层 `test(` 块** ⇒ 计数行仍 **631/631**，台账与文档计数零漂移。
+
+**七、已写坏的会话（同日外科修复，2026-10-16 00:41 / 01:44）**——首轮修复前对 `~/.dsh/sessions` 全库逐条按**平台校验器的准入集**复扫：**3 个**会话含非规范 content，来源全部是本插件 —— **2 个阻塞**（`user/message` 的 content 是裸串：`session-1220b9a6…` seq 1422、`session-4aed6938…` seq 8125）**+ 1 个潜伏**（裸串只躺在 `agent/inbox/spliced` 的 `inserted[]` 里：`session-55c8bfa4…` seq 833 —— 它**不在**校验器准入集内，故该会话当时**仍能导出**，但那条消息一旦被消费成 `user/message` 就会长成新的阻塞点）。
+**★ 第 4 个（重启前两分钟产生，第二轮补修）**：首轮修复后、代码修复生效前，**旧代码又写坏了一个** —— `71ee2173-ef3f-4167-9d5a-cd21eba37f6b`（**另一个工作区** `--D-Code-opendns_top--`，mtime `01:36:16`，阻塞型：`user/message` seq 356 + 收件箱副本 seq 347）。它在重启后的终扫里被抓到并于 `01:44` 同法修复。**合计 4 个会话 / 3 个阻塞 + 1 个潜伏。**
+**修法**：**保帧外科手术** —— 只重压承载目标行的 zstd 帧，其余帧**逐字节不动**；四个会话合计改 **7 行 / 重压 7 帧**（2 + 2 + 1 + 2）。原档备份在 `~/.dsh/sessions-repair-backup/`（**四份**，文件名含会话 id 与时间戳）。
+**验收**：① 每档自校验全过（帧数不变 · 逐帧可解 · 行数不变 · 改动行数 == 修补槽数 · **其余帧逐字节相同** · 裸串归零）；② 盘上直证 —— 修复后的 `seq 1422` 为 `role=user` / 非空 `id` / 非空 `source.kind` / **`content` 已是内容块数组**且文本逐字保留；③ 全库终扫 **1686 个会话 → 0 阻塞 / 0 潜伏**。
+**★ 生效前提（已于 01:38 重启后闭合）**：盘上修好之后，**当前进程内存里仍是旧事件** —— 同一份导出在修复后仍报**同一个 index**（1422 / 8125），而已排除投影缓存（`session_projcache` 不含消息正文，实测 0 命中）与第二份文件（全库仅一份会话日志）⇒ 读到的是**进程内已加载的会话副本**。重启后**三档全部导出成功**（`1220b9a6` 1468 事件 · `4aed6938` 8132 事件 · `71ee2173` 361 事件）。
+**★ 修复生效的活证据**：重启后插件**新写入**的注入消息已是正确形状 —— `session-4aed6938` 在 `17:43:01Z`/`17:43:08Z` 的两次注入（`agent/inbox/spliced` + `user/message`）实测 **`content=ARRAY(1)`**，`session-55c8bfa4` 同期注入同形。⇒ 不只是「文件修好了」，是**产线不再生产坏的**。
+
+**八、已知残留（诚实清单 · 已定位到上游）**——平台侧 `assertContent`（**上游 = `deepseek-ai/deepseek-harness`**，`packages/session/session-format-v3-to-v4/src/retired-syntax.ts:11`）对**被解释的 content 槽**是「**有则检查、无则放过**」：该检查**确实在写盘路径上被调用**（同包 `src/codec.ts:46-53` 的 `encodeEvent` → `assertV4RowAdmission` → `case 'user/message'`），但 `if (Array.isArray(content)) …` **没有 else**，故非数组**静默穿过**；而读取层的 `assertMessageEventShape`（`packages/core/session/src/index.ts:356`）才硬性要求 `Array.isArray`。这条**两侧不对称**是静默劣化的温床：任何第三方插件都能这样毒化一个会话，而受害者看到的是"会话坏了"、容器级体检还报 `ok`。建议向上游提「写盘期与读取层对齐（fail-closed 或至少响亮告警）」——**本次未做**（不在本仓可控范围）。
+
 
 
 ## [0.30.1] — 2026-10-09

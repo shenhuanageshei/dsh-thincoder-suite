@@ -36,7 +36,7 @@ import {
   domainState, advanceTurn, stampVerified, noteWrite, noteShell, productFilesOf,
   gateDecision, renderAntiDriftLine, outstandingDebts,
   pickPushback, onTurnStopping, onAgentCreated, probeAntiDriftSurfaces,
-  noteToolCall, markStallNoticed, stallNotice, producerSource, PRODUCER_SOURCE_KIND,
+  noteToolCall, markStallNoticed, stallNotice, producerSource, producerContent, PRODUCER_SOURCE_KIND,
   turnIndexOf, dropTurnShapeWarn,
   antiDriftStateView, restoreAntiDriftState, VERIFY_FIELD_MAX_CHARS,
   resolveCriteriaStorePath, readCriteriaStore, STALL_REPEAT_MAX,
@@ -312,6 +312,34 @@ test("A-8 agent/created：startup/resume 各一次注入；compact/clear 零注�
     callSites += (src.match(/source:\s*producerSource\(\)/g) || []).length
   }
   assert.equal(callSites, 3, "三条注入/推回路径必须**全部**改用 producerSource()，实测 " + callSites)
+
+  // ★ 2026-10-16 热修（session format v4 **content 槽** · 🔴）回归锁：
+  //   `source` 修好之后，同一个三处调用点仍把 `content` 传成**裸字符串**。写盘层不查 content ⇒
+  //   消息照常落盘；直到 seed/读取层才抛 `message has invalid content` ⇒ 会话**回放不出来**
+  //   （打开即空、再发消息无反应），而盘上文件结构完好（容器级体检报 ok ⇒ 极易误判）。
+  //   这里同样钉**语义**（平台原文 `Array.isArray(content)`），不钉措辞：
+  //   ③ 行为腿：producerContent() 必须给**内容块数组**（每块 type 非空字符串），且每次返回新对象；
+  //   ④ 结构腿：全 lib 的**调用点**必须经 producerContent()，不得再直传裸串。
+  const c1 = producerContent("hello")
+  assert.ok(Array.isArray(c1), "content 必须是**数组**（v4 seed 层：!Array.isArray ⇒ 抛 invalid content）")
+  assert.ok(c1.length > 0, "content 不得为空数组（空槽无意义且平台按无效对待）")
+  for (const blk of c1) {
+    assert.equal(typeof blk.type, "string", "每个内容块必须有字符串 type")
+    assert.ok(blk.type.length > 0, "内容块 type 不得为空串")
+  }
+  assert.equal(c1[0].text, "hello", "文本必须原样进 text 槽（不得丢字/改形）")
+  assert.notEqual(producerContent("hello"), c1, "每次必须返回新对象（平台会深冻结事件）")
+  assert.deepEqual(producerContent("hello"), c1, "但内容恒等")
+
+  let contentSites = 0
+  for (const f of libFiles) {
+    const src = stripComments(readFileSync(join(libDir, f), "utf8"))
+    for (const re of [/content:\s*r\.steer\b/, /content:\s*r\.inject\b/, /content:\s*stallNotice\(/]) {
+      assert.ok(!re.test(src), "lib/" + f + " 不得再把裸字符串直接当 content 传（v4 seed 层会打红整个会话）")
+    }
+    contentSites += (src.match(/content:\s*producerContent\(/g) || []).length
+  }
+  assert.equal(contentSites, 3, "三条注入/推回路径必须**全部**改用 producerContent()，实测 " + contentSites)
 })
 
 // ═════════════════════ A-9 纯文档改动不触发 ═════════════════════
