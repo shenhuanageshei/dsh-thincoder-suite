@@ -1043,8 +1043,15 @@ test("T-7（US-10 · D10）: parseChecklistDoc —— 列数不足/无状态列 
   assert.equal(real.rows.length, firstTableDataRows(realText),
     "解析出的条数必须 == 独立数出的数据行数（两处不同算法互证）")
   assert.equal(real.counts.total, real.rows.length)
-  assert.equal(real.counts.UNKNOWN, real.rows.length,
-    "该档状态列是中文长句（已修 / 已驳回…）⇒ 全部「未识别」：**不猜**（诚实口径，不是缺陷）")
+  // ★ 2026-10-17 交付评审 #5：原断言 (=="UNKNOWN 恰等于行数") 把这条腿**钉死在该档当前的列形状**上
+  //   （状态列是中文长句 ⇒ 全部「未识别」）；该档将来把状态列改成英文枚举就会红 —— 那是
+  //   「对**不属于本契约**的文档形状的依赖」（R4 脆弱测试形态）。改为**守恒式**：
+  //   每一行必须恰好落进一个状态桶；UNKNOWN 作为**读数**打印，不再作断言。
+  const bucketSum = ["TODO", "DOING", "BLOCKED", "PASS", "FAIL", "UNKNOWN"]
+    .reduce((a, k) => a + (real.counts[k] ?? 0), 0)
+  assert.equal(bucketSum, real.rows.length,
+    "守恒式：各行必须恰好落进一个状态桶（桶和 == 行数）—— 实测桶和 " + bucketSum + " / 行数 "
+    + real.rows.length + " / UNKNOWN = " + (real.counts.UNKNOWN ?? 0) + "（读数，不作断言）")
   assert.ok(real.columns.length >= 4, "列数 ≥4：实测 " + real.columns.length)
 
   // ④ 文档**读入口**的边界（`readChecklistDocs`；定点修复 5 的安全型扩张，已登记设计档 §15.2）：
