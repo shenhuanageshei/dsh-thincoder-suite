@@ -112,6 +112,14 @@ count-marks: 项|处|条|档|值|步|腿
 | **FR-10** | 复用面登记（**重定义**，评审 #10） | **明确不做宿主复用**；把 §2.2 的宿主事实落成**代码注释 + 静态断言腿**（本仓零 `todo_write` 调用点 · 看板与工具零 `todos` 投影读取）—— 原写"回归腿"**不可实现**（宿主行为无法在本仓 `node --test` 里复现），故改为**静态可机检**形态 | 无 | T-15 |
 | **FR-11** | 防漂移状态区 | 看板顶部状态区：当前目标 · 判据 · 欠账 · 本回合被推回次数（**复用批 34 既有读数**，不新建状态） | 批 34 既有面 | US-6 的一部分 |
 
+★★ **实施前必读：「可选依赖」怎么表达（2026-10-17 父侧只读侦察后补 —— 这是一个会直接搞死客户端半边的陷阱）**：
+
+- **事实**：`lib/client.js:1697` = `var inject = ["slots", "connection"];`（`:1724 exports.inject = inject;`）；全仓**零引用** better-sidebar 的任何面；宿主半边 `lib/index.mjs:102` = `export const inject = ["tools", "systemPrompt", "webServer", "llm", "subagents"]`。
+- **陷阱**：FR-5 要用 `ctx.betterSidebar.registerTab`。**若把 `"betterSidebar"` 加进 `inject` 数组**，则**没装 better-sidebar 时整个客户端半边会永远 `pending`** —— cordis 语义：**声明了但宿主未注册的服务 ⇒ 该条目永不激活**。后果**不是** FR-6 说的「降级」，而是**连设置页一起死**。
+- **正确写法（本仓已有先例）**：**不动 `inject` 数组**；在 `apply` 里用 **`ctx.get("betterSidebar")`** —— **`ctx.get` 豁免 inject 要求**，取不到即 `undefined` ⇒ 走 FR-6 的 `task_list` 看板渲染模式。本仓 `goals` 服务当年踩过同一个坑（属性读抛 `cannot get property "goals" without inject`，改 `ctx.get` 才好）。
+- **同理**：宿主半边要用任何新服务，**一律 `ctx.get`，不扩 `inject`**。
+- **可机检**：见 §九 **T-8①**（静态断言：客户端 `inject` 不得因本批新增条目）。
+
 ## 六、机制伪代码（前置 / 后置条件）
 
 ```
@@ -284,7 +292,7 @@ stateDiagram-v2
 | **T-5** | `renderTaskDigest` **纯确定性**：同 view 调两次逐字节相同；不含时间戳/百分比/步数 | 混入 `Date.now()` ⇒ 腿红 |
 | **T-6** | 畸形 `tasks.json` ⇒ `readTasksView` 不抛（fail-open）；写门拒（fail-closed） | 让读面抛 ⇒ 腿红 |
 | **T-7** | `parseChecklistDoc` 对列数不足的文本返回 `null`（**不部分解析**）；对真实验收档解析出正确条数与状态分布 | 允许 3 列也解析 ⇒ 腿红 |
-| **T-8** | 无 better-sidebar ⇒ 加载不抛 + 降级渲染可用 | 强制依赖 ⇒ 腿红 |
+| **T-8** | 无 better-sidebar ⇒ ① **静态**：客户端半边的 `inject` 数组**不因本批新增任何条目**（★ 见 §五 末的「可选依赖怎么表达」注 —— 靠 inject 声明可选依赖会让整个客户端半边在缺席时**永不激活**）② **运行时**：`ctx.get("betterSidebar")` 取不到 ⇒ 走 FR-6 的 `task_list` 看板渲染模式，**不抛** ③ 该渲染输出**由 `readTasksView()` 派生** | 把 `betterSidebar` 写进 `inject` 数组 ⇒ 腿红（「降级」会变成「整体失效」）；降级路径抛错 ⇒ 腿红 |
 | **T-9** | `ledger.mode = off` ⇒ 决策/任务区消失、防漂移状态区**仍在** | 连状态区一起关 ⇒ 腿红 |
 | **T-10** | `evidence` / `reason` 命中疑似凭据 ⇒ **拒写**（非打码） | 改成打码 ⇒ 腿红 |
 | **T-11** | **rev 冲突**：用陈旧 `expectedRev` 写 ⇒ 拒且零写入 + fail-loud 文案 | 忽略 rev ⇒ 腿红 |
