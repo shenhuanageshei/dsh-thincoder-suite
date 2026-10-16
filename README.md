@@ -3,13 +3,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![topic: dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-8957e5)](https://github.com/topics/dsh-plugin)
 
-**把「AI 写代码时的五条自我纪律」装进 [DSH（DeepSeek Harness）](https://deepseek.com)**——一个插件，十一个工具，**不改 DSH 本体一行代码**。它是给 **DSH 本身**写的（本机那种「桌面壳」只是 DSH 的一种包装方式，插件不依赖壳）。
+**把「AI 写代码时的五条自我纪律」装进 [DSH（DeepSeek Harness）](https://deepseek.com)**——一个插件，十五个工具，**不改 DSH 本体一行代码**；外加一套**你和模型共看同一份账本**的个人任务台账（批 36）。它是给 **DSH 本身**写的（本机那种「桌面壳」只是 DSH 的一种包装方式，插件不依赖壳）。
 
 > 移植自开源项目 [thincoder](https://gitee.com/shanghai-xinbo/thincoder)（上游 MIT 协议），向上游贡献者致谢。
 
 ---
 
-## 一句话：它替你挡掉哪五种翻车
+## 它替你挡掉哪六种翻车
 
 | 你遇到过 | 这个插件怎么治 | 工具 |
 |---|---|---|
@@ -18,8 +18,9 @@
 | **模型能力不够，越改越烂** | **把活交给更强的模型亲自写**，写完给你一份术后报告，你验收 | `escalate` |
 | **卡在同一个问题上反复失败** | **多个模型并行独立会诊**，各出各的结论，你逐条裁决 | `consult_start` |
 | **长任务跑着跑着就跑偏**——忘了最初的目标、改完没验证、没评审就宣告完成 | **每一步把目标/判据/欠账重新摆到眼前**：立项先写可验证判据（写不出就建不起目标）、完成要有跑过的证据、改完没验证就别想收尾 | `goal_criteria` / `goal_verify` / `anti_drift_config` |
+| **不知道「什么在等我拍板」**，也确认不了「我看到的就是模型看到的」 | **一套账本三面同源**：看板、每回合注入行、工具读的是**同一个读函数**；**完成必须留凭据**（没有凭据完不成）；**待你决策的项置顶** | `task_add` / `task_update` / `task_done` / `task_list` |
 
-**为什么这五个不是「又一套流程」**：它们的共同点是**每一条结论都要能被机械核对**——对账表、令牌、纪要、跑过的测试、判据的检查，都在磁盘上留痕。**不是靠信任模型，是靠留下可核对的痕迹。**
+**为什么这六个不是「又一套流程」**：它们的共同点是**每一条结论都要能被机械核对**——对账表、令牌、纪要、跑过的测试、判据的检查、台账凭据，都在磁盘上留痕。**不是靠信任模型，是靠留下可核对的痕迹。**
 
 ```mermaid
 flowchart LR
@@ -37,7 +38,7 @@ flowchart LR
 
 ---
 
-## 五个机制各自怎么跑
+## 六个机制各自怎么跑
 
 ### ① advisor：把「无限找茬」变成「有界对账」
 
@@ -135,11 +136,34 @@ flowchart TD
 - **三域分离**：落章域（跨回合跨重启）· 回合域（每回合归零）· 会话域（跨回合累计）——**每个标记恰属一域**。
 - **它不做什么**：不读别的插件的黑板（跨插件欠账注入是遗留项）；不做轮次/预算读数（读数可得性未验证，不造读数）。
 
+### ⑥ 任务台账：你和模型看的是**同一套账本**（批 36）
+
+```mermaid
+flowchart TD
+  W["唯一写门<br/>task_add / task_update / task_done"] --> J[("tasks.json<br/>唯一真源 · 修订号 rev")]
+  J --> R["唯一读函数 readTasksView()"]
+  R --> B["侧栏看板（只读）"]
+  R --> I["每回合注入行"]
+  R --> T["工具 task_list"]
+  W --> G{"门：凭据 / 五态迁移 / 卡住原因 / rev 冲突 / 疑似凭据"}
+  G -->|拒| Z["零写入 + 文案指路"]
+  style J fill:#e7f5ff,stroke:#1c7ed6,stroke-width:2px
+  style B fill:#e6fcf5,stroke:#0ca678
+```
+
+- **它治什么**：任务散在对话里、聊长了就丢；模型说「做完了」你没有对照物；**什么在等你拍板**看不到。
+- **一句话判据**：**你在看板上看到的，与模型同一回合读到的是同一份** —— 不是「同一个文件」的口头承诺，而是**三面只调同一个读函数**（结构保证）。
+- **四条硬规矩**：① **完成必须留凭据**（写不出「跑了什么、看到什么」⇒ 拒写且**零写入**）；② **五态流转**（待办 → 已接手 → 在做 → 完成 / 卡住），卡住必须说清**等外部**还是**等自己动手**；③ **待你决策的项单独成区且置顶**；④ 看板是**只读**的——不能打勾、不能改进度（写入口只有工具/对话）。
+- **多会话并行**：台账带修订号，两个会话同时写时**后写的会被拒并明确告知**（不会静默丢更新）。
+- **落点**：`<你的工作区>/.thincoder/tasks.json`（绑工作区 ⇒ 跨会话、跨重启都在）；**只增不删**（完成可重开，凭据不清空）。
+- **没有 better-sidebar 也能用**：装了 `dsh-better-sidebar` 就是右侧栏一个只读 tab；没装则用 `task_list view=board` 在会话里渲染**同一份内容**（降级不是缺失）。
+- **它不做什么**：不碰宿主自带的 `todo_write`（那是「本回合的工作便签」，每回合开始就被平台清空——**两个物种**）；不做截止日期；不做删除/归档；不做第二份存储。
+
 ---
 
 ## 底座：让长任务跑得完、失败看得见
 
-五个机制共用一层基础设施（**全部插件自建，DSH 平台零修改**）：
+六个机制共用一层基础设施（**全部插件自建，DSH 平台零修改**）：
 
 | 能力 | 人话 |
 |---|---|
@@ -247,7 +271,8 @@ node -e "const fs=require('fs');const p='<profile>/node_modules/@dsh-external/ds
 生效值 = user 层（字段级覆盖 base）⊕ base；user 层缺失或损坏则回落 base。user 层可配字段白名单：
 `advisor.round1/convergence` 组（provider/model/effort/timeoutMs/runner）、`advisor.includeProjectGuide`、`advisor.maxOutputTokens`、
 `advisor.contextTokens`、`advisor.standardsDoc`、`advisor.documentMapDoc`、`advisor.criteriaDoc`、`consultModels`（整体替换）、
-`engCoderMaxTokens`、`engCoderEffort`、`codexCli`、`dshBackgroundTimeoutMs`、`consultTimeoutMs`、`engTokenTtlMs`——其余字段（`engineering` 等）
+`engCoderMaxTokens`、`engCoderEffort`、`codexCli`、`dshBackgroundTimeoutMs`、`consultTimeoutMs`、`engTokenTtlMs`、
+`ledger`（批 36 个人任务台账：开关 / 文档清单 / 话术模板）——其余字段（`engineering` 等）
 只在 base 配。文件示例：
 
 ```json
@@ -316,6 +341,11 @@ host API 前缀 `/thincoder-suite/api`（GET/PUT/DELETE `/config`、GET/DELETE `
         engineering: false             # 所有会话默认进工程模式（默认 false）
         engTokenTtlMs: 604800000       # design token 有效期（合法 600000..2592000000 = 10min..30d；缺省 7d）
         consultTimeoutMs: 1800000      # 会诊单个模型超时（合法 30000..3600000 = 30s..1h）
+        # 个人任务台账（批 36；键语义见 docs/2026-10-16-task-ledger-design.md §十四）
+        ledger:
+          mode: standalone             # off | standalone（缺省 standalone；off 只关个人台账分区，防漂移状态区仍在）
+          docPaths: []                 # 结构化验收档路径清单（相对工作区根；最多 8 条；只读渲染勾选态）
+          # copyTemplate: 说人话大白话，说清楚前因后果，给建议。   # 复制话术模板（缺省即此句）
         antiDrift:                     # 批 34 长任务防漂（见 docs/2026-10-14-anti-drift-design.md）
           inject: true                 # 每步注入「目标 + 判据 + 欠账」行（默认 true）
           completeGate: true           # 目标完成门：无证据不许宣告完成（默认 true）

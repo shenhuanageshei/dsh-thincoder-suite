@@ -49,7 +49,7 @@ count-marks: 项|处|条|档|值|步|腿
 
 ## 五、本仓专有：怎么跑测试 / 文档纪律
 
-- **测试**：`npm test`（= `node --test`，全仓 **29 档**）。
+- **测试**：`npm test`（= `node --test`，全仓 **30 档**，批 36 起；此前 29）。
   **改档必跑**：`node --test test/doc-hygiene.test.mjs test/test-lifecycle.test.mjs`（文档面的回归闸门，现为 **31 条**）。
 - **文档地图**：新档必须在 [`docs/README.md`](./docs/README.md) 登记。
 - **`doc-shape` 块**：`docs/` 下的新档带 `<!-- doc-shape ... count-marks: ... -->`。

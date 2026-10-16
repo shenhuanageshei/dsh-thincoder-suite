@@ -11,7 +11,7 @@
 #   advisor.includeProjectGuide、advisor.maxOutputTokens、advisor.contextTokens（批 5）、
 #   advisor.standardsDoc、advisor.documentMapDoc（批 7）、advisor.criteriaDoc（批 13）、
 #   consultModels（整体替换）、engCoderMaxTokens、engCoderEffort、codexCli、dshBackgroundTimeoutMs、
-#   consultTimeoutMs、engTokenTtlMs（末两键 D-29 并入）。
+#   consultTimeoutMs、engTokenTtlMs（末两键 D-29 并入）、ledger（批 36 个人任务台账：开关与话术模板）。
 #   base 专属（user 层不接受）：engineering 等。
 #   下列示例值若在 user 层被覆盖，以 user 层为准。
 - insert:
@@ -45,3 +45,8 @@
         engineering: false
         engTokenTtlMs: 604800000     # design token 有效期（D-30：缺省值改为 7d，本 base 同步；值域 600000..2592000000 = 10min..30d；现已可从设置页覆盖）
         consultTimeoutMs: 1800000    # 会诊各模型看门狗（D-29：现已可从设置页覆盖；值域 30000..3600000；原 600000 会让慢模型把整轮吊满 10min）
+        # 个人任务台账（批 36；键语义见 README「配置（两层）」与 docs/2026-10-16-task-ledger-design.md §十四）
+        ledger:
+          mode: standalone             # off | standalone（缺省 standalone；off 只关个人台账分区，防漂移状态区仍在）
+          docPaths: []                 # 结构化验收档路径清单（相对工作区根；最多 8 条；只读渲染勾选态）
+          # copyTemplate: 说人话大白话，说清楚前因后果，给建议。   # 复制话术模板（缺省即此句）

@@ -389,7 +389,7 @@ test("U3c2 (D10-10 / AC-D5 / 锚 M6): 设置页可产出的顶层键 ⊆ 服务�
 
 // ————————————— U3c2b 白名单散文面三轴锁（批 14 / FR-2 · 锚 A3 + A4 · AC-4…AC-7） —————————————
 //
-// 主题：**「插件自己的契约」与「它对外声称的契约」的一致性**。权威面 = 三轴 8/8/5 = 21 名，
+// 主题：**「插件自己的契约」与「它对外声称的契约」的一致性**。权威面 = 三轴 9/8/5 = 22 名（批 36 起），
 // 分别从 `lib/index.mjs`（topAllowed / GROUP_KEYS+advisor 子键）与 `lib/config-store.mjs`
 // （GROUP_FIELDS）的**源码字面**解析；散文面 = 各档的**用户层白名单段**。要求**双向**：
 // 散文 ⊄ 权威（多写）与权威 ⊄ 散文（漂了没人知）都必红。
@@ -473,7 +473,7 @@ function groupFieldNames(segment) {
   return out
 }
 
-test("U3c2b (批 14 / FR-2 / 锚 A3+A4): 白名单散文面与权威面三轴一致（8/8/5 = 21 名，逐文件各一条 + 先钉基数 + 双向）", () => {
+test("U3c2b (批 14 / FR-2 / 锚 A3+A4): 白名单散文面与权威面三轴一致（9/8/5 = 22 名，逐文件各一条 + 先钉基数 + 双向）", () => {
   // —— ⓪ 权威面（源码字面；缺任一 ⇒ 断言落地即红）——
   const indexSrc = readFileSync(join(PLUGIN_DIR, "lib", "index.mjs"), "utf8")
   const storeSrc = readFileSync(join(PLUGIN_DIR, "lib", "config-store.mjs"), "utf8")
@@ -483,12 +483,12 @@ test("U3c2b (批 14 / FR-2 / 锚 A3+A4): 白名单散文面与权威面三轴一
   const ADV_SUB = lit(indexSrc, /\[\.\.\.GROUP_KEYS, ([^\]]*)\]/, "index.mjs 的 advisor 子键清单")
   const GROUP_FORM = lit(storeSrc, /const GROUP_FIELDS = \[([^\]]*)\]/, "config-store.mjs 的 GROUP_FIELDS")
   // ★ 先钉基数（A4）：不钉基数 ⇒ 解析器空转即恒真
-  assert.equal(TOP.length, 8, "权威面轴①（顶层）必须是 8 名，实测 " + TOP.length + " " + JSON.stringify(TOP))
+  assert.equal(TOP.length, 9, "权威面轴①（顶层）必须是 9 名，实测 " + TOP.length + " " + JSON.stringify(TOP))
   assert.equal(ADV_SUB.length, 6, "权威面轴②（advisor 子键，组键 round1/convergence 另归组轴）必须是 6 名，实测 " + ADV_SUB.length + " " + JSON.stringify(ADV_SUB))
   assert.equal(GROUP_FORM.length, 5, "权威面轴③（组**表单字段**）必须是 5 名，实测 " + GROUP_FORM.length + " " + JSON.stringify(GROUP_FORM))
   assert.equal(GROUPS.length, 2, "权威面组键（round1/convergence）必须是 2 名，实测 " + JSON.stringify(GROUPS))
-  assert.equal(TOP.length + ADV_SUB.length + GROUPS.length + GROUP_FORM.length, 21,
-    "三轴合计 = 8 + (2+6) + 5 = 21（`topAllowed` ×8 · advisor 子键 ×8 · 组字段 ×5）")
+  assert.equal(TOP.length + ADV_SUB.length + GROUPS.length + GROUP_FORM.length, 22,
+    "三轴合计 = 9 + (2+6) + 5 = 22（`topAllowed` ×9 · advisor 子键 ×8 · 组字段 ×5；批 36 把 ledger 并入顶层白名单 ⇒ 21 → 22）")
   const allNames = new Set([...TOP, ...ADV_SUB, ...GROUPS, ...GROUP_FORM])
 
   const ymlSrc = readFileSync(join(PLUGIN_DIR, "cordis.patch.yml"), "utf8")

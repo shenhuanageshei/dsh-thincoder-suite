@@ -6,6 +6,7 @@
 - 前序档：[`2026-10-14-anti-drift-requirements.md`](./2026-10-14-anti-drift-requirements.md) · [`2026-10-14-anti-drift-design.md`](./2026-10-14-anti-drift-design.md) · [`2026-10-16-anti-drift-handoff.md`](./2026-10-16-anti-drift-handoff.md)
 - 用户原始诉求（逐字）：**「我就不理解，为什么要用 team-link 的代码写台账，咱们 suite 没有自己的台账吗？要是我没装 team-link 怎么办？」** + **「这个看板最关键的一点：我看到的，跟会话 LLM 看得的是同一套账本吗？如果不是同一套，那就没意义了」** + **「我这里面看不到待我决策的项」**
 - 本批范围：**用户逐条拍板**（台账归属 / 存续 / 凭据 / 五态 / 字段 / 看板交互 / 挂载路径），拍板记录见 §四
+- **实施（2026-10-17）**：**已实施** —— 机检腿见设计档 §九（**T-1…T-15，T-4 拆 a/b ⇒ 16 条**，落在新档 `test/tasks.test.mjs`）；**实施期追加的登记面与两处落点实测见设计档 §十五**。★ 本交付**未执行任何命令**（验证命令由宿主执行并回执）⇒ 本档不写运行读数
 - 事实基线（2026-10-16 父侧实测）：
   - 装机 `@deepseek-ai/dsh` **0.2.0-rc.2**（`app.asar` → `dsh/node_modules/@deepseek-ai/dsh-app-boot/package.json`）
   - **DSH 右侧栏原生槽位存在**：`sidebar.right.pane.tab`（asar 内实测槽位名清单，§四 D-1 引用）

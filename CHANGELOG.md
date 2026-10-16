@@ -161,6 +161,32 @@
 
 
 
+### 同版交付面：批 36「个人任务台账 + 侧栏看板」（2026-10-17）
+
+> **一句话（人话）**：给你和模型**同一套账本**。以前任务散在对话里，聊长了就丢，模型说「做完了」你也没有对照物，**更看不到「什么在等你拍板」**。现在：**看板**（右侧栏一个只读页）· **每回合注入行** · **工具**三面读的是**同一份** `<工作区>/.thincoder/tasks.json`——不是「同一个文件」的口头承诺，而是**三面只调同一个读函数**（结构保证）。**完成必须留凭据**（写不出「跑了什么、看到什么」⇒ 拒写、一个字节都不动）；**待你决策的项单独成区且置顶**；看板**只读**，不能打勾、不能改进度。
+
+**一、为什么要加（人话）**：用户原话三条——「**我这里面看不到待我决策的项**」「**我看到的，跟会话 LLM 看得的是同一套账本吗？如果不是同一套，那就没意义了**」「要是没装 team-link 怎么办？」。批 34 的防漂只锚了**目标层**（目标/判据/证据），**任务层**是空的；而它唯一触及任务的机制落在**另一个插件**里 ⇒ 没装那条就整条失效。
+
+**二、怎么用（人话）**：让模型用四个工具记：`task_add`（建单，**必须写「怎么算完成」**）· `task_update`（改标题/判据/为什么/优先级）· `task_done`（五态流转：待办 → 已接手 → 在做 → 完成/卡住；**完成要凭据**、**卡住要说原因并区分「等外部/等自己动手」**）· `task_list`（读；`view=board` 就是看板）。装了 `dsh-better-sidebar` 则右侧栏多一个 **Thincoder 任务** tab（默认折叠，展开即看：防漂移状态区 → **待你决策（置顶）** → 卡住 → 任务 → 完成计数；点任务可看详情＋一键复制「问这一项」话术）。**没装也能用**：`task_list view=board` 在会话里渲染同一份内容。
+
+**三、改了什么（技术面）**——新增 `lib/tasks.mjs`（**唯一写门** `applyTaskCreate`/`applyTaskUpdate`/`applyTaskTransition` + **唯一读函数** `readTasksView()` + 注入摘要 `renderTaskDigest()` + 结构化文档只读源 `parseChecklistDoc()`）与 `lib/tool-tasks.mjs`（四个工具 + 看板载荷 + 降级渲染）；`lib/index.mjs` **只注册接线**（把任务摘要**并入既有那条** `systemPrompt.context`——**不新开注入通道**）并新增 `GET /thincoder-suite/api/tasks`（看板的数据通道，复用既有信任栅栏）；`lib/client.js` 注册 better-sidebar tab（**只读**，零存储、零写盘）。**落点与键控自建**：`<工作区根>/.thincoder/tasks.json`，键 = 工作区根绝对路径（**明文禁止**照搬 `goal-criteria.json` 的 profile 根做法——那会把文件写错地方）。**多会话并行**：修订号 + 读-改-写冲突检测，冲突 **fail-loud** 且**零写入**。★ **定点修复（2026-10-17 · 独立偏离审计 7 条）**：`task_update` 传**只读字段**（`id`/`kind`/`status`/`evidence`/`blockedReason`/`blockedBy`/`createdAt`/`doneAt`）此前会被工具层的「白名单搬运」**静默丢掉然后写入成功**（调用方以为改了状态，盘上什么都没发生）⇒ 现在工具层**先判越界键**：**整单拒写、逐个点名字段、零写入**（工具描述里那句 `is REFUSED (not silently ignored)` 由此成立）。
+
+**四、有意改锁 / 计数（逐条留痕）**——① `lib/contract-baseline.mjs` 的 `textTool` 注册点 **11 → 15**（+4 工具：`task_add`/`task_update`/`task_done`/`task_list`），同断言在 `test/contract-baseline.test.mjs` 跟到 15，README 头部「N 个工具」由 N-4 腿同批互锁（十一 → 十五）；**`systemPromptSection` 仍为 3**（摘要并入既有 `context`，不挂 section）。② `topAllowed` **8 → 9**（并入 `ledger`）⇒ 白名单散文面三轴锁 `test/config-api.test.mjs` 的 U3c2b 基数 **21 → 22**，散文面三处同改（`cordis.patch.yml` / `README.md` / `config-store.mjs` 头注释）。③ `test/guard-e.test.mjs` 的 T-E19 档清单 **+1**（`tasks.test.mjs`）；`docs/test-lifecycle.md` 新增该档行（**16 条腿** · 层 ② · standing）。
+
+**五、验证读数**——**批 36 实施交付未执行任何命令**（任务书明令：验证命令由宿主执行并回执）。静态读数（父侧可独立复核）：新档 `test/tasks.test.mjs` 顶层 `test(` = **16**（T-1…T-15，T-4 拆 a/b），覆盖设计档 §九 全部 16 条腿；`lib/tasks.mjs` · `lib/tool-tasks.mjs` 只 import `node:` 内建与仓内相对模块（零新增依赖、零宿主 import）；`lib/**` 内 `todo_write`/`todos` 的**引号字面**零命中（软引导只以裸词出现在描述与注释里）。**全量运行计数待宿主实测**（本行**不预填**数字——本仓纪律：只写实测到的读数）。
+★ **2026-10-17 定点修复批（独立偏离审计 7 条 · 只修这 7 条）本轮实测读数**：`node --test test/tasks.test.mjs` ⇒ `ℹ tests 16 | ℹ pass 16 | ℹ fail 0`（exit 0，**修前实测 15/16**——红的正是 T-8① 的 realm 缺陷）；文档闸门 `node --test test/doc-hygiene.test.mjs test/test-lifecycle.test.mjs` ⇒ **31/31 绿**（本批改了设计档 §九/§十四/§十五，必须过形状与台账对账闸门）。**全量套件计数（宿主实测，父会话亲跑 2026-10-17）**：`node --test`（全量 **30 档**）⇒ `ℹ tests 647 · ℹ pass 647 · ℹ fail 0`（exit 0）；`test/contract-baseline.test.mjs` 单档 ⇒ `11/11`（exit 0）；`test/tasks.test.mjs` ⇒ `16/16`（exit 0）；文档闸门 ⇒ `31/31`（exit 0）。
+★ **一处不可复现的自报读数（如实登记）**：定点修复批自报「全量 `647/646/1`，唯一红项 A28-4，且单档跑同样红」——**宿主用同一条命令实测全绿**（`647/647/0`，且该档单跑 11/11）。该批自陈「本会话没有通用 shell 工具，改用 ego-browser 的 Node 运行时执行命令」⇒ **换了执行宿主，环境（cwd / env / PATH / 可见文件面）与真实宿主不同**，这是该假红最可能的来源。**教训（已记入本仓 AGENTS.md 第 2 节）：「别人的读数 = 未验证」。** 故本批**无需**它提出的 A28-4 任何处置。
+
+**六、文档与评审**：[需求档](./docs/2026-10-16-task-ledger-requirements.md) + [设计档](./docs/2026-10-16-task-ledger-design.md)（设计评审**两轮 21 条**折入，轮 2 `VERDICT: PASS`，令牌有效至 2026-10-23）· [会诊纪要](./docs/consult-minutes/2026-10-16-consult-83-minutes.md)（consult #83，4/5 交付）。**实施期发现（已登记设计档 §十四 与 §十五）**：登记面分两类，**清单与计数分列**——
+
+- **① 父侧在实施前补进 §十四 的 2 处**（新建测试档的**同批登记面**）：`test/guard-e.test.mjs` 的 T-E19 硬编码档清单 · `docs/test-lifecycle.md` 的逐档处置行。
+- **② §十五 表内由本批交付机械触发的 6 处**：`lib/contract-baseline.mjs` 与 `test/contract-baseline.test.mjs` 的注册面计数（`textTool` 11 → 15）· `test/config-api.test.mjs` 的白名单基数（8 → 9 / 21 → 22）· `cordis.patch.yml` 的用户层白名单散文段 · `README.md`（白名单段 + 头部「N 个工具」互锁）· `docs/README.md` 的状态行 · `AGENTS.md` 的档数声明（29 → 30）。
+
+这 8 处（2 + 6）都是**由本批交付机械触发的常设锁**，不改就必红。
+
+**七、已知残留（诚实清单）**——① **`tasks.json` 只增不删**（删除/归档排第二批）；② **设置页没有台账表单**（三键在 user 层白名单内，可手编 `config.json` 或走 PUT API，但没有可视控件）；③ **U-1 未实测**：「点一下在侧边开一个会话」这条路径**没有端到端验证过** ⇒ 本批按设计档明写的**降级路径**实现（点开看详情 + 一键复制话术），**不假装支持**；④ **需重启 DSH 才生效**（装配期注册；重启时机由用户定）；⑤ **注入行的精确字数预算**（设计档 U-4）按 512 量级落地，未用真实样本重新标定；⑥ **两条「离开某态即清该态专属字段」的语义是设计档未明写、实现定死的**（离开「卡住」清 `blockedReason`/`blockedBy` · 离开「完成」清 `doneAt`；理由是**板面正确性**——否则会给在做/重开的任务显示陈旧读数）：**2026-10-17 定点修复批已登记**（设计档 **§15.2 第 1 行**，含理由与被否决的备选）；同节第 2、3 行登记另两条**设计档未明写的安全型扩张**（越出工作区的文档路径**拒读且拒在读之前** · 文档路径清单上限 **`MAX_DOC_PATHS = 8`**，读面截断 / 写面拒）。
+
+
 ## [0.30.1] — 2026-10-09
 
 > **一句话**：修掉**工程模式实施通道的「派发即死」**——`eng_coder` 把子代理派到**用户早已切换掉的旧模型通道**上（插件拿「建会话那一刻的模型」当「会话现在用的模型」，并**显式覆写**给子代理），并对这次死亡**一个字都不留**（全文只有 `eng_coder ended: error` + 空 partial）。设计档 [`docs/2026-10-09-eng-route-live-design.md`](./docs/2026-10-09-eng-route-live-design.md)。**本版改 `lib/**` ⇒ 重启 DSH 后生效**。
