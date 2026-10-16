@@ -361,7 +361,8 @@ stateDiagram-v2
 | `lib/index.mjs` | 修改 | 注册上述工具；把任务摘要**并入既有注入行**（不新开通道）；**零 `todo_write` / 零 `todos` 投影读取**（FR-10 / T-15） |
 | `lib/client.js` | 修改 | 注册 better-sidebar tab（**只读** `readTasksView()` 的快照）；决策区置顶 + 任务区 + 状态区；两个复制按钮 |
 | 既有配置面（**落点在实施第一步回读确认** —— 本仓配置读写集中在哪一档由实测定） | 修改 | `ledger.mode`（`off \| standalone`）· 结构化文档**路径清单** · 复制话术**模板** |
-| `test/tasks.test.mjs` | **新建** | **T-1…T-15**（T-4 拆 a/b ⇒ 共 **16 条腿**），含变异自证 |
+| `test/tasks.test.mjs` | **新建** | **T-1…T-15**（T-4 拆 a/b ⇒ 共 **16 条腿**），含变异自证。★ **腿必须写成一档里的顶层 `test(` 调用**（本仓闸门按 `/^\s*test\s*\(/gm` 数） |
+| **`test/guard-e.test.mjs`** + **`docs/test-lifecycle.md`** | **修改**（★ 2026-10-17 父侧补 —— 原表**漏了这两处**，会导致 S5 验收必红） | **新建测试档必须同批两处登记**：<br>① `test/guard-e.test.mjs:756` 起的硬编码 `existing` 数组**加一行** `"tasks.test.mjs",`（`:857` 是 `assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort())`，**未登记的新档会让 deepEqual 转红**）；<br>② `docs/test-lifecycle.md` **§三 逐档处置行**加一行 `\| tasks.test.mjs \| <用法数> \| ② \| standing \| — \| <说明> \|`（`test/test-lifecycle.test.mjs:161-162` 做 **台账 ↔ fs ↔ T-E19 清单** 三方对账）。<br>★ **两道纪律**：**a)** 该档**自己在注释里点名**「在其落地的同一 stage 内登记，不得攒到最后一次性补」（guard-e `:754-755` 原文）；**b)** 「用法数」由闸门**自己 fs+正则算得**（顶层 `test(` 计数），**不读台账** ⇒ 数字必须**实测后再填**，禁抄 |
 | `docs/2026-10-16-task-ledger-{requirements,design}.md` | 修改 | 实施状态回填（**只回填实测读数，不预填**） |
 | `README.md` · `CHANGELOG.md` | 修改 | 计数与功能条目**同批**（本仓纪律：计数与列表必须同一次编辑） |
 
