@@ -1504,6 +1504,23 @@ test("T-19（§16.3）: 缺 commands 服务 ⇒ 不抛/不注册/只 warn（工�
     assert.ok(!/ctx\.commands\b/.test(cmdCode), "命令服务不得用属性读（cordis 白名单会当场抛）：只许 ctx.get")
     assert.ok(/ctx\.commands\b/.test('const it = ctx.commands.register(def)'), "自证：代码里的属性读必须能被同一谓词抓到")
     assert.ok(/ctx\?\.get\?\.\("commands"\)/.test(cmdCode), "必须能定位到 `ctx.get(\"commands\")` 这一行（语义锚点）")
+
+    // ⑤ ★ 2026-10-17 **独立审计 Q6/Q8 补的腿**：本单新增的**写入通道**
+    //    `POST /thincoder-suite/api/tasks/claim` —— 之前**零机检**（T-17 只断言了 URL 字符串，
+    //    而 fetch 是 stub ⇒ 真路由与信任栅栏只靠"结构上应该对"）。这里用**源码级结构断言**钉住两条：
+    //    (a) 该路由的注册位置**必须在信任栅栏之后**（否则未鉴权就能改归属）；
+    //    (b) 它的回调里**不得直接写盘**（判定全在写门）—— 用「回调体内零 writeFile/commit 直调」取证。
+    const fenceIdx = hostSrc.search(/connection\s*\.\s*requestRejection|requestRejection\s*\(/)
+    assert.ok(fenceIdx > 0, "必须能定位到信任栅栏（定位不到 ⇒ 下面两条是真空断言）：" + fenceIdx)
+    const claimRouteIdx = hostSrc.search(/["'][^"']*\/tasks\/claim["']/)
+    assert.ok(claimRouteIdx > 0, "必须能定位到 POST /tasks/claim 路由注册（定位不到 ⇒ 本腿恒真空）")
+    assert.ok(claimRouteIdx > fenceIdx,
+      "★ /tasks/claim 必须注册在**信任栅栏之后**（fence@" + fenceIdx + " vs route@" + claimRouteIdx + "）"
+      + " —— 否则未鉴权就能改归属")
+    // (b) 回调体：从路由串到下一个 `}` 的粗切片里，不得出现直写（writeFileAtomic / commit( / fs 写）
+    const slice = hostSrc.slice(claimRouteIdx, claimRouteIdx + 900)
+    assert.ok(!/writeFileAtomic\s*\(/.test(slice), "claim 回调不得直接写盘（判定必须在写门里）：\n" + slice.slice(0, 400))
+    assert.ok(!/\bcommit\s*\(/.test(slice), "claim 回调不得直调内部 commit（那就是绕过写门）：\n" + slice.slice(0, 400))
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
@@ -1579,4 +1596,4 @@ test("T-20（§16.3 · 铁律 4）: /task_done 无凭据 ⇒ 写门拒且零写�
 // `evidence-required` 断言红（拒绝码变成命令层自造的，写门的凭据门被绕过）；让命令层直接写盘
 // （绕过 applyTaskTransition）⇒ ① 的 sha256 与状态两条同时红。
 
-// ═══════════════ 腿部收口（21 条 = T-1…T-20，T-4 拆 a/b，T-19 拆 a/b） ═══════════════
+// ═══════════════ 腿部收口（21 条 = T-1…T-20 整 20 条 + T-4 拆 a/b 多出 1 条 = 21；**T-19 未拆**） ═══════════════

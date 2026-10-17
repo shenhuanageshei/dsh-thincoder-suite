@@ -494,7 +494,13 @@ function apply(ctx) {
 | `node --test test/doc-hygiene.test.mjs test/test-lifecycle.test.mjs` | `ℹ tests 31 · ℹ pass 31 · ℹ fail 0`（exit 0） |
 | `node --test`（全量 30 档） | `ℹ tests 652 · ℹ pass 651 · ℹ fail 1`，唯一红项 = **`A28-4`**（`contractWatch` 在空 ctx 下的版本读数）。**已证明与本单无关**：用 `git archive HEAD` 导出**未改动的 HEAD**、在同一执行宿主上跑同一档 ⇒ **同样红**（该档在真实宿主上曾复现不出来，见 CHANGELOG 上一交付的「换执行宿主假红」登记）⇒ **不处置**，如实登记 |
 
-**实施期由常设锁机械追加的登记面（不改则交付必红 · 与 §十五 同款处置）**：
+**实施期由常设锁机械追加的登记面（与 §十五 同款处置）**：
+
+> ⚠ **2026-10-17 措辞订正（独立审计 Q8 指出原文过宽）**：原先一句「不改则交付必红」把下表五处并称，
+> **实况是两类**：**真锁 2 处**（`lib/contract-baseline.mjs` 的 `textTool` 计数 · `test/contract-baseline.test.mjs`
+> 的中文数词表与 README 互锁）—— 不改**必红**；**文档卫生 2 处**（`docs/README.md` 状态行 · `README.md`/`CHANGELOG.md`
+> 的计数与条目）—— 不改**由 doc-hygiene 判红**，性质是「状态行与事实同步」而不是锁的期望值。
+> **⇒ 两类都改了，但不再混称"必红"。**
 
 | 追加文件 | 为什么非改不可（机械耦合） | 改了什么 |
 |---|---|---|
@@ -516,6 +522,7 @@ function apply(ctx) {
 | 1 | **看板「接手」按钮真的写**：新增 `POST /thincoder-suite/api/tasks/claim`（复用 §7.4 的同一条 HTTP 通道与**同一道信任栅栏**，回调零状态机 ⇒ 判定全在 `applyTaskClaim`）。**收窄声明**：本单之后「看板零写操作」应读作「**唯一的看板写入 = 改归属（owner/claimedFrom）**；状态、凭据、卡住原因**仍然不可从看板改**」 | 「点接手」是 §16.2 写明的交接动作（用户原话流程：打开看板 ⇒ 待接手 N ⇒ **点接手** ⇒ 继续）。若只复制一条命令，用户要再来回粘贴一次 —— 那不是「接手」，是「提示去接手」。D9 之所以禁看板写，理由是「完成必须带凭据，点一下就勾掉会把这套机制的根废掉」——**接手不碰状态与凭据，故不触犯该理由** | ① 按钮只复制 `/task_claim <id>`（零新写入通道，但交接多一步、且与本单「点接手」表述不符）；② 完全不做按钮（§16.2 的「点接手」落空） |
 | 2 | `applyTaskClaim(ws, { id, expectedRev, **sessionId** })`：**缺接手方会话 id ⇒ `owner-required` 拒**（不落 `null`） | §16.2 的签名只写了 `{ id, expectedRev }`，但 `owner` 必须来自某个会话。建单时落 `null` 是**诚实**（那台机器真不知道会话是谁）；接手时落 `null` 则是**静默把归属抹掉**——用户点一下「接手」反而变成「没人管」 | 缺 id 时落 `null`（会静默抹掉旧 owner，且 `claimedFrom` 也失去意义） |
 | 3 | 三区判据单源：`isOwnedBy` / `isClaimableBy` / `tasksInScope`（`lib/tasks.mjs`）· **无会话 id ⇒ `defaultScope = "all"`** 且**不可接手**（`canClaim:false`，按钮不渲染） | ① 判据只许有一份（三面共用，与 D3 同一条纪律）；② 无会话 id 时「本会话」恒空 ⇒ 默认给「全部」，否则看板会骗人；③ 没有会话 id 就落不了 owner（写门会拒）⇒ 把它算成「可接手」等于给一个**点不动的按钮** | 前端自己按 `owner === sessionId` 过滤（= 长出第二份判据）；无会话 id 时仍默认「本会话」（空看板） |
+| **4**（★ 2026-10-17 独立审计 Q4 补登） | **`/task_add` 有一处「参数形态」前置提示**：`|` 两边为空 ⇒ 直接回用法文案，**先于写门**拦下 `title-required` / `check-required`（`lib/task-commands.mjs` 的 `task_add` handler） | 用户没按 `/task_add <标题> \| <怎么算完成>` 的格式写时，**回格式提示比回拒绝码有用**；它**不是**状态机/凭据校验（那两样一律由写门做）。**代价如实说**：这一种输入看不到写门的拒绝码 | ① 让它落到写门（拿到 `title-required`，但用户看到的是一串码而不是「格式怎么写」）；② 干脆不提示（最差） |
 
 **已知残留（如实登记）**：
 
