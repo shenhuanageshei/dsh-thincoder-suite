@@ -2,6 +2,49 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.31.1] — 2026-10-17
+
+> **一句话（人话）**：**平台从 0.2.0 升到 0.2.1，侧边栏的「Thincoder 任务」面板消失了**。两处原因，一处是陈旧声明、一处是**我们自己的静默跳过**——都已修，面板已回。
+
+**【计数行】**：`node --test` **652/652**（**基线 652 + 本批 0**：本次是**兼容性修复**，未新增用例；顶层仍 **30 档 652 例**，`test/config-api.test.mjs` 34 与 `test/tasks.test.mjs` 21 不变）。
+
+**一、为什么消失（两条独立原因，第一条不是根因）**
+
+1. **陈旧声明**：`package.json` 的 `dsh.client.inject` 里列着 `@deepseek-ai/dsh-client-runtime`，而该包在 0.2.1 的 `app.asar` 里**已经不存在**（**字节级扫描**：`dsh-client-runtime` 0 命中，而 `dsh-client-ui-slots` 79 / `dsh-client-connection` 96 / `dsh-client-modules` 60）。我们的 `lib/client.js` 全文**只用 `require("react")`**，`'client-runtime'` 出现 **0 次** —— 这条依赖**从来没被用过**，纯属累赘。
+2. **★ 真根因：`apply` 里只取一次服务，拿不到就静默跳过。** 原实现：
+   ```js
+   try { betterSidebar = ctx.get("betterSidebar"); } catch { betterSidebar = null; }
+   if (betterSidebar && typeof betterSidebar.registerTab === "function") { /* 注册 */ }
+   // ← 拿不到就什么都不做，也不报错
+   ```
+   0.2.1 改了插件装配时序 ⇒ 我们 `apply` 跑时服务**还没 provide** ⇒ **静默跳过注册**。后果：tab 的**描述符**仍从持久化恢复（标签条上有名字），但**渲染器没注册** ⇒ better-sidebar 显示「**这类内容还没有可用的查看方式。**」，**且 Console 零报错**。
+
+**二、怎么定位的（过程如实记录，含两次误判）**
+
+- ✅ 宿主半边**活着**（`task_list` 正常）⇒ 插件装了、加载了
+- ✅ 截屏看到 tab **在**、内容区是「这类内容还没有可用的查看方式」
+- ❌ 先判「`dsh-client-runtime` 被删是根因」⇒ 删掉它 **没有修好**（该修复本身正确，但不是根因）
+- ❌ 再判「slot 改名 / inject pending」⇒ 字节级扫描证明 `settings.section`(37) 与 `plugins.bundle.config`(18) **都还在**；`slots`/`connection` 两个服务 better-sidebar 自己也在用
+- ✅ **DevTools 定案**：用 Win32 注入 `Ctrl+Shift+I` 打开 DevTools ⇒ **Sources** 的 `plugins/@dsh-external/` 下**有我们**（模块加载了）· **Console** 过滤 `thincoder` ⇒ **0 条**（不是崩溃，是**根本没走到注册**）
+- ✅ `contractWatch`：平台版本 **0.2.1-rc.2**，宿主**十条契约锁全绿** ⇒ 失败只在客户端
+
+**三、修了什么**
+
+| 文件 | 改动 |
+|---|---|
+| `package.json` | `dsh.client.inject` 删掉 `@deepseek-ai/dsh-client-runtime`（保 `ui-slots` + `connection`） |
+| `lib/client.js` | 服务获取改**有界重试**：24 × 250ms = 6s 上限；成功即停；到上限**只 warn 一条**，不影响设置页与工具；`dispose` 里清定时器 |
+
+**四、验证（父会话亲跑）**
+
+- `node --check lib/client.js` ⇒ 0 · `node --test test/tasks.test.mjs` ⇒ **21/21**
+- **真机**：DevTools `Ctrl+R` 重载被测页面 → 等 9s（覆盖 6s 窗口）→ 截主窗口右栏 ⇒ 面板回来，头部 `待你决策 0 · 在办 2 · 卡住 0 · 完成 2 · 待接手 0 · rev 13`
+
+**五、诚实清单（没做的）**
+
+- **没有腿**：这次事故**零机械检测**——九条契约锁**没有一条**管客户端加载。该补两条：① `dsh.client.inject` 里每个模块在当次 DSH 里**必须存在**；② 客户端 `apply` 成功后要有**可观测标记**（现在只能靠人看面板在不在）。已记入任务台账。
+- **生效方式**：客户端改动 ⇒ 切 tab / 重载页面即可；`dsh.client.inject` 改动 ⇒ **需重启 DSH**。
+
 ## [0.31.0] — 2026-10-14
 
 > **一句话（人话）**：给插件**多开一条 codex 通道**。以前 codex 只有一条路——在本机起 `codex exec` 子进程；你这台机器上那条路**一遇到「要执行命令」就挂**（Windows 沙箱助手起不来 + 联网子系统超时）。现在多了一条：走**平台自带的 codex 支持**（官方 app-server 协议），用于**只读类**任务（会诊 / 评审）。两条通道并存，用哪条写在配置里，一眼可辨、随时可退。
