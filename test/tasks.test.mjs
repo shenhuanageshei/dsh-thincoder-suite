@@ -646,10 +646,19 @@ test("T-4a（US-5 ① · N-1）: 看板 ≡ 工具读（同一 ws 逐条相等�
     const listText = await tools.task_list.execute({}, { agent: { session: { id: "s-1" } } })
     const boardText = await tools.task_list.execute({ view: "board" }, { agent: { session: { id: "s-1" } } })
     assertSameTaskSet(textEntries(listText), view, "task_list（list 模式）")
-    // 看板渲染模式里「已完成」只给计数 ⇒ 它的条目集 = 全部 **减去** 完成态
+    // ★ 2026-10-17 **取代关系**（用户实测「看板里只有待办、没有已完成，不是 5 态吗？」）：
+    //   本单之前，「已完成」是 `countOnly` 分区 —— 只打一个数字、**不列条目**；
+    //   用户指出那让完成态**看不见内容**（完成凭据本身就是这套机制的核心产物）⇒ 改为**正常分区**。
+    //   ⇒ 这里的期望值随之从「board 模式的条目集 = 全部**减去**完成态」改为「= 全部」。
+    //   **判据没有放宽**：仍是「看板渲染出的条目集与 `readTasksView` 逐条相等」。
     const boardEntriesFromText = textEntries(boardText)
-    assertSameTaskSet(boardEntriesFromText, { tasks: view.tasks.filter((t) => t.status !== "完成") }, "task_list（board 模式）")
-    assert.ok(boardText.includes("已完成（1）"), "board 模式对完成态只给计数：\n" + boardText)
+    assertSameTaskSet(boardEntriesFromText, view, "task_list（board 模式）")
+    // 「已完成」分区必须**真的列出**完成项（id + 标题 + 凭据），而不只是一个计数
+    assert.ok(boardText.includes("已完成（1）"), "board 模式必须有「已完成」分区：\n" + boardText)
+    assert.ok(boardText.includes("已完成的一条"),
+      "完成项的**标题**必须看得见（不能只给一个数字）：\n" + boardText)
+    assert.ok(boardText.includes("跑了 12/12 绿"),
+      "完成项的**凭据**必须看得见 —— 完成凭据是这套机制的核心产物：\n" + boardText)
 
     // ③ N-1 的**grep 证明**：看板侧零写盘 / 零自解析（静态面）
     //    ★ 判据取**调用形态**（不是裸词）：注释里点名「不用 localStorage」不算违规，
