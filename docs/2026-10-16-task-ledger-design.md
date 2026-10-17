@@ -409,3 +409,75 @@ stateDiagram-v2
 **本单其余五条（第 1、2、3、6、7 条）的落点**（**不在本节**，逐条给指针，防读者在 §十五 找不到）：① 第 1 条「测试档 realm 缺陷」（`node:vm` 另一 realm 的 Array ⇒ `deepEqual` 判不等）⇒ 修在 `test/tasks.test.mjs` 的 T-8①；② 第 2 条「工具层静默丢弃只读字段」⇒ 修在 `lib/tool-tasks.mjs` 的 `strayArgKeys` 前置（由 `test/tasks.test.mjs` 的 T-3⑥ 取证）；③ 第 3 条「腿强度不足（T-4a / T-8⑤）」⇒ 判据写进 **§九 T-4a 行**；④ 第 6 条「T-15 的谓词口径」⇒ 写进 **§九 T-15 行**；⑤ 第 7 条「`guard-e` 的行号漂移」⇒ 订正在 **§十四**（原地）。
 
 ★ **运行读数（本单实测，非预填）**：`node --test test/tasks.test.mjs` ⇒ `ℹ tests 16 | ℹ pass 16 | ℹ fail 0`（exit 0）。§十三 所述「批 36 实施交付未执行任何命令」指的**是上一交付**（任务书明令由宿主执行）；本追加登记批是宿主点名的**最小范围自证批**，故此处**写实测读数**。
+
+## 十六、批36-补：归属与交接 + 用户命令（2026-10-17 追加，用户拍板）
+
+> **来源**：用户实测后提出两个问题 ——「① 其他会话的台账都是空」② 「做了 `sessionId`，**交接轮换新会话的时候怎么办**？」
+> **裁定**：「**待接手区不判会话活性**」（用户 2026-10-17 原话「回『不判』」）。
+> **命令面**：用户原话「**模型工具要有，命令也要有 `/task_add` `/task_list` 等等**」。
+
+### 16.1 为什么不能只加一个 `sessionId`（用户识破的那个断层）
+
+新会话拿到**新的 `sessionId`** ⇒ 旧会话记的条目会从新会话的「本会话」视图里**全部消失** ⇒ **交接即失忆**。
+**⇒ 必须两个字段**：
+
+| 字段 | 语义 | 可变 |
+|---|---|---|
+| `createdBy` | 谁建的（审计事实） | **不可变** |
+| `owner` | 现在归谁负责 | **可改，且只能经 `task_claim`** |
+| `claimedFrom` | 接手时记下的旧 `owner` | 由 `task_claim` 写一次 |
+
+**向后兼容**：旧台账（本批之前写的）**没有 `owner`** ⇒ 读面视为 `owner = createdBy = null`（即「无归属」），**不报错、不迁移、不改写**。
+
+### 16.2 交接机制（这是「换新会话怎么办」的答案）
+
+- **看板三区**：**本会话**（默认，`owner === 当前会话`）· **待接手（N）**（`status ∈ 未完成` ∧ `owner !== 当前会话`）· **全部**。
+- **交接动作 = `task_claim(id)`**：只把 `owner` 改成当前会话（并记 `claimedFrom`），**不改 `status`** ⇒ **凭据门 / 五态 / rev 全不破**。
+- **轮换场景**：旧会话把活停在 `在做`/`卡住` ⇒ 新会话打开看板 ⇒「待接手 N 条」⇒ 点接手 ⇒ 继续。**这就是不断层的那一下。**
+- ★ **绝不自动改归属**（悄悄吞掉别人的活比断层更糟）。
+- ★ **待接手区不判会话活性**（用户裁定）：列表就是「别人/前任留下的未完成项」；不引入会话活性依赖（那会让判据 flaky）。
+
+**边界（如实登记）**：`dsh-team-link` 的 `team/<name>/tasks.md` 是**另一套台账**，本批**不做联动**，不假装打通。
+
+### 16.3 用户命令（C 面）
+
+**已实证可行**（父侧从 115 MB 的 `app.asar` 里挖到官方 `/compact` 的完整源码）：
+
+```js
+// 官方 @deepseek-ai/dsh-command-compact（逐字）
+const inject = ["commands", "compaction"];
+function apply(ctx) {
+  ctx.effect(function* () {
+    yield async () => { await Promise.allSettled(active); };   // teardown
+    yield ctx.commands.register({
+      definitionId: CommandDefinitionId("@deepseek-ai/dsh-command-compact"),
+      name: "compact", description: "...", handler,
+    });
+  }, "command-compact lifecycle");
+}
+// handler(invocation) => Promise<{ kind: "success" | "error", text, sourceEventSeq? }>
+// invocation = { rawInput, agent, signal, commandId }
+```
+
+**本批要加的四条**（同一条官方通道）：
+
+| 命令 | 行为 | 走哪道门 |
+|---|---|---|
+| `/task_list` | 打印看板（=`task_list` 的 board 模式） | 只读 |
+| `/task_add <标题> \| <怎么算完成>` | 建单 | **同一道写门**（不得自校验） |
+| `/task_done <id> \| <凭据>` | 标完成 | **同一道写门**（凭据门照旧） |
+| `/task_claim <id>` | 接手 | **同一道写门**（只改 `owner`） |
+
+**两条硬约束**：
+1. **`inject` 数组不扩**：用 `ctx.get("commands")` 取服务（与 §五末「可选依赖」纪律一致）。缺它 ⇒ **命令不注册，工具与看板照常**（只 warn）。
+2. **不 import 宿主包**：`CommandDefinitionId` 是**类型品牌**，运行时传纯字符串 `"@dsh-external/dsh-thincoder-suite/task_list"`；若运行时真做校验 ⇒ **如实报错**，不去加宿主依赖。
+
+### 16.4 腿（同批落在 `test/tasks.test.mjs`）
+
+| 腿 | 判据 | 变异自证 |
+|---|---|---|
+| **T-16** | `task_claim` **只改 `owner`**，`status` / `evidence` **逐字不变**；`claimedFrom` 记旧 owner | 让 claim 顺手改 status ⇒ 红 |
+| **T-17** | **两会话互不淹没**：同工作区两个不同 `owner` 的条目，各自「本会话」视图**只看到自己的**；「待接手」视图看到对方未完成的 | 让筛选恒返回全部 ⇒ 红 |
+| **T-18** | **向后兼容**：无 `owner` 的旧台账**能读**（`owner=null`），不抛、不迁移 | 让读面对缺字段抛 ⇒ 红 |
+| **T-19** | 命令面：缺 `commands` 服务 ⇒ **不抛**且四条都没注册；有则**四条全注册**（名字逐字） | 让缺服务时抛 ⇒ 红 |
+| **T-20** | 命令走**同一道写门**：`/task_done` 无凭据 ⇒ 拒且**零写入** | 让命令自己校验状态机 ⇒ 红 |
