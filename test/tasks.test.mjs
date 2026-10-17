@@ -1038,6 +1038,21 @@ test("T-14（US-8）: 决策分区在任务区**之前**且空集给明确空态
       for (const seg of ["待你决策（", "卡住（", "任务（"]) {
         assert.ok(!er.text.includes(seg), "空集**不得**渲染空分区：" + seg + "\n" + er.text)
       }
+      // ★ 2026-10-17 补（规则统一）：空分区规则**同样适用于 `countOnly` 分区**（「已完成」）。
+      //   ⚠ **实测教训**：最初我把这条断言写在上面的空账本分支里 —— **变异不红**，
+      //   因为**空账本走的是 `emptyState` 分支，压根不渲染任何分区**，断言恒真。
+      //   ⇒ 必须用「**有任务、但没有已完成项**」的账本，才能真验到 countOnly 分支。
+      const ws3 = freshWs()
+      try {
+        seedLedger(ws3, [task("t-1", { status: "待办", owner: "s-1", createdBy: "s-1", title: "在办的一条", check: "看得到" })], 0)
+        const one = buildTasksBoardPayload({ ws: ws3, sessionId: "s-1", config: {}, drift: null })
+        const tr = await renderClientBoard(one)
+        assert.ok(tr.text.includes("任务（"), "有任务时必须渲染任务分区（否则本腿恒真）：\n" + tr.text)
+        // 变异自证：把 client.js 的 countOnly 分支里 `if ((s.count || 0) === 0) continue;` 删掉
+        // ⇒ 下面这条红（文本里重新出现「已完成（0）」）。
+        assert.ok(!tr.text.includes("已完成（"),
+          "没有已完成项时**不得**渲染「已完成（0）」（T-14 空分区规则的 countOnly 版）：\n" + tr.text)
+      } finally { rmSync(ws3, { recursive: true, force: true }) }
     } finally { rmSync(ws2, { recursive: true, force: true }) }
   } finally {
     rmSync(ws, { recursive: true, force: true })
