@@ -635,6 +635,6 @@ function apply(ctx) {
 | `lib/client.js` | 修改 | 设置段的「个人任务台账（ledger）」卡片（三控件 + 实时字数/条数 + 空态与来源标注）· 草稿/载荷/合并三处接线 · 保存前的提前提示 |
 | `test/config-api.test.mjs` | 修改 | 腿 C-L1…C-L4（**并入既有顶层 `test(` 块**，不新开用例） |
 | `README.md` · `CHANGELOG.md` | 修改 | 设置页入口说明 · 同版交付面与诚实清单 |
-| `docs/2026-10-16-task-ledger-design.md` | 修改 | 本节（§17.7 读数与登记）· §15.1「设置页表单未做」的状态同步 |
+| `docs/2026-10-16-task-ledger-design.md` | 修改 | 本节（§17.7 读数与登记）· **§十五 表头下方那张六行表**里「设置页表单未做」一行的状态同步（★ 该表**没有** `### 15.1` 标题 —— 由 `:397` 的注记「本节上方的六行表即 15.1」事后声明；原指针写成「§15.1」**解析不到**，已被独立审计 Q2 指出并在此改为可解析写法） |
 
 **明确不碰**：`lib/tasks.mjs`（常量与谓词的唯一源，本单只 import）· `lib/index.mjs`（PUT 校验，§17.2 非目标①）· `lib/config-store.mjs`（白名单合并）· `cordis.patch.yml`（白名单段已含 `ledger`）· `dsh-team-link` 仓的任何文件。
