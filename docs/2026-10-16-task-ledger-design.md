@@ -385,7 +385,7 @@ stateDiagram-v2
 
 **§十四 表内、但实施期才定下具体落点的两处**（设计期已知「落点由实施第一步回读确认」，此处如实补记）：
 
-- **配置面落点**（实测）：本仓配置读写集中在 **`lib/config-store.mjs`**（`loadUserConfig` / `mergeGlobalConfig` 白名单 / `saveUserConfig`）+ **`lib/index.mjs`**（`validateGlobalUserConfig` 的 PUT 校验 + `makeApiHandler` 路由），**设置页表单**在 `lib/client.js`。本批三键（`mode` / `docPaths` / `copyTemplate`）的**归一与默认值**落在 `lib/tasks.mjs` 的 `resolveLedgerConfig`（三面共用的唯一解析点）；**设置页表单未做**（登记为已知残留，落在 CHANGELOG 的诚实清单里）。
+- **配置面落点**（实测）：本仓配置读写集中在 **`lib/config-store.mjs`**（`loadUserConfig` / `mergeGlobalConfig` 白名单 / `saveUserConfig`）+ **`lib/index.mjs`**（`validateGlobalUserConfig` 的 PUT 校验 + `makeApiHandler` 路由），**设置页表单**在 `lib/client.js`。本批三键（`mode` / `docPaths` / `copyTemplate`）的**归一与默认值**落在 `lib/tasks.mjs` 的 `resolveLedgerConfig`（三面共用的唯一解析点）；**设置页表单未做**（那是批 36 当时的实况，登记为已知残留，落在 CHANGELOG 的诚实清单里）—— ★ **已于批 36-补2 补上**，三个控件与实现读数见 **§十七**（原残留项由本节收口，勿再按「无表单」理解）。
 - **看板数据通道落点**（实测）：`GET /thincoder-suite/api/tasks` —— **复用既有 config API 前缀与其信任栅栏**（`connection.requestRejection`），由 `lib/index.mjs` 的 `makeApiHandler` 在栅栏之后分派、载荷由 `lib/tool-tasks.mjs` 的 `buildTasksBoardPayload` 从 `readTasksView()` 派生。★ **实施期的一处语义落地**（与 §7.4 C-2③ 的措辞略有差异，**如实登记**）：C-2③ 写「写成功后宿主侧只置**失效标记**，客户端下次拉取生效」；实现取**更简单且可观察行为等价**的形态 —— **每次拉取都重读磁盘**（无需失效标记），客户端在 ① 打开 ② 点刷新 ③ 每 15 秒（仅可见时）拉取 ⇒ 写后最迟一个拉取周期内刷新。**C-3（推送）仍不做**。
 
 ### 15.2 定点修复批追加登记（2026-10-17 · 独立偏离审计 7 条）
@@ -587,3 +587,54 @@ function apply(ctx) {
 - **未保存就离开**：沿用页面既有行为（不新增脏检查）。
 - **后端报错**：把后端 `errors` **原样**显示（不自己翻译成另一套码）。
 - **并发改配置**：沿用既有（`PUT` 是整份替换，无 rev 门）—— **本批不改**，登记为已知边界。
+
+### 17.7 实施与实测读数（2026-10-17 · 批36-补2 交付回填，**只写实测到的**）
+
+**状态**：§17.4 的三个控件已落地（`lib/client.js` 设置段里新增「**个人任务台账（ledger）**」卡片）；§17.5 的四条腿全部落地；**本单未重启 DSH**（改动是客户端 bundle + 一个纯函数模块，下次打开设置页即是新代码）。
+
+**运行读数（本会话实测，非预填）**：
+
+| 命令 | 实测读数 |
+|---|---|
+| `node --test test/config-api.test.mjs` | `tests 34 · pass 34 · fail 0`（exit 0）——改动前基线同样是 `34`（新腿并入既有顶层 `test(` 块，见下表第 1 行） |
+| `node --test test/tasks.test.mjs` | `tests 21 · pass 21 · fail 0`（exit 0）——本单未改该档，「不得因本单变红」的判据成立 |
+| `node --test test/doc-hygiene.test.mjs test/test-lifecycle.test.mjs` | `tests 31 · pass 31 · fail 0`（exit 0） |
+| `node --test`（全量，`test/*.test.mjs` 实测 **30** 档） | `tests 652 · pass 652 · fail 0`（exit 0）——**档数与用例总数都未变**（未新增测试档，也未新增顶层用例） |
+
+★ **执行宿主如实声明**：本会话**没有通用 shell 工具**，上述命令经插件的 Node 运行时（`ego-browser nodejs` 的 `child_process`）在**仓库根**执行。档数与用例总数是文件系统派生量，不依赖宿主环境；若父会话在真实宿主上复跑，读数应逐字相同。
+
+**实施期定死的两处（§17 未明写，此处逐条登记 + 理由 + 被否决的备选）**：
+
+| # | 做法 | 为什么这么定 | 被否决的备选 |
+|---|---|---|---|
+| **1** | 四条腿**并入既有顶层 `test(` 块**（C-L1/C-L2 → `T-D31`；C-L3 → `U3d`；C-L4 → `U3c2`），**不新开顶层用例** | `docs/test-lifecycle.md` 的 `T-LC2` 把「每档用例数」**锁死**（fs 正则实算 == 台账登记行），而该台账档**不在本单写域**（铁律 1）⇒ 新开顶层用例会打红一个本单**无权修**的档。「并入既有块」是本仓既有先例（批 9/11/13/17 同款） | 新开四条顶层 `test(` 并同批改台账 —— 越出本单写域 |
+| **2** | 客户端**镜像**一份实现（`lib/client.js` 的 `docPathsToText` / `textToDocPaths` / `ledgerDraftErrors` / `ledgerDraftToPayload` 与 [`lib/ledger-config-text.mjs`](../lib/ledger-config-text.mjs) 同名同签名），由 **C-L4 的逐夹具行为等值锁 + 常量字面互锁**约束 | §17.3 决策 5 要求「文本↔数组转换做成**可单测的纯函数**」，而 `lib/client.js` 是手写 CJS bundle：factory 收到的 `require` **只认宿主静态模块表**（react 等），**没有相对路径解析** ⇒ 客户端**无法 import** 该 ESM 模块（同档处理 `ENG_APP_SERVER_RUNNER_REFUSAL` 时已写死这条事实）。**这是 §17 未预见的一处缺口**：本节要求「前端校验只用 `ledgerDraftErrors`」，却没有为「纯函数住在 lib、表单住在浏览器 bundle」这一组合给出通道 | ① 客户端不做任何校验（违背 §17.4「前端校验（提前提示）」列）；② 新增一个 GET 端点把规则下发给浏览器（新增后端面，且超出本单写域）；③ 引入构建步骤（本仓**免构建**是硬约束） |
+
+**为什么「镜像」不等于「重写规则」**：C-L4 把两边放在**同一组夹具**上逐条比输出——mode 不在闭集 · 超条数 · 空串项 · 纯空白模板 · 超长模板 · 恰好等于上限 · CRLF 多行 · 非数组 · 草稿里没有 `ledger`；外加**字面互锁**（`LEDGER_MAX_DOC_PATHS` ⇄ `MAX_DOC_PATHS` · `LEDGER_COPY_MAX_CHARS` ⇄ `isValidCopyTemplate` 的边界 · 默认话术句 ⇄ `DEFAULT_COPY_TEMPLATE` · mode 闭集 ⇄ `LEDGER_MODES`）。任一侧单独改动 ⇒ C-L4 立刻红。规则的可执行单一源仍是 `lib/ledger-config-text.mjs`（上限 `COPY_TEMPLATE_MAX_CHARS` 还是**从谓词探出来的**，不是另抄一个 500）。
+
+**变异自证（本会话实测；每条跑完都逐字节还原，sha256 前后一致）**：
+
+| 变异（把被测代码改坏） | 打红的是哪条腿（报文摘要） |
+|---|---|
+| `textToDocPaths` 去掉「去空行」 | C-L3 ① ⇒ `actual ["a","b","",""]` vs `expected ["a","b"]` |
+| `textToDocPaths` 去掉「逐行 trim」 | C-L3 ① ⇒ `actual ' b '` vs `expected 'b'` |
+| 超条数分支失效（`> MAX_DOC_PATHS` → `> 1e9`） | C-L3 ③ ⇒ 错误没有点名上限 |
+| PUT 侧删掉 `mode` 的 `else`（**后端临时变异，已逐字节还原**） | C-L2 ⇒ 非法 `ledger.mode` 返回 200 |
+| PUT 侧把 `docPaths` / `copyTemplate` 的校验放松为恒真（临时变异，已还原） | C-L2 ⇒ 对应非法值返回 200 |
+| PUT 侧删掉 `sanitized.ledger = lgOut`（临时变异，已还原） | C-L1 ⇒ 「三键原样进 user 层」不等 |
+| 客户端把 `mode` 的 `select` 换成 `input` | C-L4 ①-a ⇒ mode 必须是下拉 |
+| 客户端加一个 `apiCall("PUT", "/ledger-config", …)` | C-L4 ② ⇒ 写端点闭集多出 `PUT /ledger-config` |
+| 客户端镜像的错误文案漂移一个字 | C-L4 ③ ⇒ 与单一源逐条不同 |
+| 客户端去掉 `ledgerDirty` 守卫 | C-L4 ② ⇒ 没动过也把默认值写进载荷 |
+
+**受影响文件（本单；改档即须同批更新本表）**：
+
+| 文件 | 动作 | 内容 |
+|---|---|---|
+| `lib/ledger-config-text.mjs` | **新建** | 文本↔数组纯函数 + 提前提示 + 载荷映射（规则全部 import 自 `lib/tasks.mjs`） |
+| `lib/client.js` | 修改 | 设置段的「个人任务台账（ledger）」卡片（三控件 + 实时字数/条数 + 空态与来源标注）· 草稿/载荷/合并三处接线 · 保存前的提前提示 |
+| `test/config-api.test.mjs` | 修改 | 腿 C-L1…C-L4（**并入既有顶层 `test(` 块**，不新开用例） |
+| `README.md` · `CHANGELOG.md` | 修改 | 设置页入口说明 · 同版交付面与诚实清单 |
+| `docs/2026-10-16-task-ledger-design.md` | 修改 | 本节（§17.7 读数与登记）· §15.1「设置页表单未做」的状态同步 |
+
+**明确不碰**：`lib/tasks.mjs`（常量与谓词的唯一源，本单只 import）· `lib/index.mjs`（PUT 校验，§17.2 非目标①）· `lib/config-store.mjs`（白名单合并）· `cordis.patch.yml`（白名单段已含 `ledger`）· `dsh-team-link` 仓的任何文件。

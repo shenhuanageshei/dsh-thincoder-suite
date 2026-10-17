@@ -17,6 +17,21 @@ import {
 } from "../lib/index.mjs"
 import { resolveAdvisorRoute } from "../lib/advisor.mjs"
 import { probeProfileRoot } from "../lib/dsh-home.mjs"
+// 批 36-补2：台账配置表单的纯函数（规则的可执行单一源）与它依赖的后端常量/谓词。
+// C-L3 断言「纯函数行为」，C-L4 断言「客户端镜像与它**行为等值** + 常量字面互锁」。
+import {
+  MAX_DOC_PATHS as LG_MAX_DOC_PATHS,
+  isValidCopyTemplate as isCopyTemplateOk,
+  LEDGER_MODES as LG_MODES,
+} from "../lib/tasks.mjs"
+import {
+  docPathsToText as lgDocPathsToText,
+  textToDocPaths as lgTextToDocPaths,
+  ledgerDraftErrors as lgDraftErrors,
+  ledgerDraftToPayload as lgDraftToPayload,
+  COPY_TEMPLATE_MAX_CHARS as LG_COPY_MAX_CHARS,
+  LEDGER_FORM_DEFAULTS as LG_FORM_DEFAULTS,
+} from "../lib/ledger-config-text.mjs"
 
 const mkHome = () => mkdtempSync(join(tmpdir(), "thincoder-cfg-"))
 const rmHome = (h) => { try { rmSync(h, { recursive: true, force: true }) } catch { /* 已清理 */ } }
@@ -56,6 +71,46 @@ function sessionStubs(knownIds) {
 const fenceCtx = (rejection = undefined) => ({
   get: (name) => (name === "connection" ? { requestRejection: () => rejection } : undefined),
 })
+
+/**
+ * 批 36-补2（设计档 §十七 §17.5 腿 C-L4）：载入 `lib/client.js` 浏览器 bundle，取回**台账镜像实现**。
+ *
+ * ★ 手法照搬 `test/path-kind.test.mjs` 的 `loadClientInternals()`：**不改 `lib/client.js` 一个字节**，
+ *   只在内存里于 `exports.apply = apply;` 之前注入一行 `exports.__lgMirror = {...}` 作为测试入口
+ *   （工厂顶层只做定义；React 仅在渲染时被调用 ⇒ 桩足够）。
+ * ★ 为什么要这样做：`lib/client.js` 是手写 CJS bundle，**无法 import** `lib/ledger-config-text.mjs`
+ *   （宿主只给 browser 静态模块表）⇒ 客户端只能持有一份**镜像**。本函数的产物就是那份镜像，
+ *   供 C-L4 拿它与**单一源**逐夹具比行为（漂移即红）。
+ * @returns {{mirror: object, src: string}} 镜像实现 + client.js 源码字节（同一份，供静态断言复用）
+ */
+function loadClientLedgerMirror() {
+  const src = readFileSync(join(PLUGIN_DIR, "lib", "client.js"), "utf8")
+  const ANCHOR = "exports.apply = apply;"
+  assert.equal(src.split(ANCHOR).length - 1, 1, "工厂尾部导出锚唯一（注入点可定位）")
+  const injected = src.replace(ANCHOR,
+    "exports.__lgMirror = { ledgerDraftErrors: ledgerDraftErrors, docPathsToText: docPathsToText,"
+    + " textToDocPaths: textToDocPaths, ledgerDraftToPayload: ledgerDraftToPayload,"
+    + " ledgerToDraft: ledgerToDraft, draftToPayload: draftToPayload, effectiveToDraft: effectiveToDraft };\n"
+    + ANCHOR)
+  let spec = null
+  const fakeWindow = { __ModuleLoader__: { load(s) { spec = s } } }
+  const requireStub = () => ({
+    useState() { return [undefined, function () {}] },
+    useEffect() {},
+    useCallback(fn) { return fn },
+    useRef() { return { current: null } },
+    createElement() { return null },
+  })
+  // eslint-disable-next-line no-new-func
+  new Function("window", "require", injected)(fakeWindow, requireStub)
+  assert.ok(spec && typeof spec.factory === "function", "客户端 bundle 必须经 __ModuleLoader__.load 注册一个 factory")
+  const exportsObj = spec.factory(requireStub)
+  assert.ok(exportsObj && exportsObj.__lgMirror, "台账镜像实现取回成功（注入点存在）")
+  for (const k of ["ledgerDraftErrors", "docPathsToText", "textToDocPaths", "ledgerDraftToPayload", "ledgerToDraft"]) {
+    assert.equal(typeof exportsObj.__lgMirror[k], "function", "镜像实现必须导出 " + k + "（C-L4 要逐夹具比）")
+  }
+  return { mirror: exportsObj.__lgMirror, src }
+}
 
 // ————————————— U2/U6：config-store save/clear/merge/损坏容错 —————————————
 
@@ -385,6 +440,116 @@ test("U3c2 (D10-10 / AC-D5 / 锚 M6): 设置页可产出的顶层键 ⊆ 服务�
   const extra = payloadKeys.filter((k) => !allowed.includes(k))
   assert.deepEqual(extra, [],
     "设置页可产出的顶层键必须 ⊆ 服务端 topAllowed（否则 D-31 的 400 会让设置页死锁）：多出 " + JSON.stringify(extra))
+
+  // ————— C-L4（批 36-补2 / 设计档 §十七 §17.4–§17.5）：设置页三控件 + 单一写盘点 + 镜像等值 —————
+  // ★ 为什么**并入本块**：本块的主题正是「**设置页产出的东西**必须与服务端/规则侧一致」，且它已经在
+  //   解析 `client.js` 的**源码字节**——台账三控件与写盘点同属这个面。
+  // ★ 为什么并入而不是新开顶层 `test(`：`docs/test-lifecycle.md` 的 T-LC2 锁死每档用例数，该档
+  //   **不在本单写域**（并入既有块是本仓既有先例，见 `lib/client.js` 与批 17 的同款注释）。
+  const { mirror, src: lgClientSrc } = loadClientLedgerMirror()
+
+  // ① §17.4 的三个控件**都在**（在台账卡片的切片内断言，防别处同名字符串误判）
+  const cardAt = lgClientSrc.indexOf("function ledgerCard() {")
+  assert.ok(cardAt > 0, "C-L4：台账卡片 ledgerCard() 未定位（形态变了 ⇒ 本锁必须随之复核）")
+  const cardEnd = lgClientSrc.indexOf("var effIpg = view.effective.advisor;", cardAt)
+  assert.ok(cardEnd > cardAt && cardEnd - cardAt < 6000, "C-L4：台账卡片切片越界（实测 " + (cardEnd - cardAt) + " 字节）")
+  const lgCard = lgClientSrc.slice(cardAt, cardEnd)
+  assert.ok(lgCard.includes('"个人任务台账（ledger）"'), "C-L4 ①：卡片标题在位")
+  assert.ok(lgCard.includes('h("select"') && lgCard.includes("LEDGER_MODE_OPTIONS.map"),
+    "C-L4 ①-a：mode 必须是**下拉**（选项来自闭集常量，不是自由文本）")
+  assert.ok(lgCard.includes('setLedgerField("mode"'), "C-L4 ①-a：下拉的 onChange 接在 setLedgerField(\"mode\")")
+  assert.equal((lgCard.match(/h\("textarea"/g) ?? []).length, 2,
+    "C-L4 ①-b/①-c：必须恰有**两个文本域**（docPaths 多行清单 + copyTemplate 模板）")
+  assert.ok(lgCard.includes('setLedgerField("docPathsText"') && lgCard.includes("rows: 4"),
+    "C-L4 ①-b：docPaths = 多行文本域（一行一个）")
+  assert.ok(lgCard.includes('setLedgerField("copyTemplate"') && lgCard.includes("rows: 3"),
+    "C-L4 ①-c：copyTemplate = 3 行高的文本域")
+  assert.ok(lgCard.includes('+ " / " + LEDGER_COPY_MAX_CHARS'),
+    "C-L4 ①-c：copyTemplate 必须有**实时字数 / 上限**提示（§17.3 决策 3）")
+  assert.ok(lgCard.includes("未在 user 配置中显式设置 ⇒ 当前用内置默认"),
+    "C-L4 ①-d：空态标注（§17.4 空态）逐字在位")
+  assert.ok(!lgCard.includes("**"), "C-L4：渲染串零 markdown 强调泄漏（沿用本档 T-CB9 的同款纪律）")
+
+  // ② 保存**只走既有** `PUT /config`；全 bundle 的写端点是一个**闭集**（新增即须显式复核本锁）
+  const writeCalls = [...lgClientSrc.matchAll(/apiCall\(\s*"(PUT|POST|DELETE)"\s*,\s*"([^"?#]*)/g)]
+    .map((m) => m[1] + " " + m[2])
+  assert.deepEqual(writeCalls.sort(), [
+    "DELETE /config", "DELETE /session", "POST /apply-session", "POST /tasks/claim", "PUT /config",
+  ].sort(), "C-L4 ②：写端点闭集（设置页保存只许 PUT /config，台账**不新增第二个写盘点**）：实测 " + JSON.stringify(writeCalls))
+  assert.ok(lgClientSrc.includes('apiCall("PUT", "/config", { config: draftToPayload(draft) })'),
+    "C-L4 ②：保存路径仍是既有的 `PUT /config` + draftToPayload")
+  assert.ok(lgClientSrc.includes("validateDraft(draft).concat(ledgerDraftErrors(draft))"),
+    "C-L4 ②③：前端提前提示**只用** ledgerDraftErrors（与既有内联校验合并成一处，不另写规则）")
+  assert.ok(lgClientSrc.includes("if (draft.ledgerDirty && draft.ledger) {")
+    && lgClientSrc.includes("config.ledger = ledgerDraftToPayload(draft.ledger);"),
+    "C-L4 ②：台账载荷**只在被用户动过时**发送（不得把内置默认物化进 user 层）")
+
+  // ③ **行为等值锁**：客户端镜像 ≡ `lib/ledger-config-text.mjs`（规则的单一源）逐夹具比输出。
+  //    这是本单对「前端不得重写规则」在**浏览器 bundle 无法 import** 这一硬约束下的机械兑现：
+  //    两份实现可以共存，但**任何行为漂移都会在这里红**。
+  const atLimit = "x".repeat(LG_COPY_MAX_CHARS)
+  const tooLong = "x".repeat(LG_COPY_MAX_CHARS + 1)
+  const manyPaths = Array.from({ length: LG_MAX_DOC_PATHS + 1 }, (_, i) => "p" + i + ".md")
+  const lgFixtures = [
+    {},                                                        // 草稿里没有 ledger
+    { ledger: { mode: "standalone", docPathsText: "", copyTemplate: "话术" } },
+    { ledger: { mode: "off", docPathsText: "a.md\r\n b.md \n\n", copyTemplate: "说人话" } },
+    { ledger: { mode: "on", docPathsText: "", copyTemplate: "话术" } },          // mode 不在闭集
+    { ledger: { mode: "standalone", docPathsText: manyPaths.join("\n"), copyTemplate: "话术" } }, // 超条数
+    { ledger: { mode: "standalone", docPaths: ["a.md", "   "], copyTemplate: "话术" } },          // 空串项
+    { ledger: { mode: "standalone", docPathsText: "", copyTemplate: "   " } },   // 纯空白模板
+    { ledger: { mode: "standalone", docPathsText: "", copyTemplate: tooLong } }, // 超长模板
+    { ledger: { mode: "standalone", docPathsText: "", copyTemplate: atLimit } }, // 恰好上限
+    { ledger: { mode: "standalone", docPaths: "not-an-array", copyTemplate: "话术" } },
+  ]
+  for (const fx of lgFixtures) {
+    assert.deepEqual(mirror.ledgerDraftErrors(fx), lgDraftErrors(fx),
+      "C-L4 ③：客户端镜像的 ledgerDraftErrors 必须与单一源**逐条相同**（夹具 " + JSON.stringify(fx).slice(0, 120) + "）")
+    if (fx.ledger) {
+      assert.deepEqual(mirror.ledgerDraftToPayload(fx.ledger), lgDraftToPayload(fx.ledger),
+        "C-L4 ③：ledgerDraftToPayload 亦须逐字段相同（夹具 " + JSON.stringify(fx.ledger).slice(0, 120) + "）")
+    }
+  }
+  for (const text of ["", "a", "a\r\n b \n\n", "  \n \n", "x\ry", undefined, null, 42]) {
+    assert.deepEqual(mirror.textToDocPaths(text), lgTextToDocPaths(text),
+      "C-L4 ③：textToDocPaths 必须逐夹具相同（输入 " + JSON.stringify(text) + "）")
+  }
+  for (const arr of [[], ["a.md"], [" a ", "b"], ["C:\\x\\y.md", "docs/z.md"], [null, 1, "ok"]]) {
+    assert.equal(mirror.docPathsToText(arr), lgDocPathsToText(arr),
+      "C-L4 ③：docPathsToText 必须逐夹具相同（输入 " + JSON.stringify(arr) + "）")
+  }
+  // ④ **常量字面互锁**：镜像里的数字/枚举/默认句必须与 `lib/tasks.mjs` 的权威值一致。
+  assert.ok(lgClientSrc.includes("var LEDGER_MAX_DOC_PATHS = " + LG_MAX_DOC_PATHS + ";"),
+    "C-L4 ④：LEDGER_MAX_DOC_PATHS 必须等于 lib/tasks.mjs 的 MAX_DOC_PATHS（实测 " + LG_MAX_DOC_PATHS + "）")
+  assert.ok(lgClientSrc.includes("var LEDGER_COPY_MAX_CHARS = " + LG_COPY_MAX_CHARS + ";"),
+    "C-L4 ④：LEDGER_COPY_MAX_CHARS 必须等于后端 copyTemplate 上限（实测 " + LG_COPY_MAX_CHARS + "）")
+  assert.ok(lgClientSrc.includes('var LEDGER_DEFAULT_COPY_TEMPLATE = "' + LG_FORM_DEFAULTS.copyTemplate + '";'),
+    "C-L4 ④：默认话术模板必须与 lib/tasks.mjs 的 DEFAULT_COPY_TEMPLATE 逐字相同")
+  assert.ok(lgClientSrc.includes('var LEDGER_DEFAULT_MODE = "' + LG_FORM_DEFAULTS.mode + '";'),
+    "C-L4 ④：默认 mode 必须与 resolveLedgerConfig 的回落同值（实测 " + LG_FORM_DEFAULTS.mode + "）")
+  const clientModeOptions = /var LEDGER_MODE_OPTIONS = \[([^\]]*)\]/.exec(lgClientSrc)
+  assert.ok(clientModeOptions, "C-L4 ④：客户端 mode 闭集不可定位")
+  assert.deepEqual([...clientModeOptions[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort(), [...LG_MODES].sort(),
+    "C-L4 ④：客户端 mode 闭集必须与 lib/tasks.mjs 的 LEDGER_MODES 同集合（顺序可不同：下拉按「默认值在前」排）")
+  // ⑤ 镜像落地处自证：草稿种子与合并保留都接到 ledger（否则控件改了也发不出去 / 会被刷新覆盖）
+  const seeded = mirror.effectiveToDraft({ ledger: { mode: "off", docPaths: ["a.md"], copyTemplate: "x" } })
+  assert.deepEqual(seeded.ledger, { mode: "off", docPathsText: "a.md", copyTemplate: "x" },
+    "C-L4 ⑤：effectiveToDraft 必须播种 ledger 草稿（否则表单永远显示默认值）")
+  assert.equal(seeded.ledgerDirty, false, "C-L4 ⑤：刚播种不算「动过」（默认不发送）")
+  const merged = mirror.draftToPayload({
+    advisor: {}, consultModels: [], engCoderMaxTokens: "", engCoderEffort: "",
+    dshBackgroundTimeoutMs: "", consultTimeoutMs: "", engTokenTtlMs: "",
+    ledger: { mode: "off", docPathsText: "a.md\n\nb.md", copyTemplate: "话术" }, ledgerDirty: true,
+  })
+  assert.deepEqual(merged.ledger, { mode: "off", docPaths: ["a.md", "b.md"], copyTemplate: "话术" },
+    "C-L4 ⑤：draftToPayload 必须把台账三键转成 PUT 载荷（文本 → 数组）")
+  const notTouched = mirror.draftToPayload({
+    advisor: {}, consultModels: [], engCoderMaxTokens: "", engCoderEffort: "",
+    dshBackgroundTimeoutMs: "", consultTimeoutMs: "", engTokenTtlMs: "",
+    ledger: { mode: "standalone", docPathsText: "", copyTemplate: "x" }, ledgerDirty: false,
+  })
+  assert.equal(notTouched.ledger, undefined,
+    "C-L4 ⑤：没动过台账 ⇒ 载荷里**不得**出现 ledger（不物化内置默认）")
 })
 
 // ————————————— U3c2b 白名单散文面三轴锁（批 14 / FR-2 · 锚 A3 + A4 · AC-4…AC-7） —————————————
@@ -913,6 +1078,69 @@ test("U3d: advisor exported validators are reused by index validation (single so
   // 与 validateGlobalUserConfig 走同一实现：非法 effort 在两边都拒绝
   const direct = validateGlobalUserConfig({ advisor: { round1: { provider: "p", model: "m", effort: "turbo" } } }, undefined)
   assert.equal(direct.ok, false)
+
+  // ————— C-L3（批 36-补2 / 设计档 §十七 §17.4–§17.5）：台账配置表单的「文本 ↔ 数组」纯函数 —————
+  // ★ 为什么**并入本块**而不是新开顶层 `test(`：`docs/test-lifecycle.md` 的 T-LC2 把「每档用例数」
+  //   锁死（fs 正则实算 == 台账登记行），而台账**不在本单写域** ⇒ 新开顶层用例会打红一个本单
+  //   无权修的档。「并入既有 `test(` 块」是本仓既有先例（批 9/11/13/17 同款：新腿不新开顶层用例）。
+  // ★ 为什么落在这里：U3d 断言的主题正是「**校验/谓词只有一份**，别处一律复用导出实现」——
+  //   `lib/ledger-config-text.mjs` 的全部规则同样来自 `lib/tasks.mjs` 的导出谓词（见下 ⓪）。
+  //   （实现从档头静态 import：`lgDocPathsToText` / `lgTextToDocPaths` / `lgDraftErrors` /
+  //    `lgDraftToPayload` / `LG_COPY_MAX_CHARS` / `LG_MAX_DOC_PATHS` / `LEDGER_MODES`。）
+  // ⓪ **单一事实源自证**：上限不是另写的一份数字，而是后端谓词的**翻转点**。
+  assert.equal(isCopyTemplateOk("x".repeat(LG_COPY_MAX_CHARS)), true,
+    "C-L3 ⓪：LG_COPY_MAX_CHARS 必须是后端谓词的**通过侧**边界（实测 " + LG_COPY_MAX_CHARS + "）")
+  assert.equal(isCopyTemplateOk("x".repeat(LG_COPY_MAX_CHARS + 1)), false,
+    "C-L3 ⓪：+1 字必须被后端谓词拒（否则上限是从别处抄来的数字）")
+  assert.ok(Number.isInteger(LG_MAX_DOC_PATHS) && LG_MAX_DOC_PATHS > 0, "C-L3 ⓪：上限常量来自 lib/tasks.mjs，实测 " + LG_MAX_DOC_PATHS)
+  assert.deepEqual(LG_MODES, ["off", "standalone"], "C-L3 ⓪：mode 闭集来自 lib/tasks.mjs（下拉选项的唯一来源）")
+
+  // ① 验收夹具（设计档 §17.5 C-L3 逐字）：CRLF + 逐行 trim + 去空行 + 保序
+  assert.deepEqual(lgTextToDocPaths("a\r\n b \n\n"), ["a", "b"],
+    "C-L3 ①：`\"a\\r\\n b \\n\\n\"` 必须 → `[\"a\",\"b\"]`（掉 trim ⇒ 得 \" b \"；不掉空行 ⇒ 多两条空串）")
+  assert.deepEqual(lgTextToDocPaths(""), [], "C-L3 ①：空文本 ⇒ []（不是 [\"\"]）")
+  assert.deepEqual(lgTextToDocPaths(undefined), [], "C-L3 ①：非字符串（未初始化）⇒ []，不抛")
+
+  // ② 往返无损：lgTextToDocPaths(lgDocPathsToText(x)) === x（已 trim 且无空项的 x）
+  const roundTripFixtures = [[], ["a.md"], ["C:\\工作区\\docs\\验收.md", "docs/plan.md"], ["http://x/y?z=1"]]
+  for (const x of roundTripFixtures) {
+    assert.deepEqual(lgTextToDocPaths(lgDocPathsToText(x)), x, "C-L3 ②：往返必须无损 " + JSON.stringify(x))
+  }
+  assert.equal(lgDocPathsToText([]), "", "C-L3 ②：空数组 ⇒ 空文本（一行都没有）")
+  assert.equal(lgDocPathsToText(["a.md", "b.md"]), "a.md\nb.md", "C-L3 ②：一行一个（行序即数组序）")
+
+  // ③ 超上限 ⇒ 报错（上限取自 lib/tasks.mjs；不写死数字）
+  const tooMany = Array.from({ length: LG_MAX_DOC_PATHS + 1 }, (_, i) => "p" + i + ".md")
+  const tooManyErrs = lgDraftErrors({ ledger: { mode: "standalone", docPathsText: tooMany.join("\n"), copyTemplate: "话术" } })
+  assert.equal(tooManyErrs.length, 1, "C-L3 ③：超上限只报一条（实测 " + JSON.stringify(tooManyErrs) + "）")
+  assert.ok(tooManyErrs[0].includes("最多 " + LG_MAX_DOC_PATHS + " 条"),
+    "C-L3 ③：错误必须点名上限（实测 " + JSON.stringify(tooMany) + "）：" + JSON.stringify(tooManyErrs))
+  assert.deepEqual(
+    lgDraftErrors({ ledger: { mode: "standalone", docPathsText: tooMany.slice(0, LG_MAX_DOC_PATHS).join("\n"), copyTemplate: "话术" } }),
+    [], "C-L3 ③：恰好等于上限 ⇒ 无提示（错一即红，防「永远报错的假腿」）")
+
+  // ④ 空串项 ⇒ 报错（数组形态：文本形态里空行已被 lgTextToDocPaths 滤掉，故这条只能从数组侧触达）
+  const emptyItemErrs = lgDraftErrors({ ledger: { mode: "standalone", docPaths: ["a.md", "   "], copyTemplate: "话术" } })
+  assert.equal(emptyItemErrs.length, 1, "C-L3 ④：空串项只报一条（实测 " + JSON.stringify(emptyItemErrs) + "）")
+  assert.ok(emptyItemErrs[0].includes("ledger.docPaths"),
+    "C-L3 ④：错误必须点名 ledger.docPaths：" + JSON.stringify(emptyItemErrs))
+
+  // ⑤ copyTemplate / mode 的提前提示（§17.4 两行）
+  const tplErrs = (v) => lgDraftErrors({ ledger: { mode: "standalone", docPathsText: "", copyTemplate: v } })
+  assert.equal(tplErrs("   ").length, 1, "C-L3 ⑤：纯空白模板 ⇒ 报错（与后端 `trim() !== \"\"` 同规则）")
+  assert.equal(tplErrs("y".repeat(LG_COPY_MAX_CHARS + 1)).length, 1, "C-L3 ⑤：超上限模板 ⇒ 报错")
+  assert.equal(tplErrs("y".repeat(LG_COPY_MAX_CHARS)).length, 0, "C-L3 ⑤：恰好上限 ⇒ 无提示")
+  assert.equal(lgDraftErrors({ ledger: { mode: "on", docPathsText: "", copyTemplate: "话术" } }).length, 1,
+    "C-L3 ⑤：mode 不在闭集 ⇒ 报错")
+  assert.deepEqual(lgDraftErrors({ ledger: { mode: "off", docPathsText: "", copyTemplate: "话术" } }), [],
+    "C-L3 ⑤：合法草稿 ⇒ 零提示")
+  assert.deepEqual(lgDraftErrors({}), [], "C-L3 ⑤：草稿里没有 ledger（未加载）⇒ 零提示，不抛")
+
+  // ⑥ 草稿 → PUT 载荷的映射（客户端照此镜像；C-L4 做行为等值锁）
+  assert.deepEqual(
+    lgDraftToPayload({ mode: "off", docPathsText: " a.md \n\nb.md ", copyTemplate: "话术" }),
+    { mode: "off", docPaths: ["a.md", "b.md"], copyTemplate: "话术" },
+    "C-L3 ⑥：载荷映射 = trim/去空行后的数组 + 原样 mode/copyTemplate（不静默修正非法值）")
 })
 
 // ————————————— 批 10 / D-31：PUT 的**静默清盘灭绝**（handler 级；AC-D1/AC-D2/AC-D3 + 锚 M7/M8） —————————————
@@ -968,6 +1196,47 @@ test("T-D31 (AC-D1/AC-D2/AC-D3 / 锚 M7+M8): 含未知顶层键的 PUT ⇒ 400 +
     const r4 = await PUT({ config: {} })
     assert.equal(r4.status, 200, "空配置是有意清空，不是错误：" + JSON.stringify(r4.payload))
     assert.deepEqual(loadUserConfig(home), {}, "盘上留下空配置（语义不受损）")
+
+    // —————————— C-L1 / C-L2（批 36-补2 / 设计档 §十七 §17.5）：台账三键的 PUT 面 ——————————
+    // ★ 为什么**并入本块**而不是新开顶层 `test(`：`docs/test-lifecycle.md` 的 T-LC2 把「每档用例数」
+    //   锁死（fs 正则实算 == 台账登记行），台账**不在本单写域** ⇒ 新开顶层用例会打红本单无权修的档。
+    //   本块天然就是「handler 级 PUT + 盘字节快照比对」的同一形状 ⇒ 台账三键的正/反面落在这里最省。
+    // ★ 本单**不改后端校验**（§17.2 非目标①）：这两条腿是**既有实现**的验收面，不是新写规则。
+
+    // C-L1：三键合法值 ⇒ 200 且 `effective.ledger` **逐字段**等于所给值（走真实 GET /config 读取）
+    const legal = { mode: "off", docPaths: ["docs/验收.md", "docs/plan.md"], copyTemplate: "说人话，给建议。" }
+    const rL1 = await PUT({ config: { ledger: legal } })
+    assert.equal(rL1.status, 200, "C-L1：三键合法 ⇒ 200：" + JSON.stringify(rL1.payload))
+    assert.deepEqual(loadUserConfig(home), { ledger: legal }, "C-L1：三键原样进 user 层")
+    const gL1 = await call("GET", CONFIG_API_PREFIX + "/config")
+    assert.equal(gL1.status, 200, "C-L1：GET /config 可用")
+    assert.deepEqual(gL1.payload.effective.ledger, legal,
+      "C-L1：effective.ledger 必须逐字段等于所给值（实测 " + JSON.stringify(gL1.payload.effective.ledger) + "）")
+    // 逐字段再核一遍（deepEqual 已覆盖，但逐键的失败信息更可定位）
+    for (const [k, v] of Object.entries(legal)) {
+      assert.deepEqual(gL1.payload.effective.ledger[k], v, "C-L1：effective.ledger." + k + " 必须等于所给值")
+    }
+
+    // C-L2：四种非法值 ⇒ 400 + **点名那个键** + **零写入**（盘字节前后比对）
+    const beforeL2 = readFileSync(storePath, "utf8")
+    assert.deepEqual(loadUserConfig(home), { ledger: legal }, "C-L2 前置：盘上已是刚写入的合法台账配置")
+    const badCases = [
+      ["ledger.mode", { ledger: { mode: "on" } }],
+      ["ledger.docPaths", { ledger: { docPaths: Array.from({ length: LG_MAX_DOC_PATHS + 1 }, (_, i) => "d" + i + ".md") } }],
+      ["ledger.docPaths", { ledger: { docPaths: ["ok.md", "  "] } }],
+      ["ledger.copyTemplate", { ledger: { copyTemplate: "z".repeat(LG_COPY_MAX_CHARS + 1) } }],
+    ]
+    for (const [keyName, cfg] of badCases) {
+      const r = await PUT({ config: cfg })
+      const errs = r.payload?.errors ?? []
+      assert.equal(r.status, 400, "C-L2：非法 " + keyName + " ⇒ 400（实测 " + r.status + "）：" + JSON.stringify(r.payload))
+      assert.equal(r.payload?.ok, false, "C-L2：拒绝体必须 ok:false：" + JSON.stringify(r.payload))
+      assert.ok(errs.some((e) => e.includes(keyName)),
+        "C-L2：errors 必须**点名** " + keyName + "（实测 " + JSON.stringify(errs) + "，输入 " + JSON.stringify(cfg) + "）")
+      assert.equal(readFileSync(storePath, "utf8"), beforeL2,
+        "C-L2：被拒的 " + keyName + " **不得触碰盘**（零写入）")
+      assert.deepEqual(loadUserConfig(home), { ledger: legal }, "C-L2：既有台账配置原样保留")
+    }
   } finally { rmHome(home) }
 })
 

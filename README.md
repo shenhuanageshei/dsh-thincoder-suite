@@ -289,6 +289,7 @@ node -e "const fs=require('fs');const p='<profile>/node_modules/@dsh-external/ds
 设置 →「Thincoder」：
 
 - **全局默认**：评审两组卡片（首轮 / 收敛轮：provider、model、effort、超时）· 评审是否注入项目记忆 · 会诊/飞刀共用模型池 · eng_coder 的输出预算与推理档。**保存**写 user 层；**恢复默认**清 user 层回落到 base。
+- **个人任务台账**（批 36-补2）：三个键各一个控件——`ledger.mode` 下拉（`standalone` / `off`）· `ledger.docPaths` 多行文本域（**一行一个路径**，行序即清单顺序，最多 8 条）· `ledger.copyTemplate` 文本域（3 行高，**边打边显示字数 / 上限**）。这三键此前**只能在设置页之外手编 `config.json`**；现在与页面其它键走**同一条保存通道**（既有 `PUT /config`，不新增写端点）与同一条恢复通道（既有「恢复默认」= 整节恢复）。user 层没有 `ledger` 时，控件显示**内置默认值**并标注「未在 user 配置中显式设置 ⇒ 当前用内置默认」；**没动过就不写盘**（不会把内置默认物化成「显式设置」）。
 - **当前会话视图**：显示生效摘要与覆盖来源，可「应用到当前会话」（优先级高于全局）或「恢复会话默认」。
 
 host API 前缀 `/thincoder-suite/api`（GET/PUT/DELETE `/config`、GET/DELETE `/session`、POST `/apply-session`）。**全部端点先过宿主信任栅栏**（`connection.requestRejection`：跨站 / 非受信 Host ⇒ 403，无浏览器会话 cookie ⇒ 401；栅栏不可核验 ⇒ 503 fail-closed，绝不静默放行）。
@@ -378,6 +379,7 @@ host API 前缀 `/thincoder-suite/api`（GET/PUT/DELETE `/config`、GET/DELETE `
 - **includeProjectGuide**：评审是否注入 `AGENTS.md`（默认 false——评审独立于项目记忆，需求与验收标准请显式传 `documents=[...]`）。
 - **engCoderEffort 默认 `medium`**：实现任务由任务书机械执行，普通推理档足以「按文档改文件」，再高只是白吞输出预算。
 - **`engTokenTtlMs` / `consultTimeoutMs`** 也可从设置页改（两键都在 user 层白名单，优先级 user > base）。`consultTimeoutMs` 是**单个模型**的看门狗：超时只把该模型记成超时，不终止整轮会诊。
+- **`ledger` 的三个键也可从设置页改**（批 36-补2）：`mode`（`standalone` / `off`）· `docPaths`（一行一个路径的多行文本域，最多 8 条）· `copyTemplate`（文本域 + 实时字数上限 500）。前端只做**提前提示**，**最终裁决永远是后端**——保存失败时页面原样显示后端返回的 `errors`（例如 `ledger.docPaths must be an array of at most 8 non-empty strings`），不翻译成另一套码。
 
 ### 会话级覆盖（`advisor_config` 工具）
 
