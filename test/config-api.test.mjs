@@ -112,6 +112,66 @@ function loadClientLedgerMirror() {
   return { mirror: exportsObj.__lgMirror, src }
 }
 
+/**
+ * 批36-补4（设计档 docs/2026-10-16-task-ledger-design.md §十九 §19.9–§19.10）：载入
+ * `lib/client.js` 的**纯渲染组件**做真实调用（T-24 / T-26a / T-26b 断言渲染结果，不是源码字面）。
+ * 与 C-L4 同款：只在内存里于 `exports.apply = apply;` 之前注入一行导出，**不改 client.js 一个字节**。
+ * ★ createElement 返回可遍历的树（{type, props, children}）⇒ 组件里 `h(...)` 的产物能被
+ *   「数按钮 / 找 textarea / 拼文本」这类谓词直接读取（不是再抄一份组件实现）。
+ * @returns {{ui: object, src: string}}
+ */
+function loadClientUiProbe() {
+  const src = readFileSync(join(PLUGIN_DIR, "lib", "client.js"), "utf8")
+  const ANCHOR = "exports.apply = apply;"
+  assert.equal(src.split(ANCHOR).length - 1, 1, "工厂尾部导出锚唯一（注入点可定位）")
+  const injected = src.replace(ANCHOR,
+    "exports.__ui = { SETTINGS_TABS: SETTINGS_TABS, SettingsTabs: SettingsTabs, SessionCard: SessionCard,"
+    + " ProviderInput: ProviderInput, ModelInput: ModelInput, TimeField: TimeField };\n"
+    + ANCHOR)
+  let spec = null
+  const fakeWindow = { __ModuleLoader__: { load(s) { spec = s } } }
+  const requireStub = () => ({
+    useState(init) { return [typeof init === "function" ? init() : init, function () {}] },
+    useEffect() {},
+    useCallback(fn) { return fn },
+    useRef(v) { return { current: v === undefined ? null : v } },
+    createElement(type, props) {
+      return { type, props: props || {}, children: Array.prototype.slice.call(arguments, 2) }
+    },
+  })
+  // eslint-disable-next-line no-new-func
+  new Function("window", "require", injected)(fakeWindow, requireStub)
+  assert.ok(spec && typeof spec.factory === "function", "客户端 bundle 必须经 __ModuleLoader__.load 注册一个 factory")
+  const exportsObj = spec.factory(requireStub)
+  assert.ok(exportsObj && exportsObj.__ui, "UI 探针导出成功（注入点存在）")
+  return { ui: exportsObj.__ui, src }
+}
+
+/** 深度优先遍历渲染树（函数组件就地求值；与 tasks.test.mjs 的 findButton 同款口径）。 */
+function walkUiTree(node, fn) {
+  if (node === null || node === undefined || typeof node === "boolean") return
+  if (typeof node === "string" || typeof node === "number") { fn(node); return }
+  if (Array.isArray(node)) { for (const c of node) walkUiTree(c, fn); return }
+  if (typeof node !== "object") return
+  if (typeof node.type === "function") { walkUiTree(node.type(node.props), fn); return }
+  fn(node)
+  for (const c of node.children || []) walkUiTree(c, fn)
+}
+
+/** 树的全部可见文本（逗号拼接；只用于 includes 断言）。 */
+function uiTreeText(tree) {
+  const out = []
+  walkUiTree(tree, (n) => { if (typeof n === "string" || typeof n === "number") out.push(String(n)) })
+  return out.join(" ")
+}
+
+/** 按谓词收集元素节点。 */
+function findUiNodes(tree, pred) {
+  const out = []
+  walkUiTree(tree, (n) => { if (n && typeof n === "object" && pred(n)) out.push(n) })
+  return out
+}
+
 // ————————————— U2/U6：config-store save/clear/merge/损坏容错 —————————————
 
 test("U2a: saveUserConfig writes versioned file; loadUserConfig roundtrips", () => {
@@ -550,6 +610,162 @@ test("U3c2 (D10-10 / AC-D5 / 锚 M6): 设置页可产出的顶层键 ⊆ 服务�
   })
   assert.equal(notTouched.ledger, undefined,
     "C-L4 ⑤：没动过台账 ⇒ 载荷里**不得**出现 ledger（不物化内置默认）")
+
+  // ————— 批36-补4（设计档 §十九 §19.5 / §19.9 / §19.10）：T-23 … T-26b —————
+  // ★ 为什么**并入本块**：本块的主题正是「设置页产出的东西必须与服务端 / 规格一致」，且它已经在
+  //   解析 `client.js` 的源码字节。★ 为什么并入而不是新开顶层 `test(`：`docs/test-lifecycle.md`
+  //   的 T-LC2 锁死本档顶层用例数 = 34，本单写域只含本档 ⇒ 沿用 C-L4 的并入先例。
+  const { ui: UI, src: uiSrc } = loadClientUiProbe()
+
+  // —— T-23（§19.5）：20 行 / 21 个主标签逐条在场 + 技术键位 + 说明 + 裸键名禁入标签 ——
+  // 21 个实例 = 18 个不同字符串：「想得多细」出现 3 次（R1 · 收敛 · eng_coder）、
+  // 「一次最多等多久」出现 2 次（R1 · 收敛）；`proxyMode`/`proxyUrl` 是**一行两标签**。
+  const MAIN_LABELS = [
+    "谁来执行", "用哪家的模型", "具体用哪个模型", "想得多细", "一次最多等多久",
+    "想得多细", "一次最多等多久",
+    "会诊模型池", "会诊看门狗",
+    "开不开", "要盯住的文档", "问任务时开头加什么话",
+    "一次最多输出多少", "想得多细",
+    "总共最多跑多久", "最多同时开几个", "后台任务超时", "设计令牌有效期",
+    "走不走代理", "代理地址", "多久没动静算卡死",
+  ]
+  assert.equal(MAIN_LABELS.length, 21,
+    "T-23：§19.5 共 20 行、21 个主标签（★ proxyMode/proxyUrl 一行两标签；行数与标签数不可混用）")
+  assert.equal(new Set(MAIN_LABELS).size, 18,
+    "T-23：21 个实例 = 18 个不同字符串（想得多细×3 · 一次最多等多久×2）——计数自证，防抄错表")
+  const fieldCalls = [...uiSrc.matchAll(/field\("([^"]+)",\s*"([^"]*)"/g)].map((m) => ({ label: m[1], key: m[2] }))
+  assert.ok(fieldCalls.length >= 21, "T-23：field(...) 调用必须可解析（实测 " + fieldCalls.length + "）")
+  for (const label of MAIN_LABELS) {
+    assert.ok(uiSrc.includes('"' + label + '"'), "T-23：§19.5 的主标签必须逐条在场：" + label)
+  }
+  // 裸键名**不得**当主标签（只许出现在技术键位 / 说明里）
+  const BARE_KEYS = ["engCoderMaxTokens", "engCoderEffort", "budgetCapMs", "consultTimeoutMs", "engTokenTtlMs",
+    "dshBackgroundTimeoutMs", "maxConcurrent", "idleTimeoutMs", "proxyMode", "proxyUrl",
+    "provider", "model", "effort", "timeoutMs", "runnerKind", "includeProjectGuide"]
+  for (const label of [...MAIN_LABELS, ...fieldCalls.map((f) => f.label)]) {
+    assert.ok(!BARE_KEYS.includes(label), "T-23：设置页不得再出现裸键名当标签：" + label)
+  }
+  // 主标签 ↔ 技术键成对（键住在 `.tc-fk` 灰小字位；§19.4 三层）
+  const hasPair = (label, key) => fieldCalls.some((f) => f.label === label && f.key === key)
+  const EXPECTED_PAIRS = [
+    ["谁来执行", "runner"], ["用哪家的模型", "provider"], ["具体用哪个模型", "model"],
+    ["想得多细", "effort"], ["一次最多等多久", "timeoutMs"],
+    ["会诊看门狗", "consultTimeoutMs"], ["开不开", "ledger.mode"],
+    ["要盯住的文档", "ledger.docPaths"], ["问任务时开头加什么话", "ledger.copyTemplate"],
+    ["一次最多输出多少", "engCoderMaxTokens"], ["想得多细", "engCoderEffort"],
+    ["总共最多跑多久", "budgetCapMs"], ["最多同时开几个", "maxConcurrent"],
+    ["后台任务超时", "dshBackgroundTimeoutMs"], ["设计令牌有效期", "engTokenTtlMs"],
+    ["走不走代理", "proxyMode"], ["代理地址", "proxyUrl"], ["多久没动静算卡死", "idleTimeoutMs"],
+  ]
+  for (const [label, key] of EXPECTED_PAIRS) {
+    assert.ok(hasPair(label, key), "T-23：主标签 ↔ 技术键必须成对（" + label + " ↔ " + key + "）")
+  }
+  // §19.5 的「说明」逐条在场（说明它影响什么；不是复述键名）
+  const MAIN_HELP = [
+    "没特殊情况就选「跟着当前会话」。",
+    "下拉里只有真实存在的服务商，选不出错。",
+    "列表跟着上面的服务商联动。",
+    "越细越慢。首次全量评审建议 high。",
+    "范围 1 秒 ~ 1 小时，超出会被拒。",
+    "复审不追求深度，建议 low。",
+    "比 Round 1 短些，卡住能早点收手。",
+    "至少两家才叫交叉——只配一家就是普通提问，没有分歧可比。",
+    // ★ 上限 60 分钟的提示**不住这里**：它由 T-25 单独钉（见下方 watchdog 切片）——
+    //   这样「删掉边界提示」的变异会命中 T-25 的专属断言，而不是被 T-23 的说明清单先拦下。
+    "关掉后看板消失，但「防漂移状态」照常显示。",
+    "一行一个。看板会把它们的验收表读成「核验进度」。最多 8 条。",
+    "点「问这一项」会把这句 + 任务内容一起复制好。上限 500 字。",
+    "调小会把预算留给正文，但复杂改动可能被截断。",
+    "写代码建议保持 high。",
+    "必须小于 Codex 的总时限。",
+    "开太多会抢内存。",
+    "作业跑太久会被判定挂死。",
+    "评审通过后给实现用的授权凭证，过期要重评。",
+    "只有选了「自定义地址」才出现第二项。",
+    "二期功能，现在不影响使用。",
+  ]
+  for (const help of MAIN_HELP) {
+    assert.ok(uiSrc.includes(help), "T-23：§19.5 的说明必须逐条在场：" + help)
+  }
+  assert.ok(uiSrc.includes('h("span", { className: "tc-fk" }, key)'), "T-23：技术键住 .tc-fk 灰小字位")
+  assert.ok(uiSrc.includes('help ? h("div", { className: "tc-help" }, help) : null'), "T-23：说明住 .tc-help 位")
+
+  // —— T-24（§19.3）：4 个 tab + role/aria-selected（真实渲染 SettingsTabs）——
+  assert.deepEqual(UI.SETTINGS_TABS.map((t) => t.id), ["common", "consult", "ledger", "advanced"],
+    "T-24：4 个 tab 的 id/顺序（常用 · 会诊 · 任务台账 · 高级）")
+  assert.deepEqual(UI.SETTINGS_TABS.map((t) => t.label), ["常用", "会诊", "任务台账", "高级"],
+    "T-24：4 个 tab 的中文名")
+  for (const active of ["common", "advanced"]) {
+    const tree = UI.SettingsTabs({ tabs: UI.SETTINGS_TABS, active, onSelect() {} })
+    assert.equal(tree.props.role, "tablist", "T-24：tab 条必须是 role=tablist")
+    const buttons = findUiNodes(tree, (n) => n.type === "button")
+    assert.equal(buttons.length, 4, "T-24：必须恰有 4 个 button（去掉一个 tab ⇒ 红）")
+    for (const b of buttons) assert.equal(b.props.role, "tab", "T-24：每个 button 必须 role=tab")
+    const selected = buttons.filter((b) => b.props["aria-selected"] === true)
+    assert.equal(selected.length, 1, "T-24：aria-selected 恰一个为 true（active=" + active + "）")
+    assert.equal(selected[0], buttons[UI.SETTINGS_TABS.findIndex((t) => t.id === active)],
+      "T-24：选中的必须恰是当前 tab（active=" + active + "）")
+  }
+  assert.ok(uiSrc.includes('role: "tabpanel"'), "T-24：面板必须 role=tabpanel")
+  assert.ok(uiSrc.includes('className: "tc-panel", role: "tabpanel"'), "T-24：tabpanel 用 .tc-panel（一张整体面板）")
+  assert.ok(uiSrc.includes('var [activeTab, setActiveTab] = useState("common")'), "T-24：首屏 = 常用")
+
+  // —— T-25（§19.5 / §19.8）：时间字段 = 数字输入 + 单位下拉；上限 60 分钟提示 ——
+  const tfStart = uiSrc.indexOf("function TimeField(props)")
+  assert.ok(tfStart > 0, "T-25：TimeField 必须存在（时间字段两段式控件）")
+  const tfEnd = uiSrc.indexOf("function field(", tfStart)
+  assert.ok(tfEnd > tfStart, "T-25：TimeField 切片可定位")
+  const timeField = uiSrc.slice(tfStart, tfEnd)
+  assert.ok(timeField.includes('type: "number"'), "T-25：时间字段必须是**数字输入**（不是纯下拉 ⇒ 可填任意值）")
+  assert.ok(timeField.includes('h("select"'), "T-25：时间字段必须有**单位下拉**（分钟 / 小时）")
+  assert.ok(timeField.includes("props.units"), "T-25：单位表由调用方注入（同一控件服务多个时间键）")
+  assert.ok(uiSrc.includes("appearance:none"), "T-25：下拉 appearance:none（§19.6 自绘箭头）")
+  const wdStart = uiSrc.indexOf("function consultWatchdogCard()")
+  assert.ok(wdStart > 0, "T-25：会诊看门狗卡片必须存在（§19.9：从原合并卡拆出）")
+  const wdEnd = uiSrc.indexOf("function engTokenTtlCard()", wdStart)
+  assert.ok(wdEnd > wdStart, "T-25：看门狗切片可定位")
+  const watchdog = uiSrc.slice(wdStart, wdEnd)
+  assert.ok(watchdog.includes("h(TimeField"), "T-25：consultTimeoutMs 必须走 TimeField（数字输入 + 单位下拉）")
+  assert.ok(watchdog.includes('setField(["consultTimeoutMs"], e.target.value)'),
+    "T-25：接线仍是 setField([\"consultTimeoutMs\"], e.target.value)")
+  assert.ok(watchdog.includes("上限 60 分钟（1 小时）"), "T-25：上限 60 分钟（1 小时）的提示必须在场")
+  assert.ok(!watchdog.includes('h("select"'),
+    "T-25：看门狗字段本身不得是纯下拉（select 只许住 TimeField 内部）")
+
+  // —— T-26a（§19.5 / §19.10）：目录取不到而降价为文本框时，提示 + 警示描边必须在 ——
+  const degradedCatalog = { ok: false, note: "catalog 端点无数据" }
+  const providerFallback = UI.ProviderInput({ catalog: degradedCatalog, value: "", onChange() {} })
+  assert.ok(uiTreeText(providerFallback).includes("没能拉取模型目录，这里请手动填写，注意拼写"),
+    "T-26a：ProviderInput 降级分支必须显示「没能拉取模型目录…」")
+  assert.equal(findUiNodes(providerFallback,
+    (n) => n.type === "input" && String(n.props.className || "").includes("tc-warn")).length, 1,
+    "T-26a：ProviderInput 降级输入框必须有警示描边类 tc-warn")
+  const modelFallback = UI.ModelInput({ catalog: degradedCatalog, provider: "", value: "", onChange() {} })
+  assert.ok(uiTreeText(modelFallback).includes("没能拉取模型目录，这里请手动填写，注意拼写"),
+    "T-26a：ModelInput 降级分支必须显示「没能拉取模型目录…」")
+  assert.equal(findUiNodes(modelFallback,
+    (n) => n.type === "input" && String(n.props.className || "").includes("tc-warn")).length, 1,
+    "T-26a：ModelInput 降级输入框必须有警示描边类 tc-warn")
+  // 阳性对照：目录可用 ⇒ 警示不得出现（否则提示就不是「降级」才有的，而是恒在噪音）
+  const okCatalog = { ok: true, providers: [{ id: "acme", name: "Acme" }], byGroup: {} }
+  const providerOk = UI.ProviderInput({ catalog: okCatalog, value: "acme", onChange() {} })
+  assert.ok(!uiTreeText(providerOk).includes("没能拉取模型目录"), "T-26a：目录可用时不得出现降级提示")
+
+  // —— T-26b（§19.5 / §19.10）：会话识别卡只在拿不到 sessionId 时才展开输入框 ——
+  const missingSession = UI.SessionCard({
+    sessionId: "", summary: null, busy: false, onApply() {}, onReset() {}, onRefresh() {},
+  })
+  assert.equal(findUiNodes(missingSession, (n) => n.type === "textarea").length, 1,
+    "T-26b：拿不到会话 id ⇒ 必须渲染那个复制输入框")
+  assert.ok(uiTreeText(missingSession).includes("没能自动识别会话"),
+    "T-26b：降级文案必须在场（把下面这行复制到对话里发给我）")
+  const identifiedSession = UI.SessionCard({
+    sessionId: "session-abcdef123456", summary: null, busy: false, onApply() {}, onReset() {}, onRefresh() {},
+  })
+  assert.equal(findUiNodes(identifiedSession, (n) => n.type === "textarea").length, 0,
+    "T-26b：拿到会话 id ⇒ 不得渲染输入框（改成无条件渲染 ⇒ 红）")
+  assert.ok(uiTreeText(identifiedSession).includes("当前会话已识别"),
+    "T-26b：正常态必须显示「✓ 当前会话已识别 session-…」行")
 })
 
 // ————————————— U3c2b 白名单散文面三轴锁（批 14 / FR-2 · 锚 A3 + A4 · AC-4…AC-7） —————————————
