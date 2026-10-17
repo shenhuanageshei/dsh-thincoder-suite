@@ -886,6 +886,10 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
       assert.ok(r.text.includes(seg), "点击详情必须渲染「" + seg + "」段：\n" + r.text)
     }
     assert.ok(r.text.includes("防漂移状态区"), "看板顶部必须有防漂移状态区（FR-11）")
+    // ★ 2026-10-17 U-1 实测后的新增动作：条目上必须有「在侧边聊」（= 复制话术 + 开一个 sidechat 会话）。
+    //   实测结论：`sidechat` 可开，但种子只携带 threadId ⇒ **不能预填**，故按钮文案是「聊」而不是「自动发」。
+    assert.ok(r.text.includes("在侧边聊"),
+      "US-6 的侧边会话入口必须渲染（U-1 已实测：能开、不能预填）—— 删掉它等于把这一点退回成「什么都不发生」")
     assert.ok(r.text.includes("确认 OCR 方案"), "看板必须列出该条目")
   } finally {
     rmSync(ws, { recursive: true, force: true })
