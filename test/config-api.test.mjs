@@ -1043,11 +1043,17 @@ test("D-39f: 放行 ⇒ 原行为零回归；且栅栏收到的是**原始 req �
   assert.equal(seen, r.req, "栅栏必须拿到原始 Node req（Host/Origin/Cookie 头直达栅栏，零转译）")
 })
 
-test("D-39g: 全部 8 个端点同此一门（方法 × 路径矩阵，拒绝码一律透传）", async () => {
+// ★ 2026-10-17 交付评审 #3 修：标题原写「**全部 8 个端点**」—— 而批 36 新增的
+//   `GET /tasks`（看板载荷）与 `POST /tasks/claim`（接手）不在矩阵里 ⇒ 「全部」这个声明
+//   与现役端点数不符（AGENTS.md 卫生第 4 条「状态行与事实同步」）。⇒ 补齐到 **10 个**，标题同步。
+test("D-39g: 全部 10 个端点同此一门（方法 × 路径矩阵，拒绝码一律透传）", async () => {
   const handler = makeApiHandler(fenceCtx(401), { baseConfig: {}, sessionExists: () => false, stateOf: () => ({}) })
   const matrix = [
     ["GET", "/config"], ["GET", "/session"], ["GET", "/codex/models"], ["GET", "/catalog"],
     ["PUT", "/config"], ["DELETE", "/config"], ["POST", "/apply-session"], ["DELETE", "/session"],
+    // 批 36 / 批 36-补 新增的两条（栅栏在 makeApiHandler 分派之前，机制上本已覆盖，
+    // 这里补进矩阵是为了让「全部 N 个」这个**声明**与现役端点数对得上）
+    ["GET", "/tasks"], ["POST", "/tasks/claim"],
   ]
   const leaks = []
   for (const [method, path] of matrix) {
