@@ -1,6 +1,6 @@
 // tasks.test.mjs — 批 36「个人任务台账 + 侧栏看板」机检腿（设计档 §九 = 权威腿定义）。
 //
-// 腿清单（**T-1…T-15，T-4 拆 a/b ⇒ 共 16 条**；本档顶层 `test(` 数 = 16，与下方逐条一一对应）：
+// 腿清单（**T-1…T-20，T-4 拆 a/b ⇒ 共 21 条**；本档顶层 `test(` 数 = 21，与下方逐条一一对应）：
 //   T-1  无凭据 done ⇒ 拒且零写入（sha256 前后相同）
 //   T-2  blocked 缺 reason / 缺 blockedBy ⇒ 拒且零写入
 //   T-3  非法迁移被拒（**全表 25 组逐对**）＋ 同一道门的另一半：`applyTaskUpdate` 的可改字段**闭集**
@@ -23,6 +23,12 @@
 //   T-14 决策分区**置顶**（在任务区之前）＋ 空集给明确空态（**不渲染空分区**）
 //   T-15 零新增依赖 · 零宿主 import · 零 todo_write 调用点 · 零 todos 投影读取（**三形口径**：
 //        引号字面 / 调用形 / **裸属性读**）· 客户端 inject 不变
+//   —— 批 36-补（归属与交接 + 用户命令；设计档 §十六）——
+//   T-16 `applyTaskClaim` **只改 owner/claimedFrom**（status/evidence/createdBy 逐字不变）
+//   T-17 **两会话互不淹没**：本会话视图只看到自己的 · 待接手看到对方未完成的 · 接手按钮走同一道门
+//   T-18 **旧台账兼容**：无 owner/createdBy ⇒ null，不抛、不迁移、不改写文件
+//   T-19 命令面：缺 `commands` 服务 ⇒ 不抛/不注册/只 warn（工具与看板照常）；有则四条全注册
+//   T-20 命令走**同一道写门**：`/task_done` 无凭据 ⇒ 拒且零写入（拒绝码由写门产出）
 //
 // ★ 每条腿都带「变异自证」注释：说明**去掉哪一处实现会让该腿变红**（本仓纪律：腿必须咬得住实现）。
 // ★ 每条腿都带**阳性/阴性对照**（防「恒红断言」与「恒真空断言」两种假绿）。
@@ -39,11 +45,12 @@ import { fileURLToPath } from "node:url"
 import { createContext, runInContext } from "node:vm"
 import {
   ALLOWED_MIGRATIONS, DEFAULT_COPY_TEMPLATE, LEDGER_FILE, LEDGER_SUBDIR, MAX_DOC_PATHS, REJECT_CODES,
-  TASK_STATUSES, UPDATABLE_FIELDS, applyTaskCreate, applyTaskTransition, applyTaskUpdate,
-  detectSecretShape, isValidDocPathList, parseChecklistDoc, readTasksView, renderTaskDigest,
-  resolveLedgerConfig, resolveTasksPath, serializeLedger, tasksFileSha256, workspaceRootOf,
+  TASK_STATUSES, UPDATABLE_FIELDS, applyTaskClaim, applyTaskCreate, applyTaskTransition, applyTaskUpdate,
+  detectSecretShape, isClaimableBy, isOwnedBy, isValidDocPathList, ownerOf, parseChecklistDoc, readTasksView,
+  renderTaskDigest, resolveLedgerConfig, resolveTasksPath, serializeLedger, tasksFileSha256, workspaceRootOf,
 } from "../lib/tasks.mjs"
-import { buildTasksBoardPayload, makeTaskTools, readChecklistDocs, renderBoardText } from "../lib/tool-tasks.mjs"
+import { buildTaskClaimResult, buildTasksBoardPayload, makeTaskTools, readChecklistDocs, renderBoardText } from "../lib/tool-tasks.mjs"
+import { TASK_COMMAND_DEFINITION_PREFIX, TASK_COMMAND_NAMES, registerTaskCommands } from "../lib/task-commands.mjs"
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -618,11 +625,13 @@ function ledgerSelfParseHits(src, label) {
 test("T-4a（US-5 ① · N-1）: 看板 ≡ 工具读（同一 ws 逐条相等）；看板侧零写盘、零自解析", async () => {
   const ws = freshWs()
   try {
+    // ★ 批 36-补：夹具补 `owner` —— 看板自本批起有**归属维度**，默认区是「本会话」。
+    //   这不是放宽判据，而是「世界变了」：看板的默认视图 = 本会话的活（设计档 §16.2）。
     seedLedger(ws, [
-      task("t-1", { status: "在做", title: "在办的一条" }),
-      task("t-2", { kind: "decision", title: "等你拍板的一条" }),
-      task("t-3", { status: "卡住", blockedBy: "external", blockedReason: "等对端", title: "卡住的一条" }),
-      task("t-4", { status: "完成", evidence: "跑了 12/12 绿", title: "已完成的一条" }),
+      task("t-1", { status: "在做", owner: "s-1", createdBy: "s-1", title: "在办的一条" }),
+      task("t-2", { kind: "decision", owner: "s-1", createdBy: "s-1", title: "等你拍板的一条" }),
+      task("t-3", { status: "卡住", blockedBy: "external", blockedReason: "等对端", owner: "s-1", createdBy: "s-1", title: "卡住的一条" }),
+      task("t-4", { status: "完成", evidence: "跑了 12/12 绿", owner: "s-1", createdBy: "s-1", title: "已完成的一条" }),
     ], 4)
     const view = readTasksView(ws)
 
@@ -868,7 +877,8 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
     assert.doesNotThrow(() => mod.apply(noSb.ctx), "无服务时注册同样不得抛")
 
     // ② 点任务的载荷三要素（host 侧产出，浏览器只渲染 ⇒ 三要素可机检）
-    seedLedger(ws, [task("t-1", { kind: "decision", title: "确认 OCR 方案", why: "识别率不达标", status: "在做" })], 1)
+    //    ★ 批 36-补：夹具补 `owner: "s-1"`（看板默认区 = 本会话；设计档 §16.2 的「世界变了」）
+    seedLedger(ws, [task("t-1", { kind: "decision", title: "确认 OCR 方案", why: "识别率不达标", status: "在做", owner: "s-1", createdBy: "s-1" })], 1)
     const payload = buildTasksBoardPayload({ ws, sessionId: "s-1", config: {}, drift: { goal: null, criteria: null, debts: [], pushback: 0 } })
     const click = payload.ledger.decisions[0].click
     for (const k of ["plain", "docs", "progress"]) {
@@ -899,21 +909,23 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
 // 默认展开（初值 true）⇒ ③ 的折叠断言红。
 
 /**
- * 用**真实客户端组件**渲染看板：首渲染 → 放行 fetch 的微任务 → 点「展开」→（可选）点某按钮 / 点「看详情」。
- * @param {{detail?: boolean, clickLabel?: string, clipboard?: null}} [opts]
+ * 用**真实客户端组件**渲染看板：首渲染 → 放行 fetch 的微任务 → 点「展开」→（可选）点某按钮 / 点「看详情」/点一串按钮。
+ * @param {{detail?: boolean, clickLabel?: string, clipboard?: null, fetchImpl?: Function, clicks?: string[]}} [opts]
+ *   `fetchImpl` 覆盖默认的「永远返回同一份载荷」（批 36-补：接手的 POST 要能落到真实 host 实现上）；
+ *   `clicks` = 依次点击的按钮文案（每点一次都放行微任务并重渲染）。
  * @returns {Promise<{text, collapsedText, tree, tab}>}
  */
-async function renderClientBoard(payload, { detail = false, clickLabel = null, clipboard } = {}) {
+async function renderClientBoard(payload, { detail = false, clickLabel = null, clipboard, fetchImpl, clicks, sessionId = "s-1" } = {}) {
   const harness = makeHookHarness()
   const { exports: mod } = loadClientBundle({
     React: harness.React,
-    fetchImpl: () => Promise.resolve({ json: () => Promise.resolve(payload) }),
+    fetchImpl: fetchImpl || (() => Promise.resolve({ json: () => Promise.resolve(payload) })),
     clipboard,
   })
   let tabDesc = null
   mod.apply(fakeClientCtx({ registerTab: (d) => { tabDesc = d; return () => {} } }).ctx)
   assert.ok(tabDesc && typeof tabDesc.component === "function", "必须先注册出可渲染的 tab descriptor")
-  const props = { ctx: {}, scope: { sessionId: "s-1" }, tab: { id: "thincoder:tasks" }, visible: true }
+  const props = { ctx: {}, scope: { sessionId }, tab: { id: "thincoder:tasks" }, visible: true }
   const first = harness.render(tabDesc.component, props) // 挂载：effect 发起拉取（promise 尚未落地）
   const collapsedText = treeText(first).join("\n")
   for (let i = 0; i < 8; i++) await Promise.resolve() // 放行 fetch → json → setState 的微任务链
@@ -926,6 +938,11 @@ async function renderClientBoard(payload, { detail = false, clickLabel = null, c
   }
   if (clickLabel) {
     clickButton(tree, clickLabel)
+    tree = harness.render(tabDesc.component, props)
+  }
+  for (const label of Array.isArray(clicks) ? clicks : []) {
+    clickButton(tree, label)
+    for (let i = 0; i < 8; i++) await Promise.resolve() // 放行 POST → 载荷 → setState
     tree = harness.render(tabDesc.component, props)
   }
   return { text: treeText(tree).join("\n"), collapsedText, tree, tab: tabDesc }
@@ -959,8 +976,8 @@ test("T-13（US-7）: 复制话术含默认模板句且**模板可配置**；两
   const ws = freshWs()
   try {
     seedLedger(ws, [
-      task("t-1", { kind: "decision", title: "等你拍板的一条" }),
-      task("t-2", { status: "在做", title: "在办的一条" }),
+      task("t-1", { kind: "decision", title: "等你拍板的一条", owner: "s-1", createdBy: "s-1" }),
+      task("t-2", { status: "在做", title: "在办的一条", owner: "s-1", createdBy: "s-1" }),
     ], 2)
     const dflt = buildTasksBoardPayload({ ws, sessionId: "s-1", config: {}, drift: null })
     const one = dflt.ledger.decisions[0]
@@ -996,9 +1013,10 @@ test("T-14（US-8）: 决策分区在任务区**之前**且空集给明确空态
   const ws = freshWs()
   try {
     // ① 有内容：分区顺序 + **真实渲染**顺序
+    //    ★ 批 36-补：夹具补 `owner: "s-1"`（看板默认区 = 本会话；设计档 §16.2 的「世界变了」）
     seedLedger(ws, [
-      task("t-1", { kind: "decision", title: "等你拍板的一条" }),
-      task("t-2", { status: "在做", title: "在办的一条" }),
+      task("t-1", { kind: "decision", title: "等你拍板的一条", owner: "s-1", createdBy: "s-1" }),
+      task("t-2", { status: "在做", title: "在办的一条", owner: "s-1", createdBy: "s-1" }),
     ], 2)
     const payload = buildTasksBoardPayload({ ws, sessionId: "s-1", config: {}, drift: null })
     assert.equal(payload.sections[0].key, "decisions", "决策分区必须置顶（sections[0]）")
@@ -1182,4 +1200,383 @@ test("T-9（US-9）: ledger.mode = off ⇒ 个人台账分区消失、**防漂�
 })
 // 变异自证：把 `off` 分支改成整段返回（连 drift 一起丢）⇒ 状态区两条断言红；默认值改成 off ⇒ 反向自证红。
 
-// ═══════════════ 腿部收口（16 条 = T-1…T-15，T-4 拆 a/b） ═══════════════
+// ═══════════════ T-16：claim **只改 owner**（设计档 §16.4；交接 = 改归属不改状态） ═══════════════
+
+test("T-16（§16.2 · §16.4）: applyTaskClaim 只改 owner/claimedFrom，status/evidence/createdBy 逐字不变", () => {
+  const ws = freshWs()
+  try {
+    // 夹具：一条「旧会话留在在做」的活 + 一条已完成（带凭据）的条目 —— 两条都要经得起 claim
+    seedLedger(ws, [
+      task("t-1", { status: "在做", owner: "s-old", createdBy: "s-old" }),
+      task("t-2", { status: "完成", owner: "s-old", createdBy: "s-old", evidence: "跑了 12/12 绿", doneAt: "2026-10-17T01:00:00.000Z" }),
+    ], 5)
+    const before = readTasksView(ws).tasks
+
+    // ① 阳性：接手 t-1（新会话 s-new）
+    const r = applyTaskClaim(ws, { id: "t-1", sessionId: "s-new", expectedRev: 5 })
+    assert.equal(r.ok, true, "合法接手必须放行：" + JSON.stringify(r))
+    assert.equal(r.rev, 6, "接手是一次真实写 ⇒ rev+1（否则并发检测会失效）")
+    assert.equal(r.owner, "s-new")
+    assert.equal(r.claimedFrom, "s-old", "返回值必须回传旧 owner")
+
+    const after = readTasksView(ws)
+    const t1 = after.tasks.find((t) => t.id === "t-1")
+    assert.equal(t1.owner, "s-new", "owner 必须改成接手方会话")
+    assert.equal(t1.claimedFrom, "s-old", "claimedFrom 必须记下旧 owner")
+    assert.equal(t1.createdBy, "s-old", "★ createdBy 是审计事实，**任何写路都不许改**")
+    // ② 逐字不变：除 owner/claimedFrom 外的**每个字段**都必须与 claim 前完全相同
+    const prev = before.find((t) => t.id === "t-1")
+    const changedKeys = Object.keys(t1).filter((k) => JSON.stringify(t1[k]) !== JSON.stringify(prev[k])).sort()
+    assert.deepEqual(changedKeys, ["claimedFrom", "owner"],
+      "★ claim **只许动这两个字段**（实测动了：" + JSON.stringify(changedKeys) + "）")
+    assert.equal(t1.status, "在做", "★ 接手**不改状态**（凭据门 / 五态 / rev 全不破）")
+    assert.equal(t1.evidence, null, "接手**不得**写凭据（凭据只由完成迁移写）")
+    // ③ 另一条（完成态）同样只改归属，evidence/doneAt 逐字不变
+    assert.equal(applyTaskClaim(ws, { id: "t-2", sessionId: "s-new", expectedRev: after.rev }).ok, true)
+    const t2 = readTasksView(ws).tasks.find((t) => t.id === "t-2")
+    assert.equal(t2.owner, "s-new")
+    assert.equal(t2.status, "完成", "完成态不会因接手而回退")
+    assert.equal(t2.evidence, "跑了 12/12 绿", "evidence 逐字不变")
+    assert.equal(t2.doneAt, "2026-10-17T01:00:00.000Z", "doneAt 逐字不变")
+
+    // ④ 阴性（同一道门）：缺会话 id / 条目不存在 / 陈旧 rev ⇒ 拒且**零写入**
+    const cur = readTasksView(ws).rev
+    assertRejectNoWrite(ws, applyTaskClaim(ws, { id: "t-1", expectedRev: cur }), "owner-required")
+    assertRejectNoWrite(ws, applyTaskClaim(ws, { id: "t-404", sessionId: "s-new", expectedRev: cur }), "id-missing")
+    assertRejectNoWrite(ws, applyTaskClaim(ws, { id: "t-1", sessionId: "s-new", expectedRev: cur - 1 }), "rev-conflict")
+
+    // ⑤ 归属只有 claim 一条路：改单 / 状态迁移**都不得**动 owner（含试图直接写）
+    assertRejectNoWrite(ws, applyTaskUpdate(ws, { id: "t-1", patch: { owner: "s-evil" }, expectedRev: cur }), "field-not-updatable")
+    assert.equal(applyTaskTransition(ws, { id: "t-1", to: "完成", evidence: "跑完了", expectedRev: cur }).ok, true)
+    const t1b = readTasksView(ws).tasks.find((t) => t.id === "t-1")
+    assert.equal(t1b.owner, "s-new", "状态迁移**不**改归属")
+    assert.equal(t1b.createdBy, "s-old", "createdBy 依然不变")
+
+    // ⑥ 三区的谓词与写门同源（`isOwnedBy` / `isClaimableBy`）
+    assert.equal(isOwnedBy(t1b, "s-new"), true, "本会话视图认 owner")
+    assert.equal(isClaimableBy(t1b, "s-other"), false, "**完成**的条目不可接手（待接手区 = 未完成）")
+    assert.equal(isClaimableBy({ ...t1b, status: "在做" }, "s-other"), true, "未完成 + 别人的 ⇒ 可接手")
+    assert.equal(isClaimableBy({ ...t1b, status: "在做" }, null), false, "无会话 id ⇒ 不可接手（按钮点不动的东西不许算作可接手）")
+    assert.equal(ownerOf({}), null, "缺 owner 字段 ⇒ null（旧台账语义）")
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+})
+// 变异自证：让 `applyTaskClaim` 顺手把 status 推成「已接手」（把 `{ ...cur, owner }` 改成
+// `{ ...cur, owner, status: "已接手" }`）⇒ ② 的 `changedKeys` 会变成 ["claimedFrom","owner","status"]
+// ⇒ deepEqual 当场红；让 claim 沿用 `applyTaskTransition` 的凭据门 ⇒ ③ 的完成态那条被 `evidence-required` 拒 ⇒ 红；
+// 删掉 `owner-required` 分支（缺会话 id 时落 null）⇒ ④ 第一条红。
+
+// ═══════════════ T-17：两会话互不淹没（三区）＋ 待接手的「接手」按钮 ═══════════════
+
+test("T-17（§16.2 · US-12）: 两会话各看各的（本会话 / 待接手 / 全部）＋ 接手按钮走同一道门", async () => {
+  const ws = freshWs()
+  try {
+    seedLedger(ws, [
+      task("t-1", { status: "在做", owner: "s-A", createdBy: "s-A", title: "A 会话的活" }),
+      task("t-2", { status: "在做", owner: "s-B", createdBy: "s-B", title: "B 会话的活" }),
+      task("t-3", { status: "完成", owner: "s-B", createdBy: "s-B", title: "B 会话做完的", evidence: "跑过了" }),
+      task("t-4", { status: "待办", title: "旧台账里无归属的一条" }),
+      // ★ 「待接手区不判会话活性」的直接证据：这个 owner **从未存在过**（没有这个会话），
+      //   它照样出现在待接手列表里 —— 说明判据只看归属，不看谁还活着。
+      task("t-5", { status: "在做", owner: "s-ghost", createdBy: "s-ghost", title: "上辈子会话留下的活" }),
+    ], 3)
+    const ids = (rows) => rows.map((r) => r.id).sort()
+
+    // ① 两个会话各拿一份载荷：本会话视图**只看到自己的**
+    const a = buildTasksBoardPayload({ ws, sessionId: "s-A", config: {}, drift: null })
+    const b = buildTasksBoardPayload({ ws, sessionId: "s-B", config: {}, drift: null })
+    const rowsOf = (p, scope) => (p.views[scope].sections || []).flatMap((s) => s.tasks || [])
+    assert.deepEqual(ids(rowsOf(a, "mine")), ["t-1"], "A 的本会话视图只看到 t-1")
+    assert.deepEqual(ids(rowsOf(b, "mine")), ["t-2", "t-3"], "B 的本会话视图只看到自己的两条（含已完成）")
+    // ② 待接手 = 未完成 ∧ owner ≠ 当前会话（完成的不算；无归属的算；**不存在的会话留下的也算**）
+    assert.deepEqual(ids(rowsOf(a, "claimable")), ["t-2", "t-4", "t-5"], "A 的待接手：B 的 + 无归属的 + 幽灵会话的")
+    assert.deepEqual(ids(rowsOf(b, "claimable")), ["t-1", "t-4", "t-5"], "B 的待接手：A 的 + 无归属的 + 幽灵会话的")
+    assert.ok(ids(rowsOf(a, "all")).length === 5, "全部区 = 整本账（5 条）")
+    assert.equal(a.defaultScope, "mine", "默认区 = 本会话")
+    assert.deepEqual(a.scopes.map((s) => [s.key, s.count]), [["mine", 1], ["claimable", 3], ["all", 5]], "三区计数由 host 给")
+    // ③ 待接手行**带 canClaim**；本会话行不带（按钮只在能落地的地方出现）
+    assert.ok(rowsOf(a, "claimable").every((r) => r.canClaim === true), "待接手区每条都可接手")
+    assert.ok(rowsOf(a, "mine").every((r) => r.canClaim === false), "本会话区不显示接手")
+    assert.equal(buildTasksBoardPayload({ ws, sessionId: null, config: {}, drift: null }).defaultScope, "all",
+      "无会话 id ⇒ 默认「全部」（否则永远是空看板）")
+
+    // ④ 真实渲染面（`lib/client.js`）：默认显示本会话 → 点「待接手」切区 → 点「接手」调 `task_claim`
+    const claimCalls = []
+    const fetchImpl = (url, init) => {
+      if (init && init.method === "POST") {
+        const body = JSON.parse(init.body)
+        claimCalls.push({ url: String(url), body })
+        const r = buildTaskClaimResult({ ws, sessionId: body.sessionId, id: body.id, config: {}, drift: null })
+        return Promise.resolve({ json: () => Promise.resolve(r) })
+      }
+      return Promise.resolve({ json: () => Promise.resolve(a) })
+    }
+    const r1 = await renderClientBoard(a, { fetchImpl, sessionId: "s-A" })
+    assert.ok(r1.text.includes("A 会话的活"), "本会话区必须显示自己的活：\n" + r1.text)
+    assert.ok(!r1.text.includes("B 会话的活"), "★ 别的会话的活**不得**出现在本会话区：\n" + r1.text)
+    for (const label of ["本会话（1）", "待接手（3）", "全部（5）"]) {
+      assert.ok(r1.text.includes(label), "三区切换按钮必须渲染「" + label + "」")
+    }
+    const r2 = await renderClientBoard(a, { fetchImpl, sessionId: "s-A", clicks: ["待接手（3）"] })
+    assert.ok(r2.text.includes("B 会话的活"), "切到待接手后必须看到对方未完成的活：\n" + r2.text)
+    assert.ok(r2.text.includes("接手"), "待接手区每条必须带「接手」按钮")
+    assert.ok(!r2.text.includes("B 会话做完的"), "完成的条目不进待接手区")
+    // 点「接手」⇒ 走 host 的 `/tasks/claim`（同一道写门），页面用**回来的新载荷**重渲染
+    const r3 = await renderClientBoard(a, { fetchImpl, sessionId: "s-A", clicks: ["待接手（3）", "接手"] })
+    assert.equal(claimCalls.length, 1, "点「接手」必须**真的**发出一次 claim 请求（实测 " + claimCalls.length + " 次）")
+    assert.equal(claimCalls[0].url, "/thincoder-suite/api/tasks/claim", "请求必须打到看板写入口：" + claimCalls[0].url)
+    assert.equal(claimCalls[0].body.sessionId, "s-A", "接手方 = 当前看板会话")
+    assert.equal(claimCalls[0].body.id, "t-2", "接手的是被点的那一条")
+    const claimed = readTasksView(ws).tasks.find((t) => t.id === "t-2")
+    assert.equal(claimed.owner, "s-A", "★ 接手必须真的落盘（owner 改成当前会话）")
+    assert.equal(claimed.claimedFrom, "s-B", "claimedFrom 记下旧 owner")
+    assert.equal(claimed.status, "在做", "接手不改状态")
+    assert.ok(r3.text.includes("待接手（2）"),
+      "接手后必须用**回来的新载荷**重渲染（待接手从 3 掉到 2）：\n" + r3.text)
+    assert.ok(!r3.text.includes("B 会话的活"), "已接手的 t-2 不再属于待接手区")
+
+    // ⑤ 失败降级（如实，不假装成功）：写门拒绝 ⇒ 把等价命令交到用户手里，且**零写入**
+    const shaBefore = tasksFileSha256(ws)
+    const failing = (url, init) => {
+      if (init && init.method === "POST") {
+        return Promise.resolve({ json: () => Promise.resolve({ ok: false, code: "rev-conflict", text: "task_claim 拒写：账本已被其他会话改动" }) })
+      }
+      return Promise.resolve({ json: () => Promise.resolve(buildTasksBoardPayload({ ws, sessionId: "s-B", config: {}, drift: null })) })
+    }
+    const bNull = buildTasksBoardPayload({ ws, sessionId: "s-B", config: {}, drift: null })
+    // 剪贴板缺席（`clipboard: null`）⇒ 走「可选中文本块」的降级面 ⇒ 断言才看得见那段话术
+    const r4 = await renderClientBoard(bNull, { fetchImpl: failing, sessionId: "s-B", clipboard: null, clicks: ["待接手（4）", "接手"] })
+    assert.ok(r4.text.includes("/task_claim t-1"), "失败时必须给出**等价命令**让用户自己走一遍：\n" + r4.text.slice(-400))
+    assert.ok(r4.text.includes("账本已被其他会话改动"), "写门的拒绝原文必须原样送达（不吞、不改写）")
+    assert.equal(tasksFileSha256(ws), shaBefore, "失败路径**零写入**")
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+})
+// 变异自证：让三区筛选恒返回全部（`tasksInScope` 去掉 mine/claimable 分支）⇒ ① 的「只看到自己的」当场红；
+// 把 `canClaim` 恒置 true ⇒ ③ 的「本会话区不显示接手」红；让看板的「接手」按钮改成只复制话术、
+// 不发请求（删掉 claimTask 调用）⇒ ④ 的 claimCalls.length === 1 红；
+// 让失败分支假装成功（照样 setState 成 payload）⇒ ⑤ 的「等价命令」与「拒绝原文」两条红。
+
+// ═══════════════ T-18：旧台账向后兼容（无 owner ⇒ null，不抛、不迁移、不改写） ═══════════════
+
+test("T-18（§16.1 向后兼容）: 无 owner/createdBy 的旧台账能读（=null）、不抛、不迁移、不改写；写后才补字段", () => {
+  const ws = freshWs()
+  try {
+    // 旧的**原始**落盘形态（本批之前的 schema：没有归属三字段）
+    const legacyText = JSON.stringify({
+      version: 1,
+      rev: 3,
+      tasks: [{
+        id: "t-1", kind: "work", title: "旧台账里的一条", status: "在做", check: "跑 X 看到 Y",
+        evidence: null, blockedReason: null, blockedBy: null, priority: 0, why: null,
+        createdAt: "2026-10-16T00:00:00.000Z", doneAt: null,
+      }],
+    }, null, 2) + "\n"
+    seedRaw(ws, legacyText)
+    const sha = tasksFileSha256(ws)
+
+    // ① 读面：不抛、字段视 null、**不改写文件**（读是纯函数）
+    let view = null
+    assert.doesNotThrow(() => { view = readTasksView(ws) }, "旧台账**绝不许**让读面抛（T-18）")
+    assert.equal(view.malformed, false, "缺归属字段**不是**畸形（旧台账是合法输入）")
+    assert.equal(view.tasks.length, 1, "旧条目必须照常读出来")
+    assert.equal(view.tasks[0].owner, null, "缺 owner ⇒ null（= 无归属）")
+    assert.equal(view.tasks[0].createdBy, null, "缺 createdBy ⇒ null")
+    assert.equal(view.tasks[0].claimedFrom, null, "缺 claimedFrom ⇒ null")
+    assert.equal(tasksFileSha256(ws), sha, "★ 读面**不得改写文件**（不迁移、不回填）")
+    // ② 三区判定对旧条目的行为（未完成 + owner=null ⇒ 不是任何人的 ⇒ 可被接手）
+    assert.equal(isOwnedBy(view.tasks[0], "s-new"), false, "无归属的旧条目不属于任何会话")
+    assert.equal(isClaimableBy(view.tasks[0], "s-new"), true, "无归属且未完成 ⇒ 出现在「待接手」")
+
+    // ③ 旧条目**照常可写**（写门不是「见旧格式就拒」）：一次真实写成功后才补上归属字段
+    const c = applyTaskCreate(ws, { kind: "work", title: "新会话建的一条", check: "建成就行", sessionId: "s-new", expectedRev: 3 })
+    assert.equal(c.ok, true, "旧台账上建单必须放行：" + JSON.stringify(c))
+    const after = readTasksView(ws)
+    const legacy = after.tasks.find((t) => t.id === "t-1")
+    const fresh = after.tasks.find((t) => t.id === c.id)
+    assert.equal(legacy.owner, null, "★ 建单**不得**顺手把旧条目的归属改成当前会话（绝不自动改归属）")
+    assert.equal(legacy.createdBy, null, "旧条目的 createdBy 也不许被编造")
+    assert.equal(fresh.owner, "s-new", "新条目落在建单会话名下")
+    assert.equal(fresh.createdBy, "s-new")
+
+    // ④ 接手旧条目 ⇒ claimedFrom = null（旧 owner 真的是 null，不编造）
+    const claim = applyTaskClaim(ws, { id: "t-1", sessionId: "s-new", expectedRev: after.rev })
+    assert.equal(claim.ok, true, "旧条目必须能被接手：" + JSON.stringify(claim))
+    const claimed = readTasksView(ws).tasks.find((t) => t.id === "t-1")
+    assert.equal(claimed.owner, "s-new")
+    assert.equal(claimed.claimedFrom, null, "旧 owner 是 null ⇒ claimedFrom 如实记 null（不编造一个假前任）")
+    assert.equal(claimed.createdBy, null, "createdBy 仍是未知（审计事实不因接手而编造）")
+    assert.equal(claimed.status, "在做", "接手不改状态")
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+})
+// 变异自证：让 `normalizeTask` 在缺 owner 时抛（或把缺字段判成畸形）⇒ ① 的 doesNotThrow / malformed 断言红；
+// 让读面「顺手回填」归属（parse 后写回文件）⇒ ① 的 sha256 断言红；
+// 让 `applyTaskCreate` 把同账本里其它条目的 owner 改成当前会话 ⇒ ③ 的「不得顺手改归属」断言红。
+
+// ═══════════════ 命令面夹具（T-19 / T-20 共用） ═══════════════
+
+/**
+ * 假宿主 ctx（**只**提供 `get` 与 `effect`）。
+ * `effect` 按官方形态执行**生成器**生命周期：收集它 yield 出来的 disposer（teardown 与四个 register 返回值）。
+ */
+function fakeCommandCtx(hasService = true) {
+  const calls = { registered: [], effects: [], yielded: [] }
+  const commands = hasService
+    ? { register: (def) => { calls.registered.push(def); return () => { /* disposer */ } } }
+    : undefined
+  const ctx = {
+    get: (name) => (name === "commands" ? commands : undefined),
+    effect: (fn, label) => {
+      calls.effects.push(label)
+      if (typeof fn !== "function") return () => {}
+      const it = fn()
+      let step = it.next()
+      while (!step.done) {
+        calls.yielded.push(step.value)
+        step = it.next()
+      }
+      return () => {}
+    },
+  }
+  return { ctx, calls }
+}
+
+// ═══════════════ T-19：命令面的降级与注册（缺服务不抛；有则四条全注册） ═══════════════
+
+test("T-19（§16.3）: 缺 commands 服务 ⇒ 不抛/不注册/只 warn（工具与看板照常）；有则四条全注册（名字逐字）", async () => {
+  // ① 缺服务：**不抛**、**不注册**、连 effect 都不碰（也就不会留下半条生命周期）
+  const warnMsgs = []
+  const none = fakeCommandCtx(false)
+  let r1 = null
+  assert.doesNotThrow(() => {
+    r1 = registerTaskCommands(none.ctx, { wsOf: () => null, warn: (m) => warnMsgs.push(m) })
+  }, "缺 commands 服务时**绝不许抛**（否则整个插件装配会断）")
+  assert.deepEqual(r1.registered, [], "缺服务 ⇒ 一条都没注册")
+  assert.equal(r1.skipped, true)
+  assert.equal(none.calls.effects.length, 0, "缺服务 ⇒ 不登记生命周期（避免留下空 effect）")
+  assert.equal(none.calls.registered.length, 0)
+  assert.ok(warnMsgs.length === 1 && warnMsgs[0].includes("commands"), "必须**留痕**（warn 一条，不静默）：" + JSON.stringify(warnMsgs))
+
+  // ② 工具与看板照常：命令面缺席**不影响**台账本体（工具照旧可用）
+  const ws = freshWs()
+  try {
+    seedLedger(ws, [task("t-1", { owner: "s-1", createdBy: "s-1", title: "命令面缺席也照常" })], 0)
+    const tools = makeTaskTools({ wsOf: () => ws, configOf: () => ({}), driftOf: () => null })
+    const text = await tools.task_list.execute({}, { agent: { session: { id: "s-1" } } })
+    assert.ok(text.includes("t-1"), "缺命令服务时 task_list 工具必须照常（命令是附属面）：" + text)
+
+    // ③ 有服务 ⇒ 四条**全**注册（名字 / definitionId 逐字 / handler / description）
+    const { ctx, calls } = fakeCommandCtx(true)
+    const r2 = registerTaskCommands(ctx, { wsOf: () => ws })
+    assert.equal(r2.skipped, false)
+    assert.deepEqual(r2.registered, ["task_list", "task_add", "task_done", "task_claim"], "四条必须**全**注册（名字逐字）")
+    assert.deepEqual(calls.registered.map((d) => d.name), [...TASK_COMMAND_NAMES], "注册出去的就是那四条")
+    assert.equal(calls.registered.length, 4)
+    // 官方契约：register({ definitionId, name, description, handler })
+    for (const def of calls.registered) {
+      assert.equal(def.definitionId, TASK_COMMAND_DEFINITION_PREFIX + def.name,
+        "definitionId 必须是**纯字符串** `" + TASK_COMMAND_DEFINITION_PREFIX + "<name>`（不 import 宿主品牌类型）")
+      assert.equal(typeof def.definitionId, "string", "definitionId 运行时就是字符串")
+      assert.equal(typeof def.handler, "function", "每条命令必须带 handler")
+      assert.ok(typeof def.description === "string" && def.description.trim() !== "", "每条命令必须有描述")
+    }
+    // 生命周期：官方形态 = 先 yield teardown（函数），再 yield 四个 register 的返回值
+    assert.equal(calls.effects.length, 1, "恰登记一次生命周期（ctx.effect(label)）")
+    assert.ok(String(calls.effects[0]).includes("thincoder-suite"), "生命周期要带可辨识的 label：" + calls.effects[0])
+    assert.equal(calls.yielded.length, 5, "1 个 teardown + 4 个 disposer（实测 " + calls.yielded.length + "）")
+    assert.equal(typeof calls.yielded[0], "function", "第一个 yield 必须是 teardown（官方 /compact 同款）")
+    // ④ 铁律 1：宿主的 inject 数组**一字不扩**（commands 只能 ctx.get）
+    const hostSrc = readFileSync(join(PLUGIN_DIR, "lib", "index.mjs"), "utf8")
+    const m = /export const inject = \[([^\]]*)\]/.exec(hostSrc)
+    assert.ok(m, "必须能定位宿主半边的 inject 数组（定位不到 ⇒ 本腿恒真空）")
+    const names = m[1].split(",").map((s) => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean)
+    assert.deepEqual(names, ["tools", "systemPrompt", "webServer", "llm", "subagents"],
+      "★ 宿主 inject 不得因命令面而新增条目（声明了但宿主没注册的服务 ⇒ 整个插件永不激活）：" + JSON.stringify(names))
+    // 服务**只**经 ctx.get 取（不得出现 `ctx.commands` 属性读——那会因白名单当场抛）
+    // ★ 扫描面 = **代码行**（剥掉 `//` 注释）：本档头注里**逐字引用**了官方 `/compact` 源码，
+    //   那段引用里本来就有 `ctx.commands.register(...)` —— 那是文档，不是属性读。
+    const cmdSrc = readFileSync(join(PLUGIN_DIR, "lib", "task-commands.mjs"), "utf8")
+    const cmdCode = cmdSrc.replace(/^\s*\/\/.*$/gm, "")
+    assert.ok(!/ctx\.commands\b/.test(cmdCode), "命令服务不得用属性读（cordis 白名单会当场抛）：只许 ctx.get")
+    assert.ok(/ctx\.commands\b/.test('const it = ctx.commands.register(def)'), "自证：代码里的属性读必须能被同一谓词抓到")
+    assert.ok(/ctx\?\.get\?\.\("commands"\)/.test(cmdCode), "必须能定位到 `ctx.get(\"commands\")` 这一行（语义锚点）")
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+})
+// 变异自证：把缺服务分支改成 `throw`（或直接 `commands.register(...)` 不判空）⇒ ① 的 doesNotThrow 当场红；
+// 把 `commands` 加进宿主 inject 数组 ⇒ ④ 的 deepEqual 红；只注册三条 ⇒ ② 的 registered deepEqual 红。
+
+// ═══════════════ T-20：命令走**同一道写门**（无凭据 ⇒ 拒且零写入） ═══════════════
+
+test("T-20（§16.3 · 铁律 4）: /task_done 无凭据 ⇒ 写门拒且零写入；命令层不自己判状态机", async () => {
+  const ws = freshWs()
+  try {
+    seedLedger(ws, [task("t-1", { status: "在做", owner: "s-1", createdBy: "s-1", title: "命令要完成的活" })], 0)
+    const { ctx, calls } = fakeCommandCtx(true)
+    registerTaskCommands(ctx, { wsOf: () => ws, configOf: () => ({}), driftOf: () => null })
+    const byName = new Map(calls.registered.map((d) => [d.name, d]))
+    const agent = { session: { id: "s-1", header: { cwd: ws } } }
+    const sha0 = tasksFileSha256(ws)
+
+    // ① 无凭据 ⇒ **写门**拒（拒绝码 `evidence-required` 只有写门会产出 ⇒ 命令层确实把判定交出去了）
+    const bad = await byName.get("task_done").handler({ rawInput: "/task_done t-1", agent })
+    assert.equal(bad.kind, "error", "无凭据的完成必须失败：" + JSON.stringify(bad))
+    assert.ok(bad.text.includes("evidence-required"), "拒绝码必须是**写门**的（命令层不得自己判）：" + bad.text)
+    assert.ok(bad.text.includes("没有写入任何内容"), "回执必须说清零写入：" + bad.text)
+    assert.equal(tasksFileSha256(ws), sha0, "**拒绝路径零写入**（文件 sha256 前后相同）")
+    assert.equal(readTasksView(ws).tasks[0].status, "在做", "被拒后状态不得前进")
+
+    // ② 带凭据 ⇒ 同一条路放行（阳性对照，防「凡命令必拒」的假绿）
+    const g = await byName.get("task_done").handler({ rawInput: "/task_done t-1 | 跑了 node --test：12/12 绿", agent })
+    assert.equal(g.kind, "success", "带凭据必须放行：" + JSON.stringify(g))
+    const done = readTasksView(ws).tasks[0]
+    assert.equal(done.status, "完成")
+    assert.ok(done.evidence.includes("12/12"), "凭据必须落盘")
+
+    // ③ 非法迁移同样由写门拒（命令层没有第二份状态机）
+    const ill = await byName.get("task_done").handler({ rawInput: "/task_done t-1 | 再跑一次", agent })
+    assert.equal(ill.kind, "error")
+    assert.ok(ill.text.includes("illegal-migration"), "完成 → 完成 必须由迁移表拒：" + ill.text)
+
+    // ④ `/task_add` 的 `|` 缺失 ⇒ 命令层只做**参数形态**提示（不写盘）
+    const sha1 = tasksFileSha256(ws)
+    const noPipe = await byName.get("task_add").handler({ rawInput: "/task_add 只有标题没有判据", agent })
+    assert.equal(noPipe.kind, "error")
+    assert.ok(noPipe.text.includes("怎么算完成"), "用法提示必须讲清「怎么算完成」：" + noPipe.text)
+    assert.equal(tasksFileSha256(ws), sha1, "参数不合法 ⇒ 零写入")
+    // 合法形态 ⇒ 与工具面同一个建单门（含归属）
+    const created = await byName.get("task_add").handler({ rawInput: "/task_add 命令建的单 | 跑 node --test", agent })
+    assert.equal(created.kind, "success", JSON.stringify(created))
+    const fresh = readTasksView(ws).tasks.find((t) => t.title === "命令建的单")
+    assert.ok(fresh, "命令建的条目必须真的落盘")
+    assert.equal(fresh.owner, "s-1", "命令建单同样落归属（建单会话 = owner）")
+    assert.equal(fresh.createdBy, "s-1")
+
+    // ⑤ `/task_claim` 也走同一道门（只改 owner，不改状态）
+    const claim = await byName.get("task_claim").handler({ rawInput: "/task_claim t-1", agent: { session: { id: "s-2", header: { cwd: ws } } } })
+    assert.equal(claim.kind, "success", JSON.stringify(claim))
+    const claimed = readTasksView(ws).tasks.find((t) => t.id === "t-1")
+    assert.equal(claimed.owner, "s-2", "命令接手必须真的改归属")
+    assert.equal(claimed.claimedFrom, "s-1")
+    assert.equal(claimed.status, "完成", "接手不改状态（连完成态也不回退）")
+
+    // ⑥ `/task_list` 只读：输出含三区，且**零写入**
+    const sha2 = tasksFileSha256(ws)
+    const listed = await byName.get("task_list").handler({ rawInput: "/task_list", agent })
+    assert.equal(listed.kind, "success")
+    assert.ok(listed.text.includes("本会话") && listed.text.includes("待接手"), "看板回执必须带三区：" + listed.text.slice(0, 200))
+    assert.equal(tasksFileSha256(ws), sha2, "只读命令**零写入**")
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+})
+// 变异自证：在 `/task_done` 的 handler 里自己先判 `evidence === ""` 并直接返回 error ⇒ ① 的
+// `evidence-required` 断言红（拒绝码变成命令层自造的，写门的凭据门被绕过）；让命令层直接写盘
+// （绕过 applyTaskTransition）⇒ ① 的 sha256 与状态两条同时红。
+
+// ═══════════════ 腿部收口（21 条 = T-1…T-20，T-4 拆 a/b，T-19 拆 a/b） ═══════════════

@@ -356,7 +356,7 @@ test("基线常量: 版本非空且 recorded-at 为 ISO 日期；来源枚举钉
   assert.match(BASELINE_RECORDED_AT, /^\d{4}-\d{2}-\d{2}$/)
   assert.deepEqual([...VERSION_SOURCES], ["ctx.pkg", "profile-manifest", "plugin-manager", "package-json", "unknown"],
     "来源枚举 = 批 31 扩源后的四源 + unknown（顺序即读取链的钉死顺序）")
-  assert.deepEqual(REGISTRATION_SURFACE_BASELINE, { toolsRegister: 1, systemPromptSection: 3, textTool: 15 },
+  assert.deepEqual(REGISTRATION_SURFACE_BASELINE, { toolsRegister: 1, systemPromptSection: 3, textTool: 16 },
     "#7 基线 = 批 36 上调值（批 34 的 11 → 15：task_add / task_update / task_done / task_list，D28-6 同口径；"
     + "上调登记见 REGISTRATION_SURFACE_BASELINE 注释，三处同改：本处 · README 头部「N 个工具」· 该常量）。"
     + "★ systemPromptSection **仍为 3**：批 36 的任务摘要**并入既有那条 `systemPrompt.context`**"
@@ -448,7 +448,7 @@ test("A29-6⑤⑥ (US-4 🔵⑤⑥): once 标记两形态共用（注释 + 行�
 test("N-4 README 头部的工具数声明必须等于注册面基线（防跨档计数静默漂移）", () => {
   // 为什么用中文数词：README 头部写的是「十一个工具」这种**中文数词**，不是阿拉伯数字 ⇒
   // 正则必须认中文数词，否则这条腿会因为"找不到"而**恒绿**（那是最坏的一种腿）。
-  const CN = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十一: 11, 十二: 12, 十三: 13, 十四: 14, 十五: 15 }
+  const CN = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十一: 11, 十二: 12, 十三: 13, 十四: 14, 十五: 15, 十六: 16 }
   const readme = readFileSync(join(PLUGIN_DIR, "README.md"), "utf8")
   const head = readme.split("\n").slice(0, 12).join("\n") // 头部区（tagline 所在）
   const m = head.match(/一个插件，\s*([一二三四五六七八九十]+)\s*个工具/u)

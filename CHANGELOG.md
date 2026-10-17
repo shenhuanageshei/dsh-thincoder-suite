@@ -186,6 +186,27 @@
 
 **七、已知残留（诚实清单）**——① **`tasks.json` 只增不删**（删除/归档排第二批）；② **设置页没有台账表单**（三键在 user 层白名单内，可手编 `config.json` 或走 PUT API，但没有可视控件）；③ **U-1 未实测**：「点一下在侧边开一个会话」这条路径**没有端到端验证过** ⇒ 本批按设计档明写的**降级路径**实现（点开看详情 + 一键复制话术），**不假装支持**；④ **需重启 DSH 才生效**（装配期注册；重启时机由用户定）；⑤ **注入行的精确字数预算**（设计档 U-4）按 512 量级落地，未用真实样本重新标定；⑥ **两条「离开某态即清该态专属字段」的语义是设计档未明写、实现定死的**（离开「卡住」清 `blockedReason`/`blockedBy` · 离开「完成」清 `doneAt`；理由是**板面正确性**——否则会给在做/重开的任务显示陈旧读数）：**2026-10-17 定点修复批已登记**（设计档 **§15.2 第 1 行**，含理由与被否决的备选）；同节第 2、3 行登记另两条**设计档未明写的安全型扩张**（越出工作区的文档路径**拒读且拒在读之前** · 文档路径清单上限 **`MAX_DOC_PATHS = 8`**，读面截断 / 写面拒）。
 
+### 同版交付面：批 36-补「归属与交接 + 用户命令」（2026-10-17）
+
+> **一句话（人话）**：上一版给台账加了「谁记的」，但**一换新会话就失忆**——旧会话记的活在新会话的「本会话」里全部消失。这一版把它补成**可交接**：每条活记住**谁建的（永不改）· 现在归谁（只能由「接手」改）· 接手自谁**；看板分**本会话 / 待接手（N）/ 全部**三个区。轮换新会话时，前任停在「在做/卡住」的活会出现在**待接手**里，**点一下接手**就接着干（只改归属，状态和凭据一字不动）。另外：**模型有工具，你也有命令**——`/task_list` `/task_add` `/task_done` `/task_claim` 四条 slash 命令，与工具**走同一道写门**。
+
+**一、为什么要加（人话）**：用户实测后提了两条——「**其他会话的台账都是空**」与「**做了 `sessionId`，交接轮换新会话的时候怎么办**？」（第二句是用户自己识破的断层：只加 `sessionId` ⇒ 交接即失忆）；外加「**模型工具要有，命令也要有 `/task_add` `/task_list` 等等**」。用户同日裁定：**「待接手区不判会话活性」**（判据只看归属，不看那个会话还活着没有——否则判据会飘）。
+
+**二、怎么用（人话）**：① 看板顶部三个切换按钮 `本会话（N）` / `待接手（N）` / `全部（M）`，默认「本会话」（没有会话 id 时默认「全部」，否则永远是空看板）；② **待接手**区每条带**接手**按钮，点一下 = 走 host 的 `POST /thincoder-suite/api/tasks/claim` → 同一道写门 `applyTaskClaim`（只改 `owner`，并记 `claimedFrom`）；③ 模型侧多一个工具 `task_claim`；④ 命令面四条：`/task_list`（打印三区看板）· `/task_add <标题> | <怎么算完成>` · `/task_done <id> | <凭据>` · `/task_claim <id>`。
+
+**三、改了什么（技术面）**
+- `lib/tasks.mjs`：schema 加 **`createdBy` / `owner` / `claimedFrom`** 三字段（读面缺字段 ⇒ `null`，**不迁移、不改写**）；新增**第四个写门动作 `applyTaskClaim`**（只改归属两字段，`status`/`evidence`/`blockedReason`/`blockedBy`/`doneAt`/`createdBy` 逐字不变；走**同一道 rev 门 + 零写入承诺**）；新增归属判据的**单源谓词**（`isOwnedBy` / `isClaimableBy` / `tasksInScope`，看板、工具、命令三面共用）；新增拒绝码 `owner-required`（接手方会话 id 取不到 ⇒ 拒，**不编造归属**）。
+- `lib/tool-tasks.mjs`：新增工具 **`task_claim`**；看板载荷改为**三区**（`scopes` + `views.mine/claimable/all` + `defaultScope`，顶层 `sections`/`emptyState` 仍是默认区那份）；待接手行带 `canClaim`；新增 **`buildTaskClaimResult`**（读 rev → 调门 → 回刷新后的整份载荷，**零状态机**）；降级渲染（`renderBoardText`）与工具列表文本同步三区与归属。
+- `lib/client.js`：看板加**三区切换**与**接手按钮**（失败如实降级：把等价命令 `/task_claim <id>` ＋ 写门拒绝原文交到手上，**不假装成功**）；折叠态摘要增加「待接手 N」。
+- `lib/task-commands.mjs`（**新档**）：四条 slash 命令，**命令契约照官方逐字**（`register({definitionId,name,description,handler})` · `handler(invocation) → Promise<{kind:"success"|"error",text}>` · 生命周期 `ctx.effect(function*(){ yield teardown; yield register })`）。★ `definitionId` 是**纯字符串** `@dsh-external/dsh-thincoder-suite/<name>`（`CommandDefinitionId` 只是类型品牌）——**不 import 任何 `@deepseek-ai/*` 包**。★ **`inject` 数组一字未扩**：命令服务一律 `ctx.get("commands")`，缺它 ⇒ 命令不注册 + warn 一条，**工具与看板照常**。
+- `lib/index.mjs`：注册第五个工具 `task_claim`（一个 `textTool` 一个注册点，不循环）· 接线四条命令 · 新增 `POST /thincoder-suite/api/tasks/claim`（复用同一道信任栅栏 `connection.requestRejection`，回调零状态机）。
+
+**四、有意改锁 / 计数（逐条留痕）**——① `lib/contract-baseline.mjs` 的 `textTool` 注册点 **15 → 16**（+1 工具 `task_claim`），同断言在 `test/contract-baseline.test.mjs` 跟到 16，并给该档的中文数词表补 **`十六: 16`**（README 头部「N 个工具」由 N-4 腿同批互锁：十五 → 十六）；**`systemPromptSection` 仍为 3**（本批不新增注入通道）。② `docs/test-lifecycle.md` 的 `tasks.test.mjs` 行 **16 → 21 条腿**（新增 T-16…T-20；该数字由闸门自己 fs+正则算得，非手抄）。③ **本批没有新增 `test/*.test.mjs`** ⇒ `test/guard-e.test.mjs` 的 T-E19 档清单与 `docs/README.md` 的文档地图**无需**改动（五条新腿全部落在既有 `test/tasks.test.mjs` 里）。
+
+**五、验证读数（本会话实测，非预填）**——`node --test test/tasks.test.mjs` ⇒ **`ℹ tests 21 · ℹ pass 21 · ℹ fail 0`**（exit 0；改动前基线 = `16/16` 绿）。文档闸门 `node --test test/doc-hygiene.test.mjs test/test-lifecycle.test.mjs` ⇒ **`ℹ tests 31 · ℹ pass 31 · ℹ fail 0`**。**全量 `node --test`** ⇒ **`ℹ tests 652 · ℹ pass 651 · ℹ fail 1`**，唯一红项 = **`A28-4`**（`contractWatch` 空 ctx 下的版本读数）：本会话用 `git archive HEAD` 导出**未改动的 HEAD** 在同一执行宿主上跑同一档 ⇒ **同样红**（⇒ 与本单改动无关；且与上一交付记录的「换执行宿主导致 A28-4 假红」同族，如实登记、**不处置**）。
+
+**六、已知残留（诚实清单）**——① **命令面未在真机 DSH 上跑过**（本会话无通用 shell、**不重启 DSH**）：`ctx.commands.register` 对 `definitionId` 是否做**运行时品牌校验**未经实测——若真校验，注册会失败并**只 warn 一条、不中断装配**（其余三条与工具/看板不受影响），**本批不为此加宿主依赖**；② **看板「接手」是新增的写入面**（设计档原写「看板零写操作」）：本批把它收窄为「**唯一的看板写入 = 改归属**」，且**状态/凭据仍不可从看板改**（理由见设计档 §16.5 第 1 行）；③ **交接只跨「同一工作区」**：换到另一个工作区（目录变了）就看不到了——台账本来就是按工作区落盘的；④ **不与 `dsh-team-link` 的 `team/<name>/tasks.md` 联动**（那是另一套账）；⑤ **需重启 DSH 才生效**（装配期注册命令与工具）。
+
 
 ## [0.30.1] — 2026-10-09
 
