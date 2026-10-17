@@ -239,6 +239,14 @@ test("T-3: 非法迁移被拒（25 组逐对断言 = 迁移表本身）＋ 工�
     const toolOkText = await tools.task_update.execute({ id: "t-1", title: "工具路径改的标题" }, exec)
     assert.ok(toolOkText.includes("已改 t-1"), "合法字段必须照常放行：" + toolOkText)
     assert.equal(readTasksView(ws).tasks[0].title, "工具路径改的标题")
+    // ★ 2026-10-17 缺陷修复（用户实测触发）：`task_add` 的 schema 描述面逐字写着 `'work' (default)`，
+    //   但工具层曾把 `args?.kind` 原样透传 ⇒ **按描述省略 kind 会被门以 `kind-invalid` 拒**（我第一次调用就撞上）。
+    //   ⇒ 省略 kind 必须等价于显式 `kind: "work"`（默认值落在工具层；门仍保持严格枚举，那是设计意图）。
+    const addNoKind = await tools.task_add.execute({ title: "省略 kind 的一条", check: "建成即可（默认 work）" }, exec)
+    assert.ok(addNoKind.includes("已建"), "省略 kind 必须能建成（schema 承诺了默认值）：" + addNoKind)
+    const added = readTasksView(ws).tasks.find((x) => x.title === "省略 kind 的一条")
+    assert.ok(added, "省略 kind 的那条必须真的落盘")
+    assert.equal(added.kind, "work", "省略 kind ⇒ 必须默认 work（描述面与实现一致）")
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
