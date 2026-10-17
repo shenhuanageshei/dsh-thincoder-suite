@@ -737,7 +737,7 @@ function loadClientBundle(opts = {}) {
 
 /** 假客户端 ctx（`ctx.get` 是**函数**形态；`ctx.effect` 立即执行回调并交回 disposer）。 */
 function fakeClientCtx(betterSidebar) {
-  const calls = { slots: [], registered: null, tab: null, tabDisposed: 0, effectDispose: null }
+  const calls = { slots: [], registered: null, tab: null, tabDisposed: 0, effectDispose: null, opened: [] }
   // 只有服务**真带 registerTab** 时才包一层（用于捕获 descriptor）；否则原样透传（保持"形状不认识"这一态）
   let sb = betterSidebar
   if (betterSidebar && typeof betterSidebar.registerTab === "function") {
@@ -747,6 +747,10 @@ function fakeClientCtx(betterSidebar) {
         const inner = betterSidebar.registerTab(d)
         return () => { calls.tabDisposed++; if (typeof inner === "function") inner() }
       },
+      // ★ 2026-10-17 缺口修复：`registerTab` 只注册**类型**（better-sidebar `:1415` 存进 Map），
+      //   **不会**让任何东西出现在侧栏；真正摆出来的是 `openTab({type})`（同档 `:1516`）。
+      //   夹具必须捕获它，否则「面板可见」这条永远是**空断言** —— T-12 当年就是这么漏的。
+      openTab: (seed, scope) => { calls.opened.push({ seed, scope }) },
     })
   }
   const ctx = {
@@ -840,6 +844,17 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
     assert.equal(typeof tabDesc.component, "function", "tab 必须带组件")
     assert.equal(tabDesc.single, true, "同一会话内单实例（避免重复看板）")
     assert.equal(typeof tabDesc.title, "function", "标题按语言环境惰性求值（与内置 tab 同款）")
+    // ★ 2026-10-17 **缺口修复（用户实测「重启后找不到面板」）**：**注册 ≠ 可见**。
+    //   `registerTab` 只把 descriptor 存进 Map（better-sidebar `:1415-1425`），**不会**渲染任何东西；
+    //   必须再 `openTab({type})` 一次才会真的开出一个该类型的 tab（同档 `:1516`）。
+    //   原 T-12 只断言「注册不抛」⇒ 在「注册成功但无人打开」这个**真实缺口**上**恒绿**。补下面两条。
+    assert.equal(withSb.calls.opened.length, 1,
+      "注册后必须调用**恰一次** openTab —— 否则面板存在但**永远不可见**（这正是用户实测到的现象）")
+    // ★ 比**字段**而不是整个对象：`seed` 是在 `node:vm` 沙箱里造的 ⇒ 原型与本 realm 不同，
+    //   而本档 `import assert from "node:assert/strict"` 的 `deepEqual` **比原型**（同一个坑 T-8① 踩过一次）。
+    assert.equal(withSb.calls.opened[0].seed.type, "thincoder:tasks",
+      "openTab 必须按**已注册的 tab 类型**打开")
+    // 变异自证：删掉 openTab 调用 ⇒ 上一条 opened.length 变 0 ⇒ 红；把 seed.type 写错 ⇒ deepEqual 红
     // 无服务态（T-12 的「无 better-sidebar 时亦然」）——与 T-8 各自独立断言
     const noSb = fakeClientCtx(undefined)
     assert.doesNotThrow(() => mod.apply(noSb.ctx), "无服务时注册同样不得抛")
