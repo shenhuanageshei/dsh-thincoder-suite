@@ -1,6 +1,7 @@
 // tasks.test.mjs — 批 36「个人任务台账 + 侧栏看板」机检腿（设计档 §九 = 权威腿定义）。
 //
-// 腿清单（**T-1…T-20，T-4 拆 a/b ⇒ 共 21 条**；本档顶层 `test(` 数 = 21，与下方逐条一一对应）：
+// 腿清单（**T-1…T-20，T-4 拆 a/b ⇒ 共 21 条**；本档顶层 `test(` 数 = 21，与下方逐条一一对应。
+// ★ 批36-补3 的 T-21/T-22 **并入既有块**（T-12 ④ 段 / T-4a ⑤ 段），**不新开顶层 `test(`** ⇒ 仍是 21 条）：
 //   T-1  无凭据 done ⇒ 拒且零写入（sha256 前后相同）
 //   T-2  blocked 缺 reason / 缺 blockedBy ⇒ 拒且零写入
 //   T-3  非法迁移被拒（**全表 25 组逐对**）＋ 同一道门的另一半：`applyTaskUpdate` 的可改字段**闭集**
@@ -29,6 +30,13 @@
 //   T-18 **旧台账兼容**：无 owner/createdBy ⇒ null，不抛、不迁移、不改写文件
 //   T-19 命令面：缺 `commands` 服务 ⇒ 不抛/不注册/只 warn（工具与看板照常）；有则四条全注册
 //   T-20 命令走**同一道写门**：`/task_done` 无凭据 ⇒ 拒且零写入（拒绝码由写门产出）
+//   —— 批 36-补3（§18.4 / §19.9；**并入既有块，不新开顶层 test(**）——
+//   T-21a P 徽标渲染（0 与负数不渲染 · 原始数字 · 三档类名）        ⇒ 并入 T-12 块（④-a）
+//   T-21b P 徽标源码面（三档类名↔色值映射 · 渲染判据 priority>=1）  ⇒ 并入 T-4a 块（⑤）
+//   环图腿 五态环图（从 ledger 行自己数 · 中心总数 · 图例 · 五段配色；总数 0 不渲染） ⇒ 并入 T-12 块（④-b）
+//   默认展开腿 默认展开 · 折叠分支保留且可切换                      ⇒ 并入 T-12 块（③）
+//   T-22 毛玻璃：变量必须 color-mix 派生 · 卡片级 backdrop-filter · 行/嵌套详情不模糊 · `.tc-` 内无硬编码白/黑底
+//        ⇒ 并入 T-4a 块（⑤）
 //
 // ★ 每条腿都带「变异自证」注释：说明**去掉哪一处实现会让该腿变红**（本仓纪律：腿必须咬得住实现）。
 // ★ 每条腿都带**阳性/阴性对照**（防「恒红断言」与「恒真空断言」两种假绿）。
@@ -622,6 +630,17 @@ function ledgerSelfParseHits(src, label) {
   return hits
 }
 
+/**
+ * 从 `lib/client.js` 源码的 **STYLE_CSS 字符串字面量**里取一条规则的选择器体（`...{}` 里那段）。
+ * 定位不到 ⇒ `null` —— 调用方必须断言非空，否则断言会退化成恒真空（本仓纪律：假腿要能红）。
+ * ★ 用**源码**而不是运行时 `getComputedStyle`：node 里没有浏览器，且本仓既有静态腿同款口径。
+ */
+function styleBodyOf(src, selector) {
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const m = new RegExp(esc + "\\{([^}]*)\\}").exec(src)
+  return m ? m[1] : null
+}
+
 test("T-4a（US-5 ① · N-1）: 看板 ≡ 工具读（同一 ws 逐条相等）；看板侧零写盘、零自解析", async () => {
   const ws = freshWs()
   try {
@@ -697,11 +716,70 @@ test("T-4a（US-5 ① · N-1）: 看板 ≡ 工具读（同一 ws 逐条相等�
       "自证①：自解析形态必须被同一谓词抓到（临时把看板改成自解析 ⇒ 本腿必红，实测见交付报告）")
     assert.deepEqual(ledgerSelfParseHits('const d = JSON.parse(JSON.stringify(x)); const t = readFileSync(p, "utf8")', "probe"), [],
       "自证②：与台账无关的解析（深拷贝 / 读结构化文档源）不得被误报")
+
+    // ⑤ 批36-补3（§十八 ② · T-22）：毛玻璃必须**从主题基底色 color-mix 派生**（绝不硬编码白/黑），
+    //    卡片级元素才加 `backdrop-filter`，任务行**不加模糊**（长列表性能，§18.5）。
+    //    变异自证：把 `.tc-tasks-sec` 的 `background:var(--tc-glass-bg)` 换成 `#ffffff` ⇒ 下面两条同时红
+    //    （卡片毛玻璃断言 + `.tc-` 硬编码底色负向断言），实测报文见交付报告。
+    const glassVars = styleBodyOf(clientSrc, ".tc-page,.tc-tasks")
+    assert.ok(glassVars, "必须能定位毛玻璃变量块（定位不到 ⇒ 本段恒真空，必须红）")
+    assert.ok(glassVars.includes("--tc-glass-bg:color-mix(in srgb, var(--dsw-alias-bg-base, #ffffff) 62%, transparent)"),
+      "★ 底色必须 color-mix 从 --dsw-alias-bg-base 派生（深色主题随动）：" + glassVars)
+    assert.ok(glassVars.includes("--tc-glass-brd:color-mix(in srgb, var(--dsw-alias-label-primary, #111111) 14%, transparent)"),
+      "边框同样走 color-mix 派生：" + glassVars)
+    assert.ok(glassVars.includes("--tc-glass-blur:blur(14px) saturate(1.08)"),
+      "模糊强度必须逐字 = §18.3 ②：" + glassVars)
+    for (const sel of [".tc-card", ".tc-tasks-sec", ".tc-tasks-drift", ".tc-tasks-donut"]) {
+      const body = styleBodyOf(clientSrc, sel)
+      assert.ok(body, "必须能定位 " + sel + " 的规则（定位不到 ⇒ 断言恒真空）")
+      assert.ok(body.includes("background:var(--tc-glass-bg)"), sel + " 的底色必须走毛玻璃变量：" + body)
+      assert.ok(body.includes("backdrop-filter:var(--tc-glass-blur)"), sel + " 是卡片级元素，必须有 backdrop-filter：" + body)
+    }
+    const rowBody = styleBodyOf(clientSrc, ".tc-tasks-row")
+    assert.ok(rowBody && rowBody.includes("background:var(--tc-glass-bg)"), "任务行用纯半透明底：" + rowBody)
+    assert.ok(!String(rowBody).includes("backdrop-filter"), "★ 任务行**不得**加模糊（长列表掉帧，§18.5）")
+    // 详情块：嵌在已模糊的分区里 ⇒ 用半透明底但**不重复模糊**（评审 #5 的文档张力在此落成明文断言）
+    const detailBody = styleBodyOf(clientSrc, ".tc-tasks-detail")
+    assert.ok(detailBody && detailBody.includes("background:var(--tc-glass-bg)"), "详情块用纯半透明底：" + detailBody)
+    assert.ok(!String(detailBody).includes("backdrop-filter"),
+      "★ 详情块嵌在已模糊的 section 内 ⇒ **不重复模糊**（§18.5 的性能口径）")
+    // 负向断言：`.tc-` 规则里**不得**出现硬编码白/黑的**底色**（硬编码会在深色主题下变成刺眼白板）
+    const hardcodedBg = (body) => /(^|;)background(?:-color)?:\s*(#fff(?:fff)?|white|#000(?:000)?|black)\b/i.test(String(body || ""))
+    const tcRules = [...clientSrc.matchAll(/"(\.tc-[^"]*?)\{([^}]*)\}"/g)]
+    assert.ok(tcRules.length >= 25, "提取面必须非空（否则下面那条是恒真空）：实测 " + tcRules.length + " 条 `.tc-` 规则")
+    const bgHits = tcRules.filter((m) => hardcodedBg(m[2])).map((m) => m[1])
+    assert.deepEqual(bgHits, [], "`.tc-` 选择器内不得把白/黑硬编码成卡片底色：" + JSON.stringify(bgHits))
+    // 谓词自证（防「正则写错 ⇒ 恒空」的假绿）：合成样本必须命中；color-mix 里的 #ffffff **回退值**不得误报
+    assert.ok(hardcodedBg("background:#ffffff"), "自证①：硬编码白底必须被同一谓词判红")
+    assert.ok(hardcodedBg("border-radius:8px;background:#000"), "自证②：硬编码黑底必须被判红")
+    assert.ok(!hardcodedBg(glassVars), "自证③：color-mix 里的 #ffffff 是回退值，不是硬编码底色 —— 不得误报")
+    // P 徽标（§18.4 T-21b：**源码面**——`client.js` 无法被单测 import，只能源码级断言；渲染半在 T-12 ④-a）：
+    //   ① 三档「类名 ↔ 色值」映射逐条在场；② 渲染判据必须是 `priority >= 1`（0 与负数同待遇）。
+    const prioRule = (sel) => {
+      const body = styleBodyOf(clientSrc, sel)
+      assert.ok(body, "必须能定位 " + sel + " 的规则")
+      return body
+    }
+    const prioBase = prioRule(".tc-tasks-prio")
+    assert.ok(prioBase.includes("font-size:11px") && prioBase.includes("padding:1px 6px")
+      && prioBase.includes("border-radius:999px") && prioBase.includes("font-weight:600"),
+      "徽标尺寸/字形必须逐条 = §18.3 ①：" + prioBase)
+    assert.ok(prioRule(".tc-prio-high").includes("background:#DC2626"), "高档色值 = #DC2626")
+    assert.ok(prioRule(".tc-prio-mid").includes("background:#D97706"), "中档色值 = #D97706")
+    assert.ok(prioRule(".tc-prio-low").includes("background:#64748B"), "低档色值 = #64748B")
+    // ① 类名 ↔ 阈值映射（改错任一档阈值 ⇒ 红；T-12 ④-a 的渲染类名会同时红）
+    assert.ok(/if \(p >= 8\) return "tc-prio-high";/.test(clientSrc), "高档阈值必须是 >=8 ⇒ tc-prio-high")
+    assert.ok(/if \(p >= 3\) return "tc-prio-mid";/.test(clientSrc), "中档阈值必须是 >=3 ⇒ tc-prio-mid")
+    assert.ok(/return "tc-prio-low";/.test(clientSrc), "低档回落（1..2）必须存在")
+    // ② 渲染判据 = `priority >= 1`（删掉 `p < 1` ⇒ P0 / P-3 都会渲染 ⇒ T-21a 与本条同时红）
+    assert.ok(/if \(!isFinite\(p\) \|\| p < 1\) return null;/.test(clientSrc),
+      "渲染判据必须是 priority>=1（0 与负数同待遇）")
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
 })
-// 变异自证：让看板载荷自建一份任务（不经 readTasksView）⇒ ① 的集合比对红；让客户端读盘/自解析 ⇒ ③ 红。
+// 变异自证：让看板载荷自建一份任务（不经 readTasksView）⇒ ① 的集合比对红；让客户端读盘/自解析 ⇒ ③ 红；
+// 把毛玻璃变量换成 #ffffff 字面量（或把 `.tc-tasks-sec` 的底色写死 #ffffff）⇒ ⑤ 红（实测报文见交付报告）。
 
 // ═══════════════ 客户端空载夹具（T-8 / T-12 / T-13 / T-14 共用） ═══════════════
 
@@ -803,6 +881,31 @@ function treeText(node, out = []) {
   return out
 }
 
+/**
+ * 在元素树里按谓词收集元素（**与 `treeText` 同一套递归**：函数组件就地求值）。
+ * 用于断言「某个元素渲染了 / 带什么 props」——`treeText` 只能给文本，给不了 className / stroke。
+ */
+function collectElements(node, pred, out = []) {
+  if (node === null || node === undefined || typeof node === "boolean") return out
+  if (Array.isArray(node)) { for (const c of node) collectElements(c, pred, out); return out }
+  if (typeof node !== "object") return out
+  if (typeof node.type === "function") return collectElements(node.type(node.props), pred, out)
+  if (pred(node)) out.push(node)
+  for (const c of node.children || []) collectElements(c, pred, out)
+  return out
+}
+
+/** 按 className 的**某一个 token** 收集元素（例：`tc-tasks-prio`）。 */
+function collectByClass(node, cls, out = []) {
+  return collectElements(node, (el) => typeof el.props.className === "string"
+    && el.props.className.split(/\s+/).includes(cls), out)
+}
+
+/** 按标签名收集元素（SVG 的 `circle` / `text` 等）。 */
+function collectByTag(node, tag, out = []) {
+  return collectElements(node, (el) => el.type === tag, out)
+}
+
 // ═══════════════ T-8：无 better-sidebar ⇒ 降级不崩 + 会话内看板可用（US-11） ═══════════════
 
 test("T-8（US-11 · N-4）: 无 better-sidebar 时 apply 不抛、设置页不受影响；降级看板由 readTasksView 派生", () => {
@@ -897,10 +1000,13 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
     assert.ok(click.docs.some((p) => p.endsWith("tasks.json")), "文档清单至少含台账真源路径：" + JSON.stringify(click.docs))
     assert.ok(click.plain.includes("确认 OCR 方案"), "人话说明必须讲这一项本身：" + click.plain)
 
-    // ③ 渲染面（拿**真实客户端组件**渲染）：默认折叠 + 展开后详情里能看到三段
+    // ③ 渲染面（拿**真实客户端组件**渲染）：**默认展开**（用户定调；§19.9「默认展开腿」）＋ 折叠分支保留 ＋ 详情三段
     const r = await renderClientBoard(payload, { detail: true })
     assert.ok(r.collapsedText.includes("任务台账"), "折叠态必须有状态栏（不必展开就知道有没有待决策的项）")
-    assert.ok(!r.collapsedText.includes("待你决策（"), "★ 默认**折叠**（与宿主 TodoPanel 一致，设计-D12）")
+    assert.ok(!r.collapsedText.includes("待你决策（"), "折叠后正文必须收起（「折叠分支保留」，按钮仍可切换）")
+    assert.ok(r.defaultText.includes("待你决策（1）"),
+      "★ 默认**展开**（用户定调；§19.9「默认展开腿」）：数据落地后**不用点任何按钮**就渲染正文：\n" + r.defaultText.slice(0, 300))
+    assert.ok(r.text.includes("待你决策（1）"), "「收起 → 展开」之后正文必须回来（按钮仍可切换）")
     for (const seg of ["人话说明", "相关文档", "核验进度"]) {
       assert.ok(r.text.includes(seg), "点击详情必须渲染「" + seg + "」段：\n" + r.text)
     }
@@ -910,19 +1016,106 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
     assert.ok(r.text.includes("在侧边聊"),
       "US-6 的侧边会话入口必须渲染（U-1 已实测：能开、不能预填）—— 删掉它等于把这一点退回成「什么都不发生」")
     assert.ok(r.text.includes("确认 OCR 方案"), "看板必须列出该条目")
+
+    // ④ 批36-补3（设计档 §18.4 T-21a / §19.9「环图腿」）—— **真实客户端组件**渲染面
+    //
+    // ④-a T-21a · P 徽标（§18.3 ①）：priority>=1 才渲染（**0 与负数同待遇：一律不渲染**）；
+    //      文案取**原始数字**；三档类名与 §18.3 表一一对应。
+    //   变异自证：删掉 PriorityBadge 里 `if (!isFinite(p) || p < 1) return null;` ⇒ 出现 P0 / P-3、
+    //      徽标变 5 枚 ⇒ 红。
+    const wsPri = freshWs()
+    try {
+      seedLedger(wsPri, [
+        task("t-1", { priority: 0, owner: "s-1", createdBy: "s-1", title: "零权重的活" }),
+        task("t-2", { priority: 10, owner: "s-1", createdBy: "s-1", title: "最高权重的活" }),
+        task("t-3", { priority: 5, owner: "s-1", createdBy: "s-1", title: "中档权重的活" }),
+        task("t-4", { priority: 2, owner: "s-1", createdBy: "s-1", title: "低档权重的活" }),
+        // ★ 设计档 §18.4 T-21a（评审 #5）：负数一律不渲染，与 0 同待遇。
+        task("t-5", { priority: -3, owner: "s-1", createdBy: "s-1", title: "负权重的活" }),
+      ], 1)
+      const pPri = buildTasksBoardPayload({ ws: wsPri, sessionId: "s-1", config: {}, drift: null })
+      const rPri = await renderClientBoard(pPri)
+      const badges = collectByClass(rPri.tree, "tc-tasks-prio")
+      const badgeTexts = badges.map((b) => treeText(b).join(""))
+      assert.equal(badges.length, 3,
+        "★ priority=0 与 priority=-3 的条目**都不渲染徽标元素**（只该有 10/5/2 三枚；实测 " + JSON.stringify(badgeTexts) + "）")
+      assert.deepEqual([...badgeTexts].sort(), ["P10", "P2", "P5"],
+        "徽标文案必须取**原始数字**（不是映射后的档位值）：" + JSON.stringify(badgeTexts))
+      assert.ok(!rPri.text.includes("P0"), "priority=0 ⇒ 文本里**不得**出现 P0")
+      assert.ok(!rPri.text.includes("P-3"), "priority=-3 ⇒ 文本里**不得**出现 P-3（负数与 0 同待遇）")
+      const classNameOf = (label) => {
+        const b = badges.find((x) => treeText(x).join("") === label)
+        assert.ok(b, "必须有徽标 " + label + "（实测 " + JSON.stringify(badgeTexts) + "）")
+        return String(b.props.className)
+      }
+      assert.ok(classNameOf("P10").includes("tc-prio-high"), "priority=10 ⇒ 高档类名（红）：" + classNameOf("P10"))
+      assert.ok(classNameOf("P5").includes("tc-prio-mid"), "priority=5 ⇒ 中档类名（琥珀）：" + classNameOf("P5"))
+      assert.ok(classNameOf("P2").includes("tc-prio-low"), "priority=2 ⇒ 低档类名（灰）：" + classNameOf("P2"))
+    } finally { rmSync(wsPri, { recursive: true, force: true }) }
+
+    // ④-b 环图腿 · 五态环图（设计档 §19.9「环图腿」）：五段 / 中心总数 / 图例（名 · 计数 · 百分比）/ 五条配色。
+    //   ★★ 计数必须**从 `payload.ledger` 的行自己数**：本夹具刻意让 `counts.doing`（在做+已接手合并）
+    //      ≠ 任一单态 —— 若实现改读 `payload.counts`，「已接手 1」会变成 0 ⇒ 下面图例断言当场红。
+    //   变异自证：把计数循环改成「已接手并入在做」（`if (st==="已接手") st="在做"`）⇒ 图例与弧数红。
+    const wsRing = freshWs()
+    try {
+      seedLedger(wsRing, [
+        task("t-1", { status: "待办", owner: "s-1", createdBy: "s-1" }),
+        task("t-2", { status: "待办", owner: "s-1", createdBy: "s-1" }),
+        task("t-3", { status: "已接手", owner: "s-1", createdBy: "s-1" }),
+        task("t-4", { status: "在做", owner: "s-1", createdBy: "s-1" }),
+        task("t-5", { status: "卡住", blockedBy: "self", blockedReason: "等自己动手", owner: "s-1", createdBy: "s-1" }),
+        task("t-6", { status: "完成", evidence: "跑了 node --test：12/12 绿", owner: "s-1", createdBy: "s-1" }),
+      ], 2)
+      const pRing = buildTasksBoardPayload({ ws: wsRing, sessionId: "s-1", config: {}, drift: null })
+      assert.equal(pRing.counts.doing, 2,
+        "自证：counts.doing = 「已接手 + 在做」的**合并**数（lib/tasks.mjs:387-388）——用它数五态会默默少一段")
+      const rRing = await renderClientBoard(pRing)
+      const donut = collectByClass(rRing.tree, "tc-tasks-donut")
+      assert.equal(donut.length, 1, "有任务时必须渲染五态环图")
+      const legendRows = collectByClass(rRing.tree, "tc-tasks-legend-row")
+      assert.equal(legendRows.length, 5, "图例必须列**五态**（含计数为 0 的态也照列）：实测 " + legendRows.length)
+      const legendText = legendRows.map((x) => treeText(x).join(""))
+      assert.deepEqual(legendText,
+        ["待办 · 2 · 33%", "已接手 · 1 · 17%", "在做 · 1 · 17%", "卡住 · 1 · 17%", "完成 · 1 · 17%"],
+        "图例 = 名 · 计数 · 百分比（五态逐条；百分比为四舍五入）：" + JSON.stringify(legendText))
+      const totalEls = collectByClass(rRing.tree, "tc-tasks-donut-total")
+      assert.equal(totalEls.length, 1, "环图中心必须显示总数")
+      assert.equal(treeText(totalEls[0]).join(""), "6", "中心总数 = 五态之和")
+      const circles = collectByTag(donut[0], "circle")
+      assert.deepEqual(circles.map((c) => c.props.stroke), ["#94A3B8", "#6366F1", "#0EA5E9", "#EF4444", "#22C55E"],
+        "五段配色必须逐条 = 本腿钉住的色板（待办 #94A3B8 · 已接手 #6366F1 · 在做 #0EA5E9 · 卡住 #EF4444 · 完成 #22C55E）")
+      assert.ok(circles.every((c) => c.props.strokeWidth === 14), "每段必须显式给出线宽（不靠渲染器默认）")
+      const dashSum = circles.reduce((a, c) => a + Number(String(c.props.strokeDasharray).split(" ")[0]), 0)
+      assert.ok(Math.abs(dashSum - 2 * Math.PI * 46) < 0.5,
+        "五段弧长之和必须等于整圈（按占比切段，半径 46）：实测 " + dashSum.toFixed(2))
+      // 空集边界（§19.9「环图腿」）：总数 0 ⇒ **不渲染**环图
+      const wsEmptyRing = freshWs()
+      try {
+        const pEmpty = buildTasksBoardPayload({ ws: wsEmptyRing, sessionId: "s-1", config: {}, drift: null })
+        const rEmpty = await renderClientBoard(pEmpty)
+        assert.equal(collectByClass(rEmpty.tree, "tc-tasks-donut").length, 0, "总数 0 ⇒ **不渲染**环图")
+        assert.ok(!rEmpty.text.includes("总数"), "空账本不得出现环图的中心文案")
+      } finally { rmSync(wsEmptyRing, { recursive: true, force: true }) }
+    } finally { rmSync(wsRing, { recursive: true, force: true }) }
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
 })
 // 变异自证：去掉 buildTaskClickPayload 里的任一要素（如 docs 恒空数组）⇒ ② 红；组件不渲染某一段 ⇒ ③ 红；
-// 默认展开（初值 true）⇒ ③ 的折叠断言红。
+// 把默认态改回折叠（`useState(false)`）⇒ ③ 的 `defaultText`（不点按钮）断言红；把「收起/展开」的切换删掉 ⇒
+// 助手拿不到 collapsedText / 文本回不来 ⇒ 红。
+// ④（T-21 + 环图）的变异自证见 ④-a / ④-b 两段的内联注（0 不显示 / 计数读 counts / 配色改动 都要能红）。
 
 /**
- * 用**真实客户端组件**渲染看板：首渲染 → 放行 fetch 的微任务 → 点「展开」→（可选）点某按钮 / 点「看详情」/点一串按钮。
+ * 用**真实客户端组件**渲染看板：首渲染 → 放行 fetch 的微任务 → 记下**默认态** →
+ * 显式「收起」再「展开」（验证折叠分支仍在、按钮仍可切换）→（可选）点某按钮 / 点「看详情」/ 点一串按钮。
+ * ★ 设计档 §19.9「默认展开腿」：看板自批36-补3 起**默认展开**；折叠分支**保留**——本助手对这两面都取证。
  * @param {{detail?: boolean, clickLabel?: string, clipboard?: null, fetchImpl?: Function, clicks?: string[]}} [opts]
  *   `fetchImpl` 覆盖默认的「永远返回同一份载荷」（批 36-补：接手的 POST 要能落到真实 host 实现上）；
  *   `clicks` = 依次点击的按钮文案（每点一次都放行微任务并重渲染）。
- * @returns {Promise<{text, collapsedText, tree, tab}>}
+ * @returns {Promise<{text, defaultText, collapsedText, tree, tab}>}
+ *   `defaultText` = 数据落地后的**默认态**（不点任何按钮）；`collapsedText` = 显式点「收起」后的折叠态。
  */
 async function renderClientBoard(payload, { detail = false, clickLabel = null, clipboard, fetchImpl, clicks, sessionId = "s-1" } = {}) {
   const harness = makeHookHarness()
@@ -935,11 +1128,25 @@ async function renderClientBoard(payload, { detail = false, clickLabel = null, c
   mod.apply(fakeClientCtx({ registerTab: (d) => { tabDesc = d; return () => {} } }).ctx)
   assert.ok(tabDesc && typeof tabDesc.component === "function", "必须先注册出可渲染的 tab descriptor")
   const props = { ctx: {}, scope: { sessionId }, tab: { id: "thincoder:tasks" }, visible: true }
-  const first = harness.render(tabDesc.component, props) // 挂载：effect 发起拉取（promise 尚未落地）
-  const collapsedText = treeText(first).join("\n")
+  harness.render(tabDesc.component, props) // 挂载：effect 发起拉取（promise 尚未落地）
   for (let i = 0; i < 8; i++) await Promise.resolve() // 放行 fetch → json → setState 的微任务链
-  clickButton(first, "展开") // 折叠 → 展开（默认折叠，设计-D12）
   let tree = harness.render(tabDesc.component, props)
+  // ★ 默认态（§19.9「默认展开腿」：应为**展开**）—— 必须在任何点击之前取，才能证明「不用点就看得见」。
+  const defaultText = treeText(tree).join("\n")
+  // 兼容分支：若默认态是折叠（按钮文案「展开」），先点开再继续（本批之外的人改回折叠也不崩）。
+  if (findButton(tree, "展开")) {
+    clickButton(tree, "展开")
+    tree = harness.render(tabDesc.component, props)
+  }
+  // 折叠分支必须仍在且可切换：显式「收起」取折叠态文本，再点回「展开」。
+  let collapsedText = null
+  if (findButton(tree, "收起")) {
+    clickButton(tree, "收起")
+    const collapsedTree = harness.render(tabDesc.component, props)
+    collapsedText = treeText(collapsedTree).join("\n")
+    clickButton(collapsedTree, "展开")
+    tree = harness.render(tabDesc.component, props)
+  }
   assert.ok(!treeText(tree).join("\n").includes("看板数据不可得"), "展开后不得是「数据不可得」态：" + treeText(tree).join("\n").slice(0, 200))
   if (detail) {
     clickButton(tree, "看详情")
@@ -954,7 +1161,7 @@ async function renderClientBoard(payload, { detail = false, clickLabel = null, c
     for (let i = 0; i < 8; i++) await Promise.resolve() // 放行 POST → 载荷 → setState
     tree = harness.render(tabDesc.component, props)
   }
-  return { text: treeText(tree).join("\n"), collapsedText, tree, tab: tabDesc }
+  return { text: treeText(tree).join("\n"), defaultText, collapsedText, tree, tab: tabDesc }
 }
 
 /** 在元素树里按**可见文本**找按钮（找不到 ⇒ `null`；函数组件就地求值）。 */
