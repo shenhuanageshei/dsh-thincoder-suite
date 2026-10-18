@@ -17,6 +17,8 @@
 //        ★ 判别力 = 载荷定型后改盘，后落的条目**不得**出现在渲染里 —— 定点修复 3）
 //   T-9  `ledger.mode = off` ⇒ 个人台账分区消失、防漂移状态区**仍在**
 //        ＋ 文档路径清单上限的**写面**：第 9 条 ⇒ 拒（定点修复 5）
+//        ＋ ④ 的去重/上限三条腿（T-9a/T-9b/T-9c）与修复轮 3 补的两腿（稀疏数组不得绕过上限 ·
+//          无 ToPrimitive 值不得抛）**都在本块**（不在 T-4a：那是看板块）
 //   T-10 evidence/reason 命中疑似凭据 ⇒ 拒写（**非打码**）
 //   T-11 rev 冲突 ⇒ 拒且零写入 + fail-loud 文案（＋ 跨会话读回、落点与键控）
 //   T-12 tab 注册不抛（有/无服务两态）＋ 点击载荷三要素（人话说明 / 文档清单 / 核验进度）
@@ -43,7 +45,8 @@
 //   T-33 全部展开/全部收起：两控件 · 收起态不渲染 meta 与按钮 · 默认展开 ⇒ 并入 T-12 块（④-c）
 //   T-34 五态显眼：行色条 · 实心 pill · 分区色条 · 五态图例          ⇒ 并入 T-12 块（④-d）
 //   —— 批42（t-4 七条 🔵 除尘；同样**并入既有块** ⇒ 本档顶层 `test(` 数仍为 21）——
-//   ④ 文档路径清单：**去重后**判上限（含重复 ⇒ 通过 / 非字符串 ⇒ false 不抛）⇒ T-9a/T-9b/T-9c，并入 T-4a 块（⑦）
+//   ④ 文档路径清单：**去重后**判上限（含重复 ⇒ 通过 / 非字符串 ⇒ false 不抛 / 稀疏数组 `Array(9)`
+//      与无 ToPrimitive 的值 ⇒ false **且不抛**〔修复轮 3〕）⇒ T-9a/T-9b/T-9c ＋ 两腿，并入 **T-9** 块
 //   ⑥ task_update 契约文本锁（描述与 schema 都写 createdBy / owner / claimedFrom 只读）⇒ 并入 T-3 块
 //   ⑦ 零写入包装器 withZeroWrite：旧的 assertRejectNoWrite 调用点**全部**改成「包装 + 独立拒绝码断言」
 //      （旧 grep 命中 21 行 = 1 处定义 + 20 处调用点，20 处全改）；抛错分支自证 ⇒ 并入 T-1 块（⑦）
@@ -882,28 +885,6 @@ test("T-4a（US-5 ① · N-1）: 看板 ≡ 工具读（同一 ws 逐条相等�
     assert.ok(tasksRoot, "必须能定位 .tc-tasks 根规则（定位不到 ⇒ 本段恒真空，必须红）")
     assert.ok(tasksRoot[1].includes("flex:1 1 auto") && tasksRoot[1].includes("min-height:0"),
       "根容器必须 flex:1 1 auto + min-height:0（面板高度约束才能传到内容区）：" + tasksRoot[1])
-
-    // ⑦ 批 42 ④（腿名 T-9a/T-9b/T-9c；**并入本 T-4a 块**，不新开顶层用例）：文档路径清单 —— 判上限读**去重后**的条数
-    //   T-9a：9 条但**含重复** ⇒ 去重后 ≤ MAX_DOC_PATHS ⇒ **通过**
-    //     （旧实现先判 v.length=9 ⇒ 会拒 —— 这是本批**唯一**的用户可见放宽，设计档 §0-1 / §三-2）
-    //   T-9b：数组含非字符串（42 / null）⇒ 返回 false **且不抛**
-    //     （纯函数后置；String() 强转**只用于算去重**，合法性仍要求每项本身是非空字符串）
-    //   T-9c：9 条**互不相同** ⇒ 仍拒（上限没被放宽；阴性对照，防「凡含重复必过」的过度放宽）
-    //   变异自证：把 isValidDocPathList 改回「先判 v.length」⇒ T-9a 红；把 every 里的 typeof 判断删掉
-    //   改成直接 p.trim() ⇒ T-9b 抛 TypeError ⇒ 红；删掉上限判断 ⇒ T-9c 红。
-    const dup9 = ["a.md", "a.md", "b.md", "b.md", "c.md", "c.md", "d.md", "d.md", "e.md"]
-    assert.equal(dup9.length, 9, "夹具自证：9 项（> 上限 " + MAX_DOC_PATHS + "）")
-    assert.equal(new Set(dup9).size, 5, "夹具自证：去重后只有 5 个互异项")
-    assert.equal(isValidDocPathList(dup9), true,
-      "★ 9 条**含重复** ⇒ 去重后 5 条 ≤ 上限 ⇒ 必须**通过**（旧实现按 v.length=9 拒）")
-    // T-9c 阴性对照（防「凡含重复必过」的过度放宽）：9 条**互异** ⇒ 仍拒（上限没被放宽）
-    assert.equal(isValidDocPathList(Array.from({ length: MAX_DOC_PATHS + 1 }, (_, i) => "u" + i + ".md")), false,
-      "9 条互异 ⇒ 仍拒（去重只免掉重复项的配额，上限不变）")
-    // T-9b 非字符串元素：**不抛**且 false（不得因 String() 强转而变成合法项）
-    assert.doesNotThrow(() => isValidDocPathList([42]), "非字符串元素 ⇒ 绝不抛（纯函数后置）")
-    assert.equal(isValidDocPathList([42]), false, "数字项 ⇒ false（不抛）")
-    assert.equal(isValidDocPathList([null]), false, "null 项 ⇒ false（不抛）")
-    assert.equal(isValidDocPathList(["a.md", 42, "b.md"]), false, "混合数组里有一个非字符串 ⇒ false")
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
@@ -1790,6 +1771,44 @@ test("T-9（US-9）: ledger.mode = off ⇒ 个人台账分区消失、**防漂�
       "**第 9 条 ⇒ 拒**（写面不是截断，是拒）")
     assert.equal(isValidDocPathList([]), true, "空清单合法（不设下限）")
     assert.equal(isValidDocPathList([""]), false, "空串项 ⇒ 拒（去空在读面做，写面只认合法形状）")
+    // 批 42 ④（腿名 T-9a/T-9b/T-9c；**并入本 T-9 块** —— 与上面「写面是拒」的既有上限断言同块，
+    //   修复轮 3 订正：原先误放在 T-4a（看板块）——设计档 §八 说「并入 T-9」）：文档路径清单 —— 判上限读**去重后**的条数
+    //   T-9a：9 条但**含重复** ⇒ 去重后 ≤ MAX_DOC_PATHS ⇒ **通过**
+    //     （旧实现先判 v.length=9 ⇒ 会拒 —— 这是本批**唯一**的用户可见放宽，设计档 §0-1 / §三-2）
+    //   T-9b：数组含非字符串（42 / null）⇒ 返回 false **且不抛**
+    //     （纯函数后置；String() 强转**只用于算去重**，合法性仍要求每项本身是非空字符串）
+    //   T-9c：9 条**互不相同** ⇒ 仍拒（上限没被放宽；阴性对照，防「凡含重复必过」的过度放宽）
+    //   变异自证：把 isValidDocPathList 改回「先判 v.length」⇒ T-9a 红；把 every 里的 typeof 判断删掉
+    //   改成直接 p.trim() ⇒ T-9b 抛 TypeError ⇒ 红；删掉上限判断 ⇒ T-9c 红。
+    const dup9 = ["a.md", "a.md", "b.md", "b.md", "c.md", "c.md", "d.md", "d.md", "e.md"]
+    assert.equal(dup9.length, 9, "夹具自证：9 项（> 上限 " + MAX_DOC_PATHS + "）")
+    assert.equal(new Set(dup9).size, 5, "夹具自证：去重后只有 5 个互异项")
+    assert.equal(isValidDocPathList(dup9), true,
+      "★ 9 条**含重复** ⇒ 去重后 5 条 ≤ 上限 ⇒ 必须**通过**（旧实现按 v.length=9 拒）")
+    // T-9c 阴性对照（防「凡含重复必过」的过度放宽）：9 条**互异** ⇒ 仍拒（上限没被放宽）
+    assert.equal(isValidDocPathList(Array.from({ length: MAX_DOC_PATHS + 1 }, (_, i) => "u" + i + ".md")), false,
+      "9 条互异 ⇒ 仍拒（去重只免掉重复项的配额，上限不变）")
+    // T-9b 非字符串元素：**不抛**且 false（不得因 String() 强转而变成合法项）
+    assert.doesNotThrow(() => isValidDocPathList([42]), "非字符串元素 ⇒ 绝不抛（纯函数后置）")
+    assert.equal(isValidDocPathList([42]), false, "数字项 ⇒ false（不抛）")
+    assert.equal(isValidDocPathList([null]), false, "null 项 ⇒ false（不抛）")
+    assert.equal(isValidDocPathList(["a.md", 42, "b.md"]), false, "混合数组里有一个非字符串 ⇒ false")
+    // ★ 批 42 修复轮 3（交付代码评审 🔵 ×2）：同一片代码的**另外两个洞**，各自补一腿
+    //   （不新增 T 编号 —— 设计档 §八 只定义 T-9a/T-9b/T-9c；这两腿挂在该组末尾、同处一个块）
+    //   腿 A（稀疏数组绕过上限）：`Array(9)` 是 9 个**空洞**，`map`/`every` 都会跳过它们 ⇒ 旧写法
+    //     「0 个互异项 + 真空真」= **true** ⇒ 上限被整个绕过（`Array(100)` 同理）。稠密化后空洞 =
+    //     `undefined` ⇒ 逐项判据 false ⇒ 必须返回 false。
+    //     变异自证：把 `const list = Array.from(v)` 换回直接用 `v`（去重与 every 都读 v）⇒ 本腿红。
+    assert.equal(isValidDocPathList(Array(9)), false,
+      "★ 9 个**空洞**的稀疏数组 ⇒ 必须 false（跳过空洞会让上限被整个绕过：旧形态在这里返回 true）")
+    assert.equal(isValidDocPathList(Array(100)), false, "100 个空洞同样 ⇒ false（不是「恰 9 个」才特殊）")
+    //   腿 B（`String(p)` 会抛）：`Object.create(null)` **没有 ToPrimitive** ⇒ 旧写法 `String(p)` 抛
+    //     `TypeError`，推翻同段 JSDoc 的「纯函数不抛」与 T-9b 的「绝不抛」。
+    //     变异自证：把 `typeof p === "string" ? p.trim() : null` 用回 `String(p).trim()` ⇒ 本腿红（抛错）。
+    const nullProtoItem = Object.create(null)
+    assert.doesNotThrow(() => isValidDocPathList([nullProtoItem]),
+      "★ 无 ToPrimitive 的值 ⇒ **绝不抛**（纯函数后置；旧 `String(p)` 在这里抛 TypeError）")
+    assert.equal(isValidDocPathList([nullProtoItem]), false, "无原型的对象项 ⇒ false（不抛）")
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
