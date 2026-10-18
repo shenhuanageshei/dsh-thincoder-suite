@@ -831,3 +831,51 @@ T-23 的「标签逐条在场」钉不住 §19 里两个**条件性**承诺，�
 |---|---|---|
 | **T-26a** | **目录降级提示**：`ProviderInput`/`ModelInput` 的降级分支里**必须**出现「没能拉取模型目录」文案与警示描边类 | 删掉该提示 ⇒ 红 |
 | **T-26b** | **会话识别卡**：只在**拿不到 `sessionId`** 时才渲染那个输入框；拿得到时渲染「已识别」行 | 改成无条件渲染输入框 ⇒ 红 |
+
+## 二十、批37：DSH 0.2.1 子代理契约迁移（P0 · 台账 t-5，2026-10-18 立）
+
+### 20.1 背景与根因（读平台源码，非推测）
+
+用户实测：`eng_coder` 起不来，报 `TypeError: ctx.subagents.start is not a function`（`lib/eng.mjs:1947`）。
+
+读平台包后确认**两处断裂**（均在 `@deepseek-ai/dsh-tool-subagent/lib/index.js`）：
+
+| # | 断裂 | 证据 |
+|---|---|---|
+| **断一** | 派发 API 由「Promise 句柄」改成「激活 + 投递」：`subagents.start(kind, opts)` → `subagents.startActivation({provider,label,request,signal,delivery})`，只返回 `{ childId }` | `:475-481` |
+| **断二** | **`persona` 与 `toolFilter` 被明确移除**：`throw new Error("… ${field} is no longer supported; configure persona and tool plugins in an Agent Preset and select it with agentPreset")` | `:355` |
+
+**但 provider 层仍是 Promise 语义**：`CodexProvider.start(request)` 返回带 `result`/`dispose` 的 run 句柄（`@deepseek-ai/dsh-subagent-codex/lib/index.js:834-853`），且 `subagents.getProvider(name)` 在新 API 里**仍在**（同档 `:371/:458/:506`）。
+
+⇒ **修复主线 = 把 `start(kind, opts)` 换成 `getProvider(kind).start(request)`**，await 语义不变。
+
+### 20.2 影响面（7 个真实调用点）
+
+| 档 | 调用点 | 额外用到的能力 |
+|---|---|---|
+| `eng.mjs` | `:1768` · `:1947` | `persona` |
+| `consult.mjs` | `:1120` · `:1125` | `persona` + **`toolFilter`（只读白名单）** |
+| `escalate.mjs` | `:522` · `:629` | `persona` · `toolFilter: {deny:[…]}` |
+| `codex-app-server.mjs` | `:122` | 已是 provider 名（不受断一影响） |
+
+### 20.3 两阶段（★ 用户 2026-10-18 裁定：先救功能，再补保证）
+
+**阶段 1（S1）· 派发恢复**：只用 `getProvider(name).start(request)`，await 语义、signal、label 全保留。
+- ★ **安全铁律（fail-closed）**：`consult` 的**只读**语义在新 API 下无法用 `toolFilter` 表达 ⇒ **阶段 1 必须让 consult 在「无法保证只读」时拒绝运行并明确报错**，**绝不**静默降级成「可写会诊」。
+- 同理 `escalate` 的 deny 名单。
+
+**阶段 2（S2）· 预设补位**：用 **Agent Preset** 重建人格与工具面（`agentPresets.resolve` + `mount`，先例见 `dsh-team-link/lib/index.js:9417-9457`）。含 `thincoder-eng` 预设（插件识别它却从不创建它，见 `lib/index.mjs:1863` 的 `PRESET_MATCH`）。
+
+### 20.4 兼容与探测（不许裸崩）
+
+- `getProvider` 缺席 / 返回 undefined / `start` 非函数 ⇒ **显式点名断层**并给出可读文案，而不是裸 `TypeError`。
+- 老宿主（0.2.0 及以前）仍只有 `subagents.start` ⇒ **两代都在场时优先现名 `getProvider().start`，只有旧名时回退 `start()`**（与 `dsh-team-link` 的 pin API 两代处理同一纪律）。
+
+### 20.5 腿
+
+| 腿 | 判据 | 变异自证 |
+|---|---|---|
+| **T-27** | 四个模块**不再**调用已移除的 `ctx.subagents.start(`（注释除外） | 改回旧调用 ⇒ 红 |
+| **T-28** | `getProvider` 缺失 / `start` 非函数 ⇒ **抛可读错误**（含 `getProvider` 字样），不是裸 TypeError | 删守卫 ⇒ 红 |
+| **T-29** | ★ `consult` 在拿不到只读保证时 **fail-closed**（拒绝派发并报错），**不得**派出去 | 改成降级放行 ⇒ 红 |
+| **T-30** | 老宿主回退路径：只有 `subagents.start` 时仍能派发 | 删回退 ⇒ 红 |
