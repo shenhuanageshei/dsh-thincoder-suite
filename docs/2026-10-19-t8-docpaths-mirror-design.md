@@ -124,13 +124,18 @@ dedupePaths(paths):                       // 两侧各一份实现（镜像）�
       seen.add(t); out.push(t)
   return out
 
-校验（①/②）：**必须先保留「非数组」那条独立文案**（第 2 轮 #15：现状 `!Array.isArray` ⇒ 「必须是路径清单（一行一个）」是**另一条文案**，不能被吞）
+校验（①/②）：**`else if` 链（★ 实施轮订正：评审 #5 的「两条独立 if」被既有契约 C-L3 ③ 证伪）**
   if !Array.isArray(paths):
-      push("ledger.docPaths 必须是路径清单（一行一个）")        // ★ 与现状逐字相同，独立文案
-  else:
-      n = dedupePaths(paths).length
-      if n > MAX_DOC_PATHS: push("…最多 8 条（当前 n 条）")     // 计数级
-      if !isValidDocPathList(paths): push("…每一条都必须是非空路径")  // 逐项级（**不被上面的分支吃掉**）
+      push("ledger.docPaths 必须是路径清单（一行一个）")        // 与现状逐字相同
+  else if dedupePaths(paths).length > MAX_DOC_PATHS:
+      push("…最多 8 条（当前 " + n + " 条）")                   // ★ 计数级：**超上限只报这一条**
+  else if !isValidDocPathList(paths):
+      push("…每一条都必须是非空路径")                            // 逐项级：只在**未超限**时才可能到这里
+
+  ★ **为什么必须短路（实测证据）**：超上限时 `isValidDocPathList(paths)` 也会判 false
+    （它同样按去重后计数）⇒ 若用两条独立 `if`，会**同时报两条**，打红既有腿
+    **C-L3 ③「超上限只报一条」**（`test/config-api.test.mjs`，实测 `2 !== 1`）。
+    「两级报错」只对**空行/畸形项**成立（那时计数级不触发），与 §九 的表述一致。
 
 展示（③）：
   pathsOver = dedupePaths(pathsArr).length > MAX_DOC_PATHS
@@ -170,7 +175,8 @@ dedupePaths(paths):                       // 两侧各一份实现（镜像）�
 
 | 情形 | 行为 |
 |---|---|
-| 全是空白行 | `dedupePaths` 丢空 ⇒ 计数 0 ⇒ **不报**「最多 8 条」；但**逐项合法性仍拒**（两条独立 `if`，不被吃掉）—— 保持现状的两级报错 |
+| 全是空白行 | `dedupePaths` 丢空 ⇒ 计数 0 ⇒ **不报**「最多 8 条」；`else if` 链落到逐项级 ⇒ **报「每一条都必须是非空路径」**（这是「两级报错」的真实含义：**只在计数级不触发时才看逐项级**） |
+| 9 条互异（超上限） | **只报计数级一条**（C-L3 ③ 的契约）；逐项级被 `else if` **短路**，不报第二条 |
 | 非字符串元素（`42` / `null`） | 不计入去重计数；合法性检查仍判非法 |
 | 稀疏数组 `Array(9)` | `Array.from` 稠密化后全是 `undefined` ⇒ 计数 0；合法性拒 |
 | 8 项全重复（同一条） | 去重后 1 ⇒ 通过（现状也通过） |
