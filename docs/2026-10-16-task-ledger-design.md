@@ -930,3 +930,47 @@ T-23 的「标签逐条在场」钉不住 §19 里两个**条件性**承诺，�
 | **T-32** | 优先级：`0` 与负数**不渲染**；`10` ⇒ 文案含「紧急」且**不含** `P10`；`5` ⇒「中」；`2` ⇒「低」 | 改回裸数字 ⇒ 红 |
 | **T-33** | 全部展开/全部收起：两个控件在场；收起态**不渲染** meta 与按钮（或靠类切换）；默认**展开** | 默认改收起 ⇒ 红 |
 | **T-34** | 五态显眼：每行含状态色条元素；状态 pill 走**实心底色**类；顶栏含五态图例行 | 删色条 ⇒ 红 |
+
+## 二十二、批39：Agent Preset 随包分发（P0 续 · 让会诊 dsh 通道恢复只读）
+
+### 22.1 根因（0.2.1 真机 live 读数，非推测）
+
+DSH 0.2.1 **移除了** `subagent.start` 请求里的 `persona` / `toolFilter`（源码：`is no longer supported`），替代方案是 **Agent Preset**。上一批（批37）因此让 `consult` 的 dsh 行 **fail-closed**（拒绝运行）。
+
+**预设机制（live 核实）**：
+- 预设 = 组合里的一行 Loader 条目：`id: preset-<任意>` · `name: '@deepseek-ai/dsh-agent-preset'` · `config: { id, name?, description?, order?, plugins: [ … ] }`（插件本体 29 行，`Service.init` 里 `ctx.agentPresets.register(this.config)`；schema 要求 **id + plugins**）。
+- `Config.listConfigs` 全量 248 条里只有 **4 条** preset（`standard` / `ptc` / `minimal` / `cordis`）。
+- ★ **`~/.dsh/.agent-presets/` 目录 0.2.x 已无人读取**（平台原文「Nothing reads that directory any more」，registry `list()` 只返回 `register` 过的定义，全仓无目录扫描）。
+  ⇒ 磁盘上那 10 个目录（含 `thincoder-eng` 13 KB 组成档）**复制进去也没用**。
+
+### 22.2 方案：写进插件自己的 `cordis.patch.yml`
+
+我们仓已有 `cordis.patch.yml` 与 `package.json` 的 `dsh.bundle.patch = ./cordis.patch.yml` ⇒ 加 `insert` 行即**随包分发**，满足用户「从 GitHub 装上就有」的要求。
+
+**用户裁定（2026-10-18）**：本仓**只适配 0.2.1-rc.2**；低版本**建议不要升级**本插件。
+⇒ **版本守卫 = 把 peer 下限提到 `^0.2.1-rc.2`** —— 低版本 DSH 由平台自身的 peer 兼容闸门**拒绝安装**，不会出现「装上了但起不来」。
+
+### 22.3 交付两个预设
+
+| 预设 `config.id` | 用途 | 组成要点 |
+|---|---|---|
+| **`thincoder-eng`** | 工程模式一键入口（插件 `lib/index.mjs:1863` 的 `PRESET_MATCH` 靠它自动 enter） | 移植老 `agent.cordis.yml`；★ **`config.id` 必须精确为 `thincoder-eng`**（header 存的就是它） |
+| **`thincoder-consult-ro`** | **只读会诊**（替代被移除的 `toolFilter`） | 只留读/检索类工具（fs 读、fs-search、web、skill 读），**剔除**写/执行类（bash / pwsh / fs 写 / str-replace-editor / jobs / ralph / workflow） |
+
+**移植老组成档时必修**：`@deepseek-ai/dsh-workflow-worker-thread` 在 0.2.1 装机包**不存在** ⇒ 换 `@deepseek-ai/dsh-workflow-ptc`，并**先删 `config.provider`**（形状不同，先让它起来）。其余行已逐条核实存在。
+
+### 22.4 让会诊真的用上只读预设
+
+批37 的 `consult` 在 dsh 行上 fail-closed。本批**改成**：投递时带 `agentPreset: "thincoder-consult-ro"`（`SubagentStartRequest` 有该字段、`capabilities.agentPreset` 为真）。
+⇒ 只读保证由**预设的工具面**提供 ⇒ **取消 fail-closed**，dsh 行恢复可用。
+
+★ **仍 fail-closed 的情形**：预设**未注册**（`agentPresets.list()` 里没有该 id）⇒ 拒绝派发并报错「只读预设缺失」，**绝不**退化成「无约束会诊」。
+
+### 22.5 腿
+
+| 腿 | 判据 | 变异自证 |
+|---|---|---|
+| **T-35** | `cordis.patch.yml` 含两条 preset 行，`config.id` 分别为 `thincoder-eng` / `thincoder-consult-ro`，且都带非空 `plugins` | 删掉 `id:` ⇒ 红 |
+| **T-36** | 只读预设的工具面**不含**写/执行类（`tool-pwsh` / `tool-bash` / `tool-fs` 的写模式 / `tool-str-replace-editor` / `tool-jobs` / `tool-ralph` / `tool-workflow`） | 把 `tool-pwsh` 加进去 ⇒ 红 |
+| **T-37** | `package.json` 的 `@deepseek-ai/dsh` peer 下限 ≥ `0.2.1-rc.2` | 改回 `^0.2.0-rc.1` ⇒ 红 |
+| **T-38** | consult 派发带 `agentPreset: "thincoder-consult-ro"`；预设缺失时 **fail-closed**（不退化成无约束） | 删掉 agentPreset ⇒ 红；改成缺了也放行 ⇒ 红 |
