@@ -1,7 +1,8 @@
 // tasks.test.mjs — 批 36「个人任务台账 + 侧栏看板」机检腿（设计档 §九 = 权威腿定义）。
 //
 // 腿清单（**T-1…T-20，T-4 拆 a/b ⇒ 共 21 条**；本档顶层 `test(` 数 = 21，与下方逐条一一对应。
-// ★ 批36-补3 的 T-21/T-22 **并入既有块**（T-12 ④ 段 / T-4a ⑤ 段），**不新开顶层 `test(`** ⇒ 仍是 21 条）：
+// ★ 批36-补3 的 T-21/T-22 **并入既有块**（T-12 ④ 段 / T-4a ⑤ 段），**不新开顶层 `test(`** ⇒ 仍是 21 条；
+//   ★ 批43 的 T-4c/T-4d/T-4e 同样**并入既有块**（T-4b / T-5）⇒ 计数与枚举仍为 21 条，不新增顶层 `test(`）
 //   T-1  无凭据 done ⇒ 拒且零写入（sha256 前后相同）
 //   T-2  blocked 缺 reason / 缺 blockedBy ⇒ 拒且零写入
 //   T-3  非法迁移被拒（**全表 25 组逐对**）＋ 同一道门的另一半：`applyTaskUpdate` 的可改字段**闭集**
@@ -55,6 +56,10 @@
 //   ⑨ commandArgsOf 谓词逐字（只认 m[1] === name，无 startsWith 兜底）⇒ 并入 T-20 块（**谓词层 + handler 层**）
 //   ⑩ 注入行成本注释（`lib/index.mjs`，**纯注释**、行为零变化）—— 无新腿（既有 T-15 注入点断言照旧）
 //   ⑤ 无代码改动（`lib/client.js` 早已拆 propsScope / scopeKey）—— 无腿
+//   —— 批43（台账 t-3：摘要预算标定；同样**并入既有块** ⇒ 本档顶层 `test(` 数仍为 21）——
+//   T-4c Top-N 截断可见（30 条活任务 ⇒ 「…还有 25 项」）        ⇒ 并入 T-4b 块
+//   T-4d 预算边界（**768 标定锁**：≤768 全列 / >768 出尾串）    ⇒ 并入 T-5 块
+//   T-4e 注入合计上限（1281 派生量；四分支逐条）                ⇒ 并入 T-5 块
 //
 // ★ 每条腿都带「变异自证」注释：说明**去掉哪一处实现会让该腿变红**（本仓纪律：腿必须咬得住实现）。
 // ★ 每条腿都带**阳性/阴性对照**（防「恒红断言」与「恒真空断言」两种假绿）。
@@ -70,11 +75,12 @@ import { dirname, extname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createContext, runInContext } from "node:vm"
 import {
-  ALLOWED_MIGRATIONS, DEFAULT_COPY_TEMPLATE, LEDGER_FILE, LEDGER_SUBDIR, MAX_DOC_PATHS, REJECT_CODES,
+  ALLOWED_MIGRATIONS, DEFAULT_COPY_TEMPLATE, DIGEST_MAX_CHARS, LEDGER_FILE, LEDGER_SUBDIR, MAX_DOC_PATHS, REJECT_CODES,
   TASK_STATUSES, UPDATABLE_FIELDS, applyTaskClaim, applyTaskCreate, applyTaskTransition, applyTaskUpdate,
   detectSecretShape, isClaimableBy, isOwnedBy, isValidDocPathList, ownerOf, parseChecklistDoc, readTasksView,
   renderTaskDigest, resolveLedgerConfig, resolveTasksPath, serializeLedger, tasksFileSha256, workspaceRootOf,
 } from "../lib/tasks.mjs"
+import { INJECT_TOTAL_MAX_CHARS, assembleInjection } from "../lib/index.mjs"
 import { buildTaskClaimResult, buildTasksBoardPayload, makeTaskTools, readChecklistDocs, renderBoardText } from "../lib/tool-tasks.mjs"
 import { TASK_COMMAND_DEFINITION_PREFIX, TASK_COMMAND_NAMES, commandArgsOf, registerTaskCommands } from "../lib/task-commands.mjs"
 
@@ -526,6 +532,16 @@ test("T-4b（US-5 ②）: 注入摘要列出的每条 ∈ 看板集合且状态�
       .map((e) => ({ id: e.id, tag: "完成" }))
       .filter((e) => { const t = byId.get(e.id); return !(e.tag === t.status || e.tag.startsWith(t.status + "/")) })
     assert.ok(mismatched.length > 0, "自证②：状态错配必须被判红（该夹具里摘要列出的条目都不在『完成』态）")
+
+    // ——— T-4c（批 43 / 台账 t-3 · FR-2/D-3）：**Top-N 截断必须可见**（并入本块，不新开顶层 test）———
+    // 30 条活任务 ⇒ 列 5 条 + 「…还有 25 项」。旧口径 `listable = candidates.length`（= Top-N 后的 5）
+    // ⇒ pending 恒 0 ⇒ 尾串消失（25 条静默丢失）⇒ 本段红。
+    const thirty = []
+    for (let i = 1; i <= 30; i++) thirty.push(task("t-" + i, { title: "第 " + i + " 条活任务" }))
+    seedLedger(ws, thirty, 11)
+    const capped = renderTaskDigest(readTasksView(ws))
+    assert.ok(capped.includes("\n…还有 25 项"),
+      "Top-N 之外的 25 条必须**可见**（不得静默消失）：" + JSON.stringify(capped.slice(-40)))
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
@@ -563,14 +579,65 @@ test("T-5（N-5）: renderTaskDigest 逐字节确定性、无时间戳/百分比
 
     // 有界 + 收尾尾巴
     const many = []
-    for (let i = 1; i <= 40; i++) many.push(task("t-" + i, { kind: "decision", title: "第 " + i + " 条标题刻意写得足够长，好把 512 的预算顶出去，验证尾巴" }))
+    for (let i = 1; i <= 40; i++) many.push(task("t-" + i, { kind: "decision", title: "第 " + i + " 条标题刻意写得足够长，好把 768 的预算顶出去，验证尾巴" }))
     seedLedger(ws, many, 9)
     const long = renderTaskDigest(readTasksView(ws))
-    assert.ok(long.length <= 512, "必须有界（≤512 实测 " + long.length + "）：" + long.slice(0, 80))
+    assert.ok(long.length <= DIGEST_MAX_CHARS, "必须有界（≤" + DIGEST_MAX_CHARS + " 实测 " + long.length + "）：" + long.slice(0, 80))
     assert.ok(/…还有 \d+ 项$/.test(long), "超预算必须以『…还有 N 项』收尾（不是截断半句）：" + long.slice(-40))
     const shown = digestEntries(long).length
     const claimed = Number(/…还有 (\d+) 项$/.exec(long)[1])
     assert.equal(shown + claimed, 40, "「列出 + 还有」必须等于总数（不许静默丢项）：" + shown + " + " + claimed)
+
+    // ——— T-4d（批 43 · FR-1）：**768 是标定锁**（与 T-5 的「有界锁」<= DIGEST_MAX_CHARS 不是一回事）———
+    // 边界两向都要：≤768 全列（无尾串）/ >768 出尾串。这里**有意写 768 字面量**：改常量必须同步改本腿。
+    // 变异自证：把 DIGEST_MAX_CHARS 改回 512 ⇒ 恰好 768 的样本立刻出尾串 ⇒ 第一条断言红。
+    /** 造一个输出恰好 target 字符的摘要视图（单条决策项，标题长度到输出长度是线性的）。 */
+    const digestOfLength = (target) => {
+      const baseView = (title) => ({
+        tasks: [task("t-1", { kind: "decision", title })],
+        decisions: [task("t-1", { kind: "decision", title })],
+        active: [], blocked: [], done: [], rev: 0,
+      })
+      const probe = renderTaskDigest(baseView(""))
+      const titleLen = target - probe.length
+      assert.ok(titleLen >= 0, "目标长度不得小于摘要头（" + target + " < " + probe.length + "）")
+      return renderTaskDigest(baseView("x".repeat(titleLen)))
+    }
+    const atCap = digestOfLength(768)
+    assert.equal(atCap.length, 768, "标定锁：恰好 768 字符的样本必须原样全列（实测 " + atCap.length + "）")
+    assert.ok(!atCap.includes("…还有"), "≤768 必须**全列**（不得出尾串）：" + atCap.slice(-40))
+    const overCap = digestOfLength(769)
+    assert.ok(/…还有 \d+ 项$/.test(overCap), ">768 必须以尾串收尾（768 是标定锁）：" + overCap.slice(-40))
+
+    // ——— T-4e（批 43 · FR-3）：注入行合计上限 = DIGEST_MAX_CHARS + 512 + 1 = **1281**（派生量）———
+    assert.equal(INJECT_TOTAL_MAX_CHARS, 1281, "合计上限必须是派生量 768 + 512 + 1，不得写死别的数")
+    // ① 超限 ⇒ 按行裁剪摘要（首行必留 · 不切半行 · 不跳行）+ 单行尾串；adLine 整行保留。
+    //   ★ 设计档 §八 T-4e① 原文写「adLine 500 + taskLine 700」，但 500 + 1 + 700 = 1201 < 1281
+    //     ⇒ 按 §六 伪代码**不触发**裁剪（D-4 从 1024 改 1281 后遗留的陈旧夹具数字；见交付报告「偏离说明」）。
+    //     故这里用 500 + 896 真正越过 1281；「575 + 400 未超限」由 ② 反向腿覆盖。
+    const adA = "A".repeat(500)
+    const taskA = ["[摘要头]", ...Array.from({ length: 9 }, () => "y".repeat(98))].join("\n")
+    const rA = assembleInjection(adA, taskA)
+    assert.ok(rA.length <= INJECT_TOTAL_MAX_CHARS, "合计必须 ≤1281（实测 " + rA.length + "）")
+    assert.ok(rA.startsWith(adA + "\n"), "adLine 必须**逐字完整**且排在最前（不砍 anti-drift 行）")
+    assert.ok(rA.endsWith("\n…（摘要已截断）"), "裁剪后的摘要必须带单行尾串「（摘要已截断）」：" + JSON.stringify(rA.slice(-30)))
+    const keptLines = rA.slice(adA.length + 1).replace(/\n…（摘要已截断）$/, "").split("\n")
+    assert.equal(keptLines[0], "[摘要头]", "首行必须保留（rev/计数那行）")
+    for (const line of keptLines.slice(1)) assert.equal(line.length, 98, "不得切半行（每行都必须是完整的 98 字符）：" + line.length)
+    // ② 反向腿（评审 #5）：575 + 400 **未超限** ⇒ 摘要部分与 renderTaskDigest 输出**逐字相同**（防裁剪器误伤正常路径）
+    const adB = "B".repeat(575)
+    const taskB = digestOfLength(400)
+    assert.equal(taskB.length, 400, "反向腿夹具必须是 400 字符的真实摘要（实测 " + taskB.length + "）")
+    const rB = assembleInjection(adB, taskB)
+    assert.equal(rB, adB + "\n" + taskB, "未超限 ⇒ 必须**原样拼接**（逐字），裁剪器不得碰正常路径")
+    assert.equal(rB.slice(adB.length + 1), taskB, "摘要部分必须与 renderTaskDigest 输出**逐字相同**")
+    // ③ adLine 自身 ≥ 上限 ⇒ 输出**恰为 adLine**（不拼半行、不留残句）
+    const adC = "C".repeat(INJECT_TOTAL_MAX_CHARS)
+    assert.equal(assembleInjection(adC, digestOfLength(200)), adC, "adLine 自身超限 ⇒ 只返回 adLine")
+    // ④ taskLine 首行就放不下 ⇒ 输出 = adLine + 单行「（摘要已截断）」（不带残行）
+    const adD = "D".repeat(500)
+    const taskD = "z".repeat(800) + "\n次行"
+    assert.equal(assembleInjection(adD, taskD), adD + "\n…（摘要已截断）", "首行放不下 ⇒ adLine + 单行尾串")
 
     // 空集 / 关闭态 ⇒ 空串（该段**不出现**）
     assert.equal(renderTaskDigest({ tasks: [], decisions: [], active: [], blocked: [], done: [], rev: 0 }), "", "空集 ⇒ 空串")
@@ -2261,4 +2328,4 @@ test("T-20（§16.3 · 铁律 4）: /task_done 无凭据 ⇒ 写门拒且零写�
 // `evidence-required` 断言红（拒绝码变成命令层自造的，写门的凭据门被绕过）；让命令层直接写盘
 // （绕过 applyTaskTransition）⇒ ① 的 sha256 与状态两条同时红。
 
-// ═══════════════ 腿部收口（21 条 = T-1…T-20 整 20 条 + T-4 拆 a/b 多出 1 条 = 21；**T-19 未拆**） ═══════════════
+// ═══════════════ 腿部收口（21 条 = T-1…T-20 整 20 条 + T-4 拆 a/b 多出 1 条 = 21；**T-19 未拆**；批 43 的 T-4c/T-4d/T-4e 并入 T-4b/T-5，不新增顶层 `test(`） ═══════════════
