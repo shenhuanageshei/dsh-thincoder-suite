@@ -1256,7 +1256,13 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
         ["#0EA5E9", "#22C55E", "#94A3B8", "#EF4444"], "分区色条 = 分区语义对应的五态色（FR-4 ③）")
       // ④ 五态图例行（FR-4 ④）
       const legendEls = collectByClass(rVis.tree, "tc-tasks-legend5")
-      assert.equal(legendEls.length, 1, "看板顶部必须有五态图例行")
+      // ★ 2026-10-18 交付评审 #1 订正：原断言只验「图例存在」，咬不住**位置** ——
+  //   图例曾被挂在滚动区里，任务一多就滚走（恰恰在这个它本该解决问题的场景失效）。
+  //   现判据：图例存在 **且** 它渲染在 `tc-tasks-legendwrap` 固定层里（不在 TasksBoardBody 的滚动子树内）。
+  assert.equal(legendEls.length, 1, "看板顶部必须有五态图例行")
+  assert.ok(!/nodes\.push\(h\(StatusLegend/.test(cSrcVis), "★ 五态图例不得再挂在滚动区（TasksBoardBody）里")
+  assert.ok(/className: "tc-tasks-legendwrap"[\s\S]{0,80}StatusLegend/.test(cSrcVis)
+    || /h\(StatusLegend, \{\}\)/.test(cSrcVis), "★ 五态图例必须在固定层（tc-tasks-legendwrap）渲染")
       const legendItems = collectByClass(legendEls[0], "tc-tasks-legend5-item")
       assert.deepEqual(legendItems.map((x) => treeText(x).join("")), ["待办", "已接手", "在做", "卡住", "完成"],
         "图例必须逐条列出五态（顺序 = 环图/色板顺序）")
