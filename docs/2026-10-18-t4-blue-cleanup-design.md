@@ -31,7 +31,7 @@ count-marks: 条|处|个
 | ④ | `isValidDocPathList` 去重与 JSDoc 对齐 | `lib/tasks.mjs:842-847`：JSDoc 写「**去重后** ≤ MAX_DOC_PATHS」，实现**没有去重**，且先判 `v.length` 再（无）去重 | **改代码**：先 trim+去重再判上限；JSDoc 同步 |
 | ⑤ | `TasksTab` 同名 `var scope` 改名消遮蔽 | **已修**（`lib/client.js:2683-2685`，2026-10-18 评审 #4 拆成 `propsScope`/`scopeKey`，带注释） | **不动代码**，本批只在结项写明「已修」 |
 | ⑥ | `task_update` 描述补 createdBy/owner/claimedFrom | `lib/tool-tasks.mjs` 的 `task_update` 段（:78 描述 + :119 schema）**没写**「哪些字段只读」 | **改描述**：加一句「createdBy / owner / claimedFrom **只读**，本工具不接受」 |
-| ⑦ | `assertRejectNoWrite` 改 `withZeroWrite(ws, fn)` 包装器 | `test/tasks.test.mjs:101` 现形是「传入**已算好的 result** 再断言零写入」——**操作已经跑完**才能断言，语义上是「事后核对」而非「期间不变」 | **改脚手架**：`withZeroWrite(ws, fn)`（**先取 sha → 跑 fn → 再断言 sha 未变**），调用点改为包住调用 |
+| ⑦ | `assertRejectNoWrite` 改 `withZeroWrite(ws, fn)` 包装器 | `test/tasks.test.mjs:101` 现形是「传入**已算好的 result** 再断言零写入」——**操作已经跑完**才能断言，语义上是「事后核对」而非「期间不变」。★ **实测：该帮助函数有 21 个调用点**（`grep 'assertRejectNoWrite('`） | **改脚手架**：新增 `withZeroWrite(ws, fn)`（先取 sha → 跑 `fn()` → 断言 sha 未变 → 返回结果）；**21 个调用点全部机械改为**「`withZeroWrite(ws, () => 操作)` + 独立断言拒绝码」，行为等价 |
 | ⑧ | T-7③ 真实档断言改「能解析才断言」或固化为 fixture | `test/tasks.test.mjs:1487` 依赖**本仓真实档**的条数；档一变（哪怕只是加一行）腿就红，且红的原因与本插件无关 | **改法**：`const parsed = parseChecklistDoc(...); if (parsed) { …断言… }` 且**保留**「能解析 ⇒ 条数与独立数出的数据行相等」；不能解析 ⇒ 明确记 `t.diagnostic`（**不静默跳过**） |
 | ⑨ | `commandArgsOf` 谓词收窄为 `m[1] === name` | `lib/task-commands.mjs:58/132/153` | **改谓词**：只认**首个捕获组逐字相等**，不做包含匹配 |
 | ⑩ | 注入行双盘读加成本注释 | `lib/index.mjs:1533` 每回合注入读一次盘（`readTasksView` ⇒ 一次 fs 读 + 解析） | **只加注释**（说明成本与为何可接受），**不改行为** |
@@ -69,7 +69,7 @@ count-marks: 条|处|个
 
 - **FR-1**（④）`isValidDocPathList`：`const uniq = [...new Set(v.map(p => p.trim()))]` ⇒ `uniq.length > MAX_DOC_PATHS` 拒；全为非空字符串才通过。
 - **FR-2**（⑥）`task_update` 描述与 schema 各加一句只读字段声明。
-- **FR-3**（⑦）`withZeroWrite(ws, fn)`：取 sha → `fn()` → 断言 sha 不变 → 返回结果；把现有 `assertRejectNoWrite` 的**零写入断言**迁进去，拒绝码断言留在调用点。
+- **FR-3**（⑦）`withZeroWrite(ws, fn)`：取 sha → `fn()` → 断言 sha 不变 → 返回结果；**21 个调用点**逐点改成「包装 + 独立断言拒绝码」（拒绝码断言保留原语义，只是不再依赖「已经算好的 result」）。
 - **FR-4**（⑧）T-7③ 改条件断言 + diagnostic 留痕。
 - **FR-5**（⑨）`commandArgsOf` 谓词改 `m[1] === name`。
 - **FR-6**（⑩）注入点加成本注释。
