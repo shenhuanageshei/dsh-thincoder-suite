@@ -60,6 +60,7 @@
 //   T-4c Top-N 截断可见（30 条活任务 ⇒ 「…还有 25 项」）        ⇒ 并入 T-4b 块
 //   T-4d 预算边界（**768 标定锁**：≤768 全列 / >768 出尾串）    ⇒ 并入 T-5 块
 //   T-4e 注入合计上限（**1150 标定值**；四分支逐条）            ⇒ 并入 T-5 块
+//        ＋ 修复轮 3：④ 贴顶守卫 · 边界三腿 · 空段三腿 · 尾串计入预算腿 · ① 加固（保留 ≥2 行）
 //   T-4f 跨模块契约锁（合法最坏 512 + 768 = 1281 > 1150 仍被裁）⇒ 并入 T-5 块
 //
 // ★ 每条腿都带「变异自证」注释：说明**去掉哪一处实现会让该腿变红**（本仓纪律：腿必须咬得住实现）。
@@ -644,9 +645,19 @@ test("T-5（N-5）: renderTaskDigest 逐字节确定性、无时间戳/百分比
     assert.ok(rA.length <= INJECT_TOTAL_MAX_CHARS, "合计必须 ≤" + INJECT_TOTAL_MAX_CHARS + "（实测 " + rA.length + "）")
     assert.ok(rA.startsWith(adA + "\n"), "adLine 必须**逐字完整**且排在最前（不砍 anti-drift 行）")
     assert.ok(rA.endsWith("\n…（摘要已截断）"), "裁剪后的摘要必须带单行尾串「（摘要已截断）」：" + JSON.stringify(rA.slice(-30)))
-    const keptLines = rA.slice(adA.length + 1).replace(/\n…（摘要已截断）$/, "").split("\n")
+    const keptText = rA.slice(adA.length + 1).replace(/\n…（摘要已截断）$/, "")
+    const keptLines = keptText.split("\n")
+    const budgetA = INJECT_TOTAL_MAX_CHARS - adA.length - 1 - 1 - "…（摘要已截断）".length
     assert.equal(keptLines[0], "[摘要头]", "首行必须保留（rev/计数那行）")
     assert.ok(keptLines.length < 6, "必须真的裁掉至少一行（否则尾串就是假裁剪）：保留 " + keptLines.length + " / 6 行")
+    // ★ 加固（修复轮 3 · 评审指出的测试盲区）：旧断言「只留首行」也全绿（1 < 6）⇒ 必须证明
+    //   **真的按行装填**：保留 ≥2 行，且保留字符数落在 (首行长度, 扣尾串预算] 区间。
+    //   变异自证：把裁剪循环退化成「只保留首行」⇒ 下面第一条立刻红；把预算放宽到 ≥ 两行的容量
+    //   但仍只装首行 ⇒ 第二条红。
+    assert.ok(keptLines.length >= 2,
+      "必须真的按行装填（保留的行数 ≥ 2，不是退化到只留首行）：保留 " + keptLines.length + " 行")
+    assert.ok(keptText.length > keptLines[0].length && keptText.length <= budgetA,
+      "保留部分的字符数必须落在 (首行 " + keptLines[0].length + ", 预算 " + budgetA + "] 区间（实测 " + keptText.length + "）")
     for (const line of keptLines.slice(1)) assert.equal(line.length, 138, "不得切半行（每行都必须是完整的 138 字符）：" + line.length)
     // ② 反向腿（评审 #5）：575 + 400 ⇒ 976 ≤ 1150 **未超限** ⇒ 摘要部分与 renderTaskDigest 输出**逐字相同**
     //   （防裁剪器误伤正常路径）。变异自证：把上限改成 900 ⇒ 976 被误裁 ⇒ 本段红
@@ -665,6 +676,51 @@ test("T-5（N-5）: renderTaskDigest 逐字节确定性、无时间戳/百分比
     const adD = "D".repeat(500)
     const taskD = "z".repeat(800) + "\n次行"
     assert.equal(assembleInjection(adD, taskD), adD + "\n…（摘要已截断）", "首行放不下 ⇒ adLine + 单行尾串")
+
+    // ——— 修复轮 3（🔴 分支④ 贴顶仍超上限）：边界腿 · 空段腿 · 尾串预算腿 ———
+    // 尾串逐字与 `lib/index.mjs` 的 `INJECT_CLIP_TAIL` 同步（该常量未导出）。
+    const CLIP_TAIL = "…（摘要已截断）"
+    // (a) **边界腿**：adLine ∈ [上限−8, 上限−1] 是危险区间 —— budget = 上限 − ad − sep − 1 − 尾串
+    //   为负，旧实现分支④ 直接返回「ad + 换行 + 尾串」⇒ 总长 > 上限（1150 实测：1142→1151 / 1149→1158），
+    //   违反函数头自己的 @post。新守卫：连「ad + 分隔 + 尾串」都超上限 ⇒ 直接返回 adLine。
+    //   变异自证：删掉分支④ 的贴顶守卫 ⇒ 循环首次迭代的长度腿即红（三条上限−k 同构；断言中止于首条）。
+    for (const back of [5, 8, 1]) {
+      const adEdge = "E".repeat(INJECT_TOTAL_MAX_CHARS - back)
+      const rEdge = assembleInjection(adEdge, digestOfLength(200))
+      assert.ok(rEdge.length <= INJECT_TOTAL_MAX_CHARS,
+        "贴顶 adLine（上限−" + back + " = " + adEdge.length + "）也必须 ≤ 上限（实测 " + rEdge.length + "）")
+      assert.equal(rEdge, adEdge, "贴顶时宁可没有摘要，也不留超限串（上限−" + back + "）")
+    }
+    // (b) **空段腿**：不加分隔符、不留悬空换行（与旧 filter+join 注入点逐字相同）。
+    //   变异自证：把空段处理改回无脑 `join("\n")` ⇒ 下面三条相等腿各自红。
+    const taskEmpty = digestOfLength(120)
+    assert.equal(assembleInjection("", taskEmpty), taskEmpty, "adLine 为空 ⇒ 直接返回 taskLine（无前导换行）")
+    const adEmpty = "G".repeat(300)
+    assert.equal(assembleInjection(adEmpty, ""), adEmpty, "taskLine 为空 ⇒ 直接返回 adLine（无尾随换行）")
+    assert.equal(assembleInjection("", ""), "", "两段皆空 ⇒ 空串（不是换行）")
+    // (c) **尾串预算腿**：budget **必须扣掉尾串**（上限 − ad − sep − 1 − 尾串长度）——
+    //   夹具让「不扣尾串」会多保留一行（8 字符 = 尾串长度）：
+    //   ad = 512 ⇒ 扣尾串预算 628 / 不扣尾串 636；「首行 1 + 第二行 300 + 第三行 330」= 633
+    //   ⇒ 恰好落在 (628, 636] 窗口 ⇒ 扣尾串只留 2 行，不扣尾串会多留第三行。
+    //   变异自证：budget 不扣尾串 ⇒ 本组必红（实测首个命中是总长断言：1155 > 1150）。
+    const adH = "H".repeat(512)
+    const hLine2 = "2".repeat(300)
+    const hLine3 = "3".repeat(330)
+    const taskH = ["R", hLine2, hLine3, "4".repeat(50)].join("\n")
+    const budgetH = INJECT_TOTAL_MAX_CHARS - adH.length - 1 - 1 - CLIP_TAIL.length
+    assert.equal(budgetH, 628, "夹具锁：ad=512 时扣掉尾串后的摘要预算 = 628（实测 " + budgetH + "）")
+    assert.ok(adH.length + 1 + taskH.length > INJECT_TOTAL_MAX_CHARS,
+      "夹具前提：512 + 1 + " + taskH.length + " 必须真的超过合计上限")
+    const rH = assembleInjection(adH, taskH)
+    const keptH = rH.slice(adH.length + 1).replace(/\n…（摘要已截断）$/, "")
+    const keptHLines = keptH.split("\n")
+    assert.ok(rH.length <= INJECT_TOTAL_MAX_CHARS, "尾串预算夹具也必须 ≤ 上限（实测 " + rH.length + "）")
+    assert.equal(keptHLines.length, 2,
+      "尾串必须计入预算：第三行按扣尾串预算（" + budgetH + "）放不下 ⇒ 只保留 2 行（实测 " + keptHLines.length + " 行；不扣尾串会多留一行）")
+    assert.ok(keptH.length <= budgetH, "保留部分必须 ≤ 扣掉尾串后的预算（实测 " + keptH.length + " ≤ " + budgetH + "）")
+    const threeLines = keptH.length + 1 + hLine3.length
+    assert.ok(threeLines > budgetH && threeLines <= budgetH + CLIP_TAIL.length,
+      "夹具判别力：三行合计必须落在 (" + budgetH + ", " + (budgetH + CLIP_TAIL.length) + "]（实测 " + threeLines + "）")
     // ★ 标定锁放最后：上面每条腿先按自己的机制报红（变异定位更准），本行再把数值钉死
     //   （只改数值不动机制 ⇒ 前面的腿可能全绿，例如 1100；本行必红 ⇒ 标定值不可漂移）。
     assert.equal(INJECT_TOTAL_MAX_CHARS, 1150, "合计上限必须是**标定值** 1150（派生量 1281 恒不可触发 = 假保护，见 D-4）")
