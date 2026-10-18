@@ -2032,8 +2032,11 @@ test("T-9（US-9）: ledger.mode = off ⇒ 个人台账分区消失、**防漂�
       "★ 无 ToPrimitive 的值 ⇒ **绝不抛**（纯函数后置；旧 `String(p)` 在这里抛 TypeError）")
     assert.equal(isValidDocPathList([nullProtoItem]), false, "无原型的对象项 ⇒ false（不抛）")
     // ————— 批 44（台账 t-8）：docPaths 的「去重」补齐镜像（设计档 docs/2026-10-19-t8-docpaths-mirror-design.md §八） —————
-    // ★ 六条腿全部**并入本 T-9 块**（不新增顶层 test(）。T-9f/T-9g 是**静态文本锁**：
-    //   读 lib/client.js 源码字节断言片段，**绝不 eval 该 bundle**（含 DOM/React，node 下无法加载）。
+    // ★ 本批**五条新腿**（T-9d / T-9e / T-9h / T-9f / T-9g）并入本 T-9 块（不新增顶层 test(）。
+    //   第六条是**既有的 C-L4**（两侧逐夹具等值），它留在 `test/config-api.test.mjs` 的 U3c2 块 ——
+    //   ★ 2026-10-19 偏离审计 #2 订正：原注释写「六条腿全部并入本 T-9 块」，与实际位置不符。
+    //   T-9f/T-9g 是**静态文本锁**：读 lib/client.js 源码字节断言片段，**绝不 eval 该 bundle**
+    //   （含 DOM/React，node 下无法加载）。
     // ★ 夹具（9 项含 1 重复 ⇒ 去重后 8 条唯一；重复项放在第 2 位 —— 「先截后去重」会把 h.md 截掉）：
     const nineWithDup = ["a.md", "a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md"]
     const nineDistinct = ["a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md", "i.md"]
