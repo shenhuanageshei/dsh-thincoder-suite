@@ -39,7 +39,8 @@ import {
   resolveConsultReadonlyRoute,
 } from "../lib/consult.mjs"
 // 批 41（台账 t-6 / 设计档 §五 FR-1）：发货模块名常量的单一事实源（T-42 的静态同步锁对位它）
-import { CONSULT_READONLY_MODULES } from "../lib/preset-readonly-guard.mjs"
+// + 纯函数层组合判据（T-41⑦ 直接驱动它，覆盖设计档 §六 的 rows==null 降级分支 —— 审计 #4b）
+import { CONSULT_READONLY_MODULES, evaluatePresetDrift } from "../lib/preset-readonly-guard.mjs"
 // 批 30 / US-6（D30-6 · 锚 A30-10/A30-12）：**模型面**证据的捕获与成文（eng.mjs 侧实现，
 // 读取器复用 consult.mjs 的补导出——设计 §2.6「不得新建模块」）
 import { readChildModelToolSurface, renderModelSurfaceEvidence } from "../lib/eng.mjs"
@@ -1699,8 +1700,8 @@ function roPresetHost() {
 const roPresetCtx = (presets) => ({ subagents: roPresetHost(), get: (n) => (n === "agentPresets" ? presets : null) })
 
 /**
- * 注入的 agentPresets 桩：list() 恒说「已注册」；观测面的四种失效形态各由一个开关造出来
- * （T-41 的受测面：无 inventory / inventory 抛错 / readDocument 抛错 / 缺该预设行）。
+ * 注入的 agentPresets 桩：list() 恒说「已注册」；观测面的各种失效形态各由一个开关造出来
+ * （T-41 的受测面：无 inventory / inventory 抛错 / readDocument 抛错 / **readDocument 方法缺失** / 缺该预设行）。
  */
 function presetsStub({ rows = null, content = null, inventory, noInventory = false, inventoryThrows = false, docThrows = false, noReadDocument = false } = {}) {
   const p = {
@@ -1796,7 +1797,7 @@ test("T-40（批 41 · 设计档 §八）：配置层翻转——write:true / ed
   assert.equal(r4.degraded, null, "T-40④：内容已被读到并扫过 ⇒ degraded 恰为 null（不是「未核验」）")
 })
 
-test("T-41（批 41 · 设计档 §八）：观测面缺失与服务面异常——缺失降级放行且告警可见；缺行拒绝；模块层优先", async () => {
+test("T-41（批 41 · 设计档 §八）：观测面缺失与服务面异常——缺失 / 方法缺失降级放行且告警可见；缺行拒绝；模块层优先", async () => {
   // ① 服务只有 list()（无 inventory）⇒ 放行 + degraded 非空 + **派发文本**带告警（FR-3 / FR-4）
   const listOnly = { async list() { return [{ id: "thincoder-consult-ro" }] } }
   const r1 = await resolveConsultReadonlyRoute(roPresetCtx(listOnly))
@@ -1842,6 +1843,24 @@ test("T-41（批 41 · 设计档 §八）：观测面缺失与服务面异常—
   })))
   assert.equal(r5.ok, false, "T-41⑤：模块层已判红 ⇒ 配置层不可用不得把它降级成放行：" + JSON.stringify(r5))
   assert.ok(String(r5.reason).includes("@deepseek-ai/dsh-tool-terminal"), "T-41⑤：必须点名多出的执行类模块：" + r5.reason)
+
+  // ⑥ readDocument **方法缺失**（不是抛错）⇒ 配置层同样降级放行且告警点名「配置层」（修复轮 · 审计 #4a）
+  //   夹具 = presetsStub 的 noReadDocument（**删掉该键**；与 ③ 的「调了抛错」是两条不同分支）
+  const noDocSvc = presetsStub({ rows: shippedRows(), noReadDocument: true })
+  assert.equal(typeof noDocSvc.readDocument, "undefined",
+    "T-41⑥ 前置：夹具必须**没有** readDocument 键（否则测的就不是「方法缺失」）")
+  const r6 = await resolveConsultReadonlyRoute(roPresetCtx(noDocSvc))
+  assert.equal(r6.ok, true, "T-41⑥：readDocument 方法缺失（非抛错）⇒ 配置层降级放行：" + JSON.stringify(r6))
+  assert.equal(typeof r6.degraded, "string", "T-41⑥：degraded 必须是字符串（方法缺失同样不许静默）")
+  assert.ok(String(r6.degraded).length > 0, "T-41⑥：★ 方法缺失也必须明说「未核验」（degraded 为空即红）")
+  assert.ok(String(r6.degraded).includes("配置层"), "T-41⑥：degraded 必须点名失败层 = 配置层：" + r6.degraded)
+
+  // ⑦ 纯函数层：rows == null ⇒ ok + degraded 恰为「内容观测面不可用」（设计档 §六 该分支；修复轮 · 审计 #4b）
+  //   直接 import evaluatePresetDrift 断言（不经服务对象）—— 证明这条告警文案真由 rows==null 分支产生。
+  const nullRowsDrift = evaluatePresetDrift({ rows: null })
+  assert.equal(nullRowsDrift.ok, true, "T-41⑦：rows == null ⇒ 降级放行：" + JSON.stringify(nullRowsDrift))
+  assert.equal(nullRowsDrift.degraded, "内容观测面不可用",
+    "T-41⑦：★ rows == null 必须给出该分支的固定告警文案（设计档 §六）：" + JSON.stringify(nullRowsDrift.degraded))
 })
 
 test("T-42（批 41 · 设计档 §八）：发货定义同步锁——cordis.patch.yml 的 preset 段（group 递归展开）逐项等于 CONSULT_READONLY_MODULES", () => {
@@ -1944,11 +1963,17 @@ test("T-42（批 41 · 设计档 §八）：发货定义同步锁——cordis.pa
     "              - id: b",
     "                name: '@x/tool-b'",
   ].join("\n")
-  assert.deepEqual(moduleNamesOfPreset(synthetic).sort(), ["@x/tool-a", "@x/tool-b"],
-    "T-42 自证：group 必须被**递归展开**、group 自身名与 config.name 都必须被排除（评审 N1）")
+  // ★ 修复轮（独立偏离审计 #3）：自证的期望值必须是**同一份合成集**。旧写法拿合成的 @x/* 清单去比
+  //   **真实 9 个常量**做 notDeepEqual —— 两侧本就无交集 ⇒ 恒真、证明不了解析器（空转）。
+  //   这里先钉死「合成完整集」，再分两条：正向（解析 == 合成完整集）与负向（删一项 ⇒ 解析 != **同一**合成完整集）。
+  const SYNTHETIC_FULL = ["@x/tool-a", "@x/tool-b"]
+  assert.deepEqual(moduleNamesOfPreset(synthetic).sort(), [...SYNTHETIC_FULL].sort(),
+    "T-42 自证②：合成完整集 ⇒ 解析结果必须**等于同一份合成集**（group 被**递归展开**、group 自身名与 config.name 被排除；评审 N1）")
   const dropped = synthetic.replace("              - id: b\n", "")
-  assert.notDeepEqual(moduleNamesOfPreset(dropped).sort(), [...CONSULT_READONLY_MODULES].sort(),
-    "T-42 自证：少一项 ⇒ 与常量不等 ⇒ 必红")
+  const droppedParsed = moduleNamesOfPreset(dropped)
+  assert.notDeepEqual([...droppedParsed].sort(), [...SYNTHETIC_FULL].sort(),
+    "T-42 自证③：从合成 YAML 删掉一项 ⇒ 必须与**同一份合成完整集**不等（对**真实常量**做 notDeepEqual 是恒真空转 ⇒ 审计 #3）：实测 "
+      + JSON.stringify([...droppedParsed].sort()))
   const renamed = synthetic.replace("name: '@x/tool-b'", "name: '@x/tool-b2'")
   assert.deepEqual(moduleNamesOfPreset(renamed).sort(), ["@x/tool-a", "@x/tool-b2"],
     "T-42 自证：改名会被原样读出（比对面不是名字不敏感）")
