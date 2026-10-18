@@ -43,12 +43,13 @@
 //   T-33 全部展开/全部收起：两控件 · 收起态不渲染 meta 与按钮 · 默认展开 ⇒ 并入 T-12 块（④-c）
 //   T-34 五态显眼：行色条 · 实心 pill · 分区色条 · 五态图例          ⇒ 并入 T-12 块（④-d）
 //   —— 批42（t-4 七条 🔵 除尘；同样**并入既有块** ⇒ 本档顶层 `test(` 数仍为 21）——
-//   ④ 文档路径清单：**去重后**判上限（含重复 ⇒ 通过 / 非字符串 ⇒ false 不抛）⇒ 并入 T-4a 块（⑦）
+//   ④ 文档路径清单：**去重后**判上限（含重复 ⇒ 通过 / 非字符串 ⇒ false 不抛）⇒ T-9a/T-9b/T-9c，并入 T-4a 块（⑦）
 //   ⑥ task_update 契约文本锁（描述与 schema 都写 createdBy / owner / claimedFrom 只读）⇒ 并入 T-3 块
 //   ⑦ 零写入包装器 withZeroWrite：旧的 assertRejectNoWrite 调用点**全部**改成「包装 + 独立拒绝码断言」
 //      （旧 grep 命中 21 行 = 1 处定义 + 20 处调用点，20 处全改）；抛错分支自证 ⇒ 并入 T-1 块（⑦）
-//   ⑧ T-7③ 真实档改「能解析才断言」+ diagnostic 留痕；loader 注入的不可解析腿 ⇒ 并入 T-7 块（④-b）
-//   ⑨ commandArgsOf 谓词逐字（只认 m[1] === name，无 startsWith 兜底）⇒ 并入 T-20 块
+//   ⑧ T-7③ 真实档改「能解析才断言」+ diagnostic 留痕；**读档路径可注入**（套件内跑到 diagnostic 分支 +
+//      真档缺失不红，③-b）；loader 注入的不可解析腿 ⇒ 并入 T-7 块（④-b）
+//   ⑨ commandArgsOf 谓词逐字（只认 m[1] === name，无 startsWith 兜底）⇒ 并入 T-20 块（**谓词层 + handler 层**）
 //   ⑩ 注入行成本注释（`lib/index.mjs`，**纯注释**、行为零变化）—— 无新腿（既有 T-15 注入点断言照旧）
 //   ⑤ 无代码改动（`lib/client.js` 早已拆 propsScope / scopeKey）—— 无腿
 //
@@ -882,22 +883,23 @@ test("T-4a（US-5 ① · N-1）: 看板 ≡ 工具读（同一 ws 逐条相等�
     assert.ok(tasksRoot[1].includes("flex:1 1 auto") && tasksRoot[1].includes("min-height:0"),
       "根容器必须 flex:1 1 auto + min-height:0（面板高度约束才能传到内容区）：" + tasksRoot[1])
 
-    // ⑦ 批 42 ④（**并入既有 T-4 块**，不新开顶层用例）：文档路径清单 —— 判上限读**去重后**的条数
-    //   T-4a ⓐ：9 条但**含重复** ⇒ 去重后 ≤ MAX_DOC_PATHS ⇒ **通过**
+    // ⑦ 批 42 ④（腿名 T-9a/T-9b/T-9c；**并入本 T-4a 块**，不新开顶层用例）：文档路径清单 —— 判上限读**去重后**的条数
+    //   T-9a：9 条但**含重复** ⇒ 去重后 ≤ MAX_DOC_PATHS ⇒ **通过**
     //     （旧实现先判 v.length=9 ⇒ 会拒 —— 这是本批**唯一**的用户可见放宽，设计档 §0-1 / §三-2）
-    //   T-4a′：数组含非字符串（42 / null）⇒ 返回 false **且不抛**
+    //   T-9b：数组含非字符串（42 / null）⇒ 返回 false **且不抛**
     //     （纯函数后置；String() 强转**只用于算去重**，合法性仍要求每项本身是非空字符串）
-    //   变异自证：把 isValidDocPathList 改回「先判 v.length」⇒ ⓐ 红；把 every 里的 typeof 判断删掉
-    //   改成直接 p.trim() ⇒ ⓐ′ 抛 TypeError ⇒ 红。
+    //   T-9c：9 条**互不相同** ⇒ 仍拒（上限没被放宽；阴性对照，防「凡含重复必过」的过度放宽）
+    //   变异自证：把 isValidDocPathList 改回「先判 v.length」⇒ T-9a 红；把 every 里的 typeof 判断删掉
+    //   改成直接 p.trim() ⇒ T-9b 抛 TypeError ⇒ 红；删掉上限判断 ⇒ T-9c 红。
     const dup9 = ["a.md", "a.md", "b.md", "b.md", "c.md", "c.md", "d.md", "d.md", "e.md"]
     assert.equal(dup9.length, 9, "夹具自证：9 项（> 上限 " + MAX_DOC_PATHS + "）")
     assert.equal(new Set(dup9).size, 5, "夹具自证：去重后只有 5 个互异项")
     assert.equal(isValidDocPathList(dup9), true,
       "★ 9 条**含重复** ⇒ 去重后 5 条 ≤ 上限 ⇒ 必须**通过**（旧实现按 v.length=9 拒）")
-    // 阴性对照（防「凡含重复必过」的过度放宽）：9 条**互异** ⇒ 仍拒（上限没被放宽）
+    // T-9c 阴性对照（防「凡含重复必过」的过度放宽）：9 条**互异** ⇒ 仍拒（上限没被放宽）
     assert.equal(isValidDocPathList(Array.from({ length: MAX_DOC_PATHS + 1 }, (_, i) => "u" + i + ".md")), false,
       "9 条互异 ⇒ 仍拒（去重只免掉重复项的配额，上限不变）")
-    // T-4a′ 非字符串元素：**不抛**且 false（不得因 String() 强转而变成合法项）
+    // T-9b 非字符串元素：**不抛**且 false（不得因 String() 强转而变成合法项）
     assert.doesNotThrow(() => isValidDocPathList([42]), "非字符串元素 ⇒ 绝不抛（纯函数后置）")
     assert.equal(isValidDocPathList([42]), false, "数字项 ⇒ false（不抛）")
     assert.equal(isValidDocPathList([null]), false, "null 项 ⇒ false（不抛）")
@@ -1529,6 +1531,61 @@ test("T-14（US-8）: 决策分区在任务区**之前**且空集给明确空态
 })
 // 变异自证：把决策分区排到任务区之后（sections 顺序对调）⇒ ① 红；空集也渲染分区壳 ⇒ ② 红。
 
+// ── T-7③ 真实档读取的**可注入缝**（批 42 修复轮 ⑧；设计档 §八 T-7 / §九） ──
+const REAL_DOC_PATH = join(PLUGIN_DIR, "docs", "2026-09-05-defect-registry.md")
+
+/**
+ * 读「真实验收档」并尝试解析 —— **路径可注入**（默认本仓真档），因此 diagnostic 分支能在套件内被跑到。
+ * @pre  `path` 任意路径（不存在 / 不可读 / 不可解析文本都允许 —— 这不是错误前提）
+ * @post 返回 `{ path, text, parsed, diagnostic }`：
+ *        · 可解析 ⇒ `parsed` 非 null、`diagnostic === null`（调用方做条数断言 + 留痕）
+ *        · 不可解析 / 文件缺失 ⇒ `parsed === null`、`diagnostic` 为**非空**说明串（含路径与原因）
+ * @post **绝不抛**（ENOENT / 读失败 / 畸形文本都落到 diagnostic —— 设计档 §九「腿不红」）
+ */
+function readRealChecklist(path = REAL_DOC_PATH) {
+  let text = null
+  let readError = null
+  try { text = readFileSync(path, "utf8") } catch (e) { readError = e }
+  const parsed = readError === null && text !== null ? parseChecklistDoc(text) : null
+  const diagnostic = parsed !== null ? null
+    : "T-7③ 真实验收档**不可解析**（" + path
+      + (readError !== null
+        ? (readError.code === "ENOENT" ? "：文件不存在" : "：读取失败 " + String(readError.code ?? readError.message))
+        : "：未找到 ≥4 列且含状态列的表格")
+      + "）—— 条数断言按设计（D-3）跳过；诊断留痕见本条 diagnostic"
+  return { path, text, parsed, diagnostic }
+}
+
+/**
+ * 跑一条「真实验收档」腿（③ 与 ③-b 共用 —— **分支代码只有这一处**，注入路径复用的就是它）。
+ * @param {(msg: string) => void} diag 诊断出口（真实腿传 `t.diagnostic`，注入腿传记录器）
+ * @post 可解析 ⇒ 条数 / 守恒 / 列数三条断言生效，并经 diag 留痕；不可解析/缺档 ⇒ 经 diag 留痕，**不抛**
+ * @post 返回 `{ path, text, parsed, diagnostic, branch }`，`branch ∈ "if" | "else"`（便于套件断言真的走到哪支）
+ */
+function runRealChecklistLeg(diag, path = REAL_DOC_PATH) {
+  const real = readRealChecklist(path)
+  if (real.parsed !== null) {
+    assert.equal(real.parsed.rows.length, firstTableDataRows(real.text),
+      "解析出的条数必须 == 独立数出的数据行数（两处不同算法互证）")
+    assert.equal(real.parsed.counts.total, real.parsed.rows.length)
+    // ★ 2026-10-17 交付评审 #5：原断言 (=="UNKNOWN 恰等于行数") 把这条腿**钉死在该档当前的列形状**上
+    //   （状态列是中文长句 ⇒ 全部「未识别」）；该档将来把状态列改成英文枚举就会红 —— 那是
+    //   「对**不属于本契约**的文档形状的依赖」（R4 脆弱测试形态）。改为**守恒式**：
+    //   每一行必须恰好落进一个状态桶；UNKNOWN 作为**读数**打印，不再作断言。
+    const bucketSum = ["TODO", "DOING", "BLOCKED", "PASS", "FAIL", "UNKNOWN"]
+      .reduce((a, k) => a + (real.parsed.counts[k] ?? 0), 0)
+    assert.equal(bucketSum, real.parsed.rows.length,
+      "守恒式：各行必须恰好落进一个状态桶（桶和 == 行数）—— 实测桶和 " + bucketSum + " / 行数 "
+      + real.parsed.rows.length + " / UNKNOWN = " + (real.parsed.counts.UNKNOWN ?? 0) + "（读数，不作断言）")
+    assert.ok(real.parsed.columns.length >= 4, "列数 ≥4：实测 " + real.parsed.columns.length)
+    diag("T-7③ 真实验收档可解析：" + real.path + " ⇒ 条数断言已生效（" + real.parsed.rows.length + " 条）")
+    return { ...real, branch: "if" }
+  }
+  // 不可解析 / 档不存在：**留痕不静默**（批 42 ⑧ 的 diagnostic 分支；本节不得变成静默跳过）
+  diag(real.diagnostic)
+  return { ...real, branch: "else" }
+}
+
 // ═══════════════ T-7：结构化文档只读源（US-10 / D10「不猜、不部分解析」） ═══════════════
 
 test("T-7（US-10 · D10）: parseChecklistDoc —— 列数不足/无状态列 ⇒ null；实例验收表解析出条数与状态分布", (t) => {
@@ -1571,29 +1628,47 @@ test("T-7（US-10 · D10）: parseChecklistDoc —— 列数不足/无状态列 
   //    ⇒ 现在：可解析 ⇒ 条数必须与**独立数出的**数据行数相等（判据**没有**放宽）；
   //      不可解析/不存在 ⇒ **明确留痕**（t.diagnostic）而**不是**静默跳过（静默跳过 = 假腿）。
   //    ★ 辨析：diagnostic 只记录「这条腿这次没跑」，不是「通过」—— 留痕不等于断言。
-  const realPath = join(PLUGIN_DIR, "docs", "2026-09-05-defect-registry.md")
-  const realText = existsSync(realPath) ? readFileSync(realPath, "utf8") : null
-  const real = realText === null ? null : parseChecklistDoc(realText)
-  if (real) {
-    assert.equal(real.rows.length, firstTableDataRows(realText),
-      "解析出的条数必须 == 独立数出的数据行数（两处不同算法互证）")
-    assert.equal(real.counts.total, real.rows.length)
-    // ★ 2026-10-17 交付评审 #5：原断言 (=="UNKNOWN 恰等于行数") 把这条腿**钉死在该档当前的列形状**上
-    //   （状态列是中文长句 ⇒ 全部「未识别」）；该档将来把状态列改成英文枚举就会红 —— 那是
-    //   「对**不属于本契约**的文档形状的依赖」（R4 脆弱测试形态）。改为**守恒式**：
-    //   每一行必须恰好落进一个状态桶；UNKNOWN 作为**读数**打印，不再作断言。
-    const bucketSum = ["TODO", "DOING", "BLOCKED", "PASS", "FAIL", "UNKNOWN"]
-      .reduce((a, k) => a + (real.counts[k] ?? 0), 0)
-    assert.equal(bucketSum, real.rows.length,
-      "守恒式：各行必须恰好落进一个状态桶（桶和 == 行数）—— 实测桶和 " + bucketSum + " / 行数 "
-      + real.rows.length + " / UNKNOWN = " + (real.counts.UNKNOWN ?? 0) + "（读数，不作断言）")
-    assert.ok(real.columns.length >= 4, "列数 ≥4：实测 " + real.columns.length)
-    t.diagnostic("T-7③ 真实验收档可解析：" + realPath + " ⇒ 条数断言已生效（" + real.rows.length + " 条）")
-  } else {
-    // 不可解析 / 档不存在：**留痕不静默**（批 42 ⑧ 的 diagnostic 分支；本节不得变成静默跳过）
-    t.diagnostic("T-7③ 真实验收档**不可解析**（" + realPath
-      + (realText === null ? "：文件不存在" : "：未找到 ≥4 列且含状态列的表格")
-      + "）—— 条数断言按设计（D-3）跳过；诊断留痕见本条 diagnostic")
+  //    ★ 批 42 修复轮：读哪个档做成**可注入**（`readRealChecklist(path = REAL_DOC_PATH)`），
+  //      ⇒ diagnostic 分支与「真档缺失」都能**在套件内**被真正跑到并断言（见 ③-b）。
+  const realDiags = []
+  const real = runRealChecklistLeg((m) => { realDiags.push(m); t.diagnostic(m) })
+  assert.equal(realDiags.length, 1,
+    "真实腿必须恰留一条 diagnostic（可解析/不可解析两支都留痕；静默跳过 = 假腿）")
+
+  // ③-b（批 42 修复轮 ⑧ · **套件内**跑 diagnostic 分支 + 缺档不红）：
+  //   同一注入缝喂两份坏输入 —— ① 临时文件里放**不可解析文本**；② **不存在的路径**（ENOENT）。
+  //   两者都必须：不抛、parsed === null、diagnostic **非空且含关键信息**（路径 + 原因），
+  //   并且照真实分支那样交给 `t.diagnostic`（留痕，不静默）。
+  //   变异自证：把 `readRealChecklist` 的路径参数改回**写死真档** ⇒ 两份坏输入都会走 if 分支
+  //   ⇒ 下面的 `branch === "else"` / parsed / text 断言红；把 diagnostic 改回 null / 空串 ⇒ 也红。
+  const badDir = freshWs()
+  try {
+    const badPath = join(badDir, "unparseable.md")
+    writeFileSync(badPath, "这是一段自由文本：没有 ≥4 列且含状态列的表格。", "utf8")
+    const badDiags = []
+    const bad = runRealChecklistLeg((m) => badDiags.push(m), badPath)
+    assert.equal(bad.branch, "else", "注入不可解析文本 ⇒ 必须真的走 **else（diagnostic）分支**")
+    assert.equal(bad.parsed, null, "注入不可解析文本 ⇒ parsed === null（不部分解析）")
+    assert.equal(badDiags.length, 1, "else 分支必须恰留**一条** diagnostic（不许静默跳过 —— 静默 = 假腿）")
+    assert.equal(badDiags[0], bad.diagnostic, "留痕内容必须就是 readRealChecklist 产出的诊断")
+    assert.ok(typeof bad.diagnostic === "string" && bad.diagnostic.length > 0,
+      "diagnostic 分支必须给出**非空**说明")
+    assert.ok(bad.diagnostic.includes("不可解析") && bad.diagnostic.includes(badPath),
+      "diagnostic 必须含关键信息（「不可解析」+ 注入的路径）：" + bad.diagnostic)
+    t.diagnostic(bad.diagnostic)
+
+    const missingPath = join(badDir, "does-not-exist.md")
+    const missingDiags = []
+    const missing = runRealChecklistLeg((m) => missingDiags.push(m), missingPath)
+    assert.equal(missing.text, null, "真档缺失 ⇒ text 为 null（读取失败被吞成诊断，而不是抛）")
+    assert.equal(missing.branch, "else", "缺档 ⇒ 同一注入路径走 else 分支（**不抛**）")
+    assert.equal(missingDiags.length, 1, "缺档同样必须留痕（恰一条）")
+    assert.ok(typeof missing.diagnostic === "string" && missing.diagnostic.includes("文件不存在"),
+      "缺档必须留痕且原因明确（设计档 §九：腿不红）：" + missing.diagnostic)
+    assert.ok(missing.diagnostic.includes(missingPath), "缺档诊断必须点名路径：" + missing.diagnostic)
+    t.diagnostic(missing.diagnostic)
+  } finally {
+    rmSync(badDir, { recursive: true, force: true })
   }
 
   // ④ 文档**读入口**的边界（`readChecklistDocs`；定点修复 5 的安全型扩张，已登记设计档 §15.2）：
@@ -1646,7 +1721,8 @@ test("T-7（US-10 · D10）: parseChecklistDoc —— 列数不足/无状态列 
 // （如 `status = status ?? "TODO"`）⇒ ② 的 UNKNOWN 与 null 断言红；④ 把 `readChecklistDocs` 的越界
 // 分支删掉（`continue` 换成直接读）⇒ 越界两条断言 + `seen` 那条同时红。
 // ★ 批 42 ⑧：③ 改成「能解析才断言」后，**删掉真实档**或把它换成无表文档 ⇒ 本腿**不红**，
-//   但会打印一条 diagnostic（留痕，不静默）；④-b 的 loader 注入腿仍**必红**（不可解析 ⇒ ok:false）。
+//   但会打印一条 diagnostic（留痕，不静默）；③-b 的注入腿（不可解析文本 / 缺档）在套件内**必红**
+//   （branch / parsed / text / diagnostic 四条断言）；④-b 的 loader 注入腿仍**必红**（不可解析 ⇒ ok:false）。
 
 /** 独立数法（与 `parseChecklistDoc` 不同的实现）：文档**第一张表**的数据行数（去掉表头与分隔线）。 */
 function firstTableDataRows(doc) {
@@ -2070,6 +2146,45 @@ test("T-20（§16.3 · 铁律 4）: /task_done 无凭据 ⇒ 写门拒且零写�
     assert.equal(commandArgsOf("task_done", "/task_add x"), "/task_add x",
       "② 名字不匹配 ⇒ **不剥**（原文整串交给写门去拒）")
     assert.equal(commandArgsOf("task_done", "t-1"), "t-1", "无命令名的裸参数 ⇒ 原样当参数")
+
+    // ②-b（批 42 修复轮 ⑨ · **handler 层**断言；设计档 §八 T-20② 的例子就是走 handler，
+    //   而不是只调谓词）：`rawInput: "/task_add x"` 交给 **task_done 的 handler** ⇒ 参数**保持原文**，
+    //   写门按 id-missing 拒（回执里点名的是原文 `"/task_add x"`，不是被剥出来的 `x`）。
+    //   第二例用**合法 id** 证明危害真实存在：`/task_add t-1 | <凭据>` 交给 task_done 的 handler
+    //   ⇒ 新谓词保持原文 ⇒ id-missing 拒、t-1 仍「在做」；**旧兜底**会把 t-1 剥出来当 id，带凭据
+    //   那次会**真的完成**它（kind=success / 状态前进 / sha 变化）⇒ 三条断言同时红。
+    //   ★ 独立工作区夹具：不给主夹具加条目（本块后面按 `tasks[0]` 索引断言 t-1）。
+    //   变异自证：把 handler 里的 `commandArgsOf("task_done", invocation?.rawInput)` 改成
+    //   「自行剥命令名」/ 把谓词改回 startsWith 兜底 ⇒ 下面 kind / 原文 / t-1 仍「在做」/ 零写入必红；
+    //   若 handler **完全不调用谓词**（直接透传 rawInput）⇒ 末尾**阳性对照**的 kind 红
+    //   （匹配路径会把 "/task_done t-1" 整串当 id ⇒ id-missing）。
+    const wsX = freshWs()
+    try {
+      seedLedger(wsX, [task("t-1", { status: "在做", owner: "s-1", createdBy: "s-1", title: "名字误配的自证夹具" })], 0)
+      const { ctx: ctxX, calls: callsX } = fakeCommandCtx(true)
+      registerTaskCommands(ctxX, { wsOf: () => wsX, configOf: () => ({}), driftOf: () => null })
+      const doneX = new Map(callsX.registered.map((d) => [d.name, d]))
+      const agentX = { session: { id: "s-1", header: { cwd: wsX } } }
+      const shaBeforeWrongName = tasksFileSha256(wsX)
+      const wrongName = await doneX.get("task_done").handler({ rawInput: "/task_add x", agent: agentX })
+      assert.equal(wrongName.kind, "error", "名字不匹配 ⇒ 必须被写门拒：" + JSON.stringify(wrongName))
+      assert.ok(wrongName.text.includes('"/task_add x"'),
+        "②（handler 层）参数必须保持**原文**（旧兜底把 x 剥出来当 id，回执里就不会有这段原文）：" + wrongName.text)
+      const wrongNameWithEvidence = await doneX.get("task_done").handler({ rawInput: "/task_add t-1 | 跑了 node --test：12/12 绿", agent: agentX })
+      assert.equal(wrongNameWithEvidence.kind, "error",
+        "名字不匹配 + 带凭据 ⇒ 仍必须拒（旧兜底会拿 t-1 当 id 而真的完成它）：" + JSON.stringify(wrongNameWithEvidence))
+      assert.equal(readTasksView(wsX).tasks[0].status, "在做",
+        "名字误配**不得**推进 t-1 的状态（旧兜底会把它完成）")
+      assert.equal(tasksFileSha256(wsX), shaBeforeWrongName, "名字误配的两次调用都必须零写入")
+      // 阳性对照（防「凡调用必拒」的假绿；同时锁住「handler 必须真的调用谓词」）：
+      //   **匹配**路径仍要剥出 t-1 并放行 ⇒ 若 handler 完全不解析、直接透传 rawInput，
+      //   id 会变成 "/task_done t-1" ⇒ id-missing ⇒ 本条的 kind / 状态断言红。
+      const matched = await doneX.get("task_done").handler({ rawInput: "/task_done t-1 | 跑了 node --test：12/12 绿", agent: agentX })
+      assert.equal(matched.kind, "success", "匹配路径必须照常放行（防恒拒假绿）：" + JSON.stringify(matched))
+      assert.equal(readTasksView(wsX).tasks[0].status, "完成", "匹配路径必须真的完成 t-1")
+    } finally {
+      rmSync(wsX, { recursive: true, force: true })
+    }
 
     // ① 无凭据 ⇒ **写门**拒（拒绝码 `evidence-required` 只有写门会产出 ⇒ 命令层确实把判定交出去了）
     const bad = await byName.get("task_done").handler({ rawInput: "/task_done t-1", agent })
