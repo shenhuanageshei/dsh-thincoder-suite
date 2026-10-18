@@ -39,7 +39,7 @@ import {
   resolveConsultReadonlyRoute,
 } from "../lib/consult.mjs"
 // 批 41（台账 t-6 / 设计档 §五 FR-1）：发货模块名常量的单一事实源（T-42 的静态同步锁对位它）
-// + 纯函数层组合判据（T-41⑦ 直接驱动它，覆盖设计档 §六 的 rows==null 降级分支 —— 审计 #4b）
+// + 纯函数层组合判据（T-41⑦ 直接驱动它：rows==null 降级分支 —— 审计 #4b —— 与非数组「形态不符」降级分支 —— 修复轮 #5）
 import { CONSULT_READONLY_MODULES, evaluatePresetDrift } from "../lib/preset-readonly-guard.mjs"
 // 批 30 / US-6（D30-6 · 锚 A30-10/A30-12）：**模型面**证据的捕获与成文（eng.mjs 侧实现，
 // 读取器复用 consult.mjs 的补导出——设计 §2.6「不得新建模块」）
@@ -1674,9 +1674,31 @@ test("A29-7 (D-52): 会诊只读白名单对位锁——静态成员集 = 只读
 //   ③ 停用行与顺序都按 D-1 / 评审 #9 判（先滤行再取名、顺序无关）。
 // ★ 夹具全部是**注入的 agentPresets 桩对象**，零真实服务、零 LLM 调用。
 
-/** 发货模块名 → compositionInventory 的扁平化声明行（enabled 缺省 = 在用）。 */
-const shippedRows = (names = CONSULT_READONLY_MODULES) =>
-  names.map((moduleName, i) => ({ entryId: "e" + i, moduleName }))
+/**
+ * 发货模块名的**字面量**副本（修复轮 #6：T-39 正向腿的 actual 侧**不得**取自被测常量
+ * `CONSULT_READONLY_MODULES` —— 否则常量拼错时 actual 与 expected 一起错，T-39 仍全绿 = 假腿）。
+ * 三者的一致性由两条腿夹住：T-39（本字面量 = actual vs 常量 = expected）与 T-42（常量 vs YAML 实测集）
+ * —— 字面量、常量、发货 YAML 任一漂移都会红。
+ */
+const SHIPPED_MODULE_LITERALS = [
+  "@deepseek-ai/dsh-agent-instructions",
+  "@deepseek-ai/dsh-tool-fs",
+  "@deepseek-ai/dsh-tool-fs-search",
+  "@deepseek-ai/dsh-skill-filesystem",
+  "@deepseek-ai/dsh-tool-skill",
+  "@deepseek-ai/dsh-tool-web",
+  "@deepseek-ai/dsh-compaction-basic",
+  "@deepseek-ai/dsh-command-compact",
+  "@deepseek-ai/dsh-compaction-tool-result-pruner",
+]
+
+/**
+ * 发货模块名 → compositionInventory 的扁平化声明行。
+ * ★ `enabled: true` 显式给出（修复轮 #4）：normalizeModules 只把**字面量 true** 当在用，
+ *   平台 flattenRows 恒带布尔 enabled —— 缺键 / "conditional" 一律不算在用。
+ */
+const shippedRows = (names = SHIPPED_MODULE_LITERALS) =>
+  names.map((moduleName, i) => ({ entryId: "e" + i, moduleName, enabled: true }))
 
 /** 0.2.1 预设路线的假宿主（与 T-38 的 t38Host 同形；本组只看闸门判定，不校验派发载荷）。 */
 function roPresetHost() {
@@ -1726,17 +1748,20 @@ function presetsStub({ rows = null, content = null, inventory, noInventory = fal
 /** 正常内容的 YAML 形态（与发货定义同形：写 / 改显式 false）。 */
 const RO_GOOD_DOC = "plugins:\n  - id: tool-fs\n    name: '@deepseek-ai/dsh-tool-fs'\n    config:\n      write: false\n      edit: false\n"
 
-test("T-39（批 41 · 设计档 §八）：模块集合漂移——精确等值（顺序无关），多出 / 缺失 / 停用三向各自判红", async () => {
+test("T-39（批 41 · 设计档 §八）：模块集合漂移——精确等值（顺序无关），多出 / 缺失 / 停用 / 条件化各自判红", async () => {
   // ① 集合完全一致（**顺序打乱**）⇒ 放行
-  const shuffled = [...CONSULT_READONLY_MODULES].reverse()
-  assert.notDeepEqual(shuffled, [...CONSULT_READONLY_MODULES], "T-39① 前置：顺序确实被打乱（否则「顺序无关」没被测到）")
+  //    ★ 修复轮 #6：actual 侧用**字面量**（SHIPPED_MODULE_LITERALS），不取被测常量 —— 常量拼错时本条必须红。
+  assert.equal(SHIPPED_MODULE_LITERALS.length, 9,
+    "T-39① 前置：字面量夹具必须是发货的 9 个模块（修复轮 #6：独立于被测常量）")
+  const shuffled = [...SHIPPED_MODULE_LITERALS].reverse()
+  assert.notDeepEqual(shuffled, [...SHIPPED_MODULE_LITERALS], "T-39① 前置：顺序确实被打乱（否则「顺序无关」没被测到）")
   const r1 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(shuffled), content: RO_GOOD_DOC })))
   assert.equal(r1.ok, true, "T-39①：集合等值（顺序不同）⇒ 必须放行：" + JSON.stringify(r1))
   assert.equal(r1.degraded, null, "T-39①：两层都核验通过 ⇒ degraded 必须恰为 null（不得用空串/含糊值冒充「验过」）")
 
   // ② 多一个 tool-pwsh ⇒ 拒绝；reason 点名它**且**带「（写/执行类）」文案
   const r2 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({
-    rows: shippedRows([...CONSULT_READONLY_MODULES, "@deepseek-ai/dsh-tool-pwsh"]), content: RO_GOOD_DOC,
+    rows: shippedRows([...SHIPPED_MODULE_LITERALS, "@deepseek-ai/dsh-tool-pwsh"]), content: RO_GOOD_DOC,
   })))
   assert.equal(r2.ok, false, "T-39②：多出的模块必须判红：" + JSON.stringify(r2))
   assert.match(String(r2.reason), /无法保证只读/, "T-39②：拒绝文案必含「无法保证只读」（T-29 判据）")
@@ -1747,7 +1772,7 @@ test("T-39（批 41 · 设计档 §八）：模块集合漂移——精确等值
 
   // ③ 少一个 tool-web ⇒ 拒绝且点名
   const r3 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({
-    rows: shippedRows(CONSULT_READONLY_MODULES.filter((n) => n !== "@deepseek-ai/dsh-tool-web")), content: RO_GOOD_DOC,
+    rows: shippedRows(SHIPPED_MODULE_LITERALS.filter((n) => n !== "@deepseek-ai/dsh-tool-web")), content: RO_GOOD_DOC,
   })))
   assert.equal(r3.ok, false, "T-39③：缺失模块必须判红：" + JSON.stringify(r3))
   assert.ok(String(r3.reason).includes("缺失"), "T-39③：必须点明是「缺失」：" + r3.reason)
@@ -1768,9 +1793,19 @@ test("T-39（批 41 · 设计档 §八）：模块集合漂移——精确等值
   assert.equal(r5.ok, false, "T-39⑤：发货集合内的行被停用 = 缺失 ⇒ 必须拒绝：" + JSON.stringify(r5))
   assert.ok(String(r5.reason).includes("@deepseek-ai/dsh-tool-fs-search"),
     "T-39⑤：必须点名被停用（= 缺失）的模块：" + r5.reason)
+
+  // ⑥ 发货集合内的行 **enabled: "conditional"**（平台 `!!js` 条件行）⇒ 非布尔取值 = 未证实在用
+  //    ⇒ 表现为「缺失」⇒ 拒绝（修复轮 #4 的口径：只有字面量 true 才算在用）
+  const r6 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({
+    rows: shippedRows().map((r) => (r.moduleName === "@deepseek-ai/dsh-tool-fs" ? { ...r, enabled: "conditional" } : r)),
+    content: RO_GOOD_DOC,
+  })))
+  assert.equal(r6.ok, false, "T-39⑥：enabled conditional 的发货行不算在用 ⇒ 必须拒绝：" + JSON.stringify(r6))
+  assert.ok(String(r6.reason).includes("@deepseek-ai/dsh-tool-fs"),
+    "T-39⑥：必须点名被条件化（= 缺失）的模块：" + r6.reason)
 })
 
-test("T-40（批 41 · 设计档 §八）：配置层翻转——write:true / edit:true 判红；正常与无键内容不误报", async () => {
+test("T-40（批 41 · 设计档 §八）：配置层**正反双向**——write:true / edit:true 判红；发货形态放行；tool-fs 缺键 / 缺行即漂移", async () => {
   const withLine = (line) => "plugins:\n  - id: tool-fs\n    config:\n      " + line + "\n"
 
   // ① write: true ⇒ 拒绝
@@ -1790,11 +1825,27 @@ test("T-40（批 41 · 设计档 §八）：配置层翻转——write:true / ed
   assert.equal(r3.ok, true, "T-40③：正常内容 ⇒ 必须放行：" + JSON.stringify(r3))
   assert.equal(r3.degraded, null, "T-40③：两层都核验 ⇒ degraded 恰为 null")
 
-  // ④ 无 write / edit 键（模块没这些开关）⇒ 放行（**不误报**）
-  const noKeys = "plugins:\n  - id: agent-instructions\n    name: '@deepseek-ai/dsh-agent-instructions'\n"
-  const r4 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(), content: noKeys })))
-  assert.equal(r4.ok, true, "T-40④：内容不含 write / edit 键 ⇒ 必须放行（不误报）：" + JSON.stringify(r4))
-  assert.equal(r4.degraded, null, "T-40④：内容已被读到并扫过 ⇒ degraded 恰为 null（不是「未核验」）")
+  // ④ ★ 修复轮 #1（交付评审 #1 翻向）：tool-fs 行**缺 write / edit 键** ⇒ **拒绝**。
+  //    平台 tool-fs 的 write / edit 缺省 **true** ⇒ 旧口径「缺键 ⇒ 放行」等于静默打开写 / 改工具。
+  const missingKeys = "plugins:\n  - id: tool-fs\n    name: '@deepseek-ai/dsh-tool-fs'\n    config:\n      read: true\n"
+  const r4 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(), content: missingKeys })))
+  assert.equal(r4.ok, false, "T-40④：tool-fs 缺 write:false / edit:false 键 ⇒ 必须拒绝（平台缺省 true）：" + JSON.stringify(r4))
+  assert.ok(String(r4.reason).includes("关键配置被翻转"), "T-40④：必须点明失败层 = 关键配置：" + r4.reason)
+  assert.ok(String(r4.reason).includes("write: false"), "T-40④：必须点名缺的 write: false：" + r4.reason)
+  assert.ok(String(r4.reason).includes("edit: false"), "T-40④：必须点名缺的 edit: false：" + r4.reason)
+
+  // ⑤ 只删「write: false」一行（edit: false 仍在）⇒ 拒绝，且只点名 write（精确性：不是整篇一律拒）
+  const onlyWriteDropped = RO_GOOD_DOC.replace("      write: false\n", "")
+  assert.notEqual(onlyWriteDropped, RO_GOOD_DOC, "T-40⑤ 前置：write: false 行必须真的被删掉")
+  const r5 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(), content: onlyWriteDropped })))
+  assert.equal(r5.ok, false, "T-40⑤：只删 write: false 一行 ⇒ 必须拒绝：" + JSON.stringify(r5))
+  assert.ok(String(r5.reason).includes("write: false"), "T-40⑤：必须点名缺的 write: false：" + r5.reason)
+  assert.ok(!String(r5.reason).includes("edit: false"), "T-40⑤：edit: false 仍在 ⇒ 不得点名 edit（精确性）：" + r5.reason)
+
+  // ⑤-b 连 tool-fs 行都不在文档里 ⇒ 无法核验 ⇒ 拒绝（不得当「没这些开关」放行）
+  const noFsRow = "plugins:\n  - id: agent-instructions\n    name: '@deepseek-ai/dsh-agent-instructions'\n"
+  const r6 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(), content: noFsRow })))
+  assert.equal(r6.ok, false, "T-40 补：文档里没有 tool-fs 行 ⇒ 无法核验 write/edit ⇒ 必须拒绝：" + JSON.stringify(r6))
 })
 
 test("T-41（批 41 · 设计档 §八）：观测面缺失与服务面异常——缺失 / 方法缺失降级放行且告警可见；缺行拒绝；模块层优先", async () => {
@@ -1823,6 +1874,8 @@ test("T-41（批 41 · 设计档 §八）：观测面缺失与服务面异常—
   const r2 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ inventoryThrows: true, rows: shippedRows(), content: RO_GOOD_DOC })))
   assert.equal(r2.ok, true, "T-41②：inventory 抛错 ⇒ 降级放行：" + JSON.stringify(r2))
   assert.ok(String(r2.degraded ?? "").includes("compositionInventory"), "T-41②：degraded 非空且点名观测面：" + r2.degraded)
+  assert.ok(String(r2.degraded ?? "").includes("compositionInventory boom"),
+    "T-41②（修复轮 #2）：degraded 必须带出**被抛出的平台原文**（catch 不许丢弃异常对象）：" + r2.degraded)
 
   // ③ readDocument 抛错但 inventory 正常 ⇒ **放行 + degraded 非空**（评审 #2：不许静默）
   const r3 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(), docThrows: true })))
@@ -1830,6 +1883,8 @@ test("T-41（批 41 · 设计档 §八）：观测面缺失与服务面异常—
   assert.equal(typeof r3.degraded, "string", "T-41③：degraded 必须是字符串")
   assert.ok(String(r3.degraded).length > 0, "T-41③：★ 配置层未核验必须**明说**（评审 #2：degraded 为空即红）")
   assert.ok(String(r3.degraded).includes("配置层"), "T-41③：degraded 必须点名失败层 = 配置层：" + r3.degraded)
+  assert.ok(String(r3.degraded).includes("readDocument boom"),
+    "T-41③（修复轮 #2）：degraded 必须带出**被抛出的平台原文**（catch 不许丢弃异常对象）：" + r3.degraded)
 
   // ④ inventory 可用但**缺该预设行** ⇒ 拒绝（评审 #11：观测面自相矛盾）
   const r4 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ inventory: [{ id: "standard", rows: [] }] })))
@@ -1861,6 +1916,12 @@ test("T-41（批 41 · 设计档 §八）：观测面缺失与服务面异常—
   assert.equal(nullRowsDrift.ok, true, "T-41⑦：rows == null ⇒ 降级放行：" + JSON.stringify(nullRowsDrift))
   assert.equal(nullRowsDrift.degraded, "内容观测面不可用",
     "T-41⑦：★ rows == null 必须给出该分支的固定告警文案（设计档 §六）：" + JSON.stringify(nullRowsDrift.degraded))
+  //    ★ 修复轮 #5：**非数组** rows 与缺失同支（degraded）——不得折成空集后谎报「缺失 9 项」
+  const shapeDrift = evaluatePresetDrift({ rows: { rows: [] } })
+  assert.equal(shapeDrift.ok, true, "T-41⑦：非数组 rows（形态不符）⇒ 与缺失同支，降级放行：" + JSON.stringify(shapeDrift))
+  assert.equal(shapeDrift.reason, null, "T-41⑦：形态不符不得产出拒绝理由（那是谎报内容漂移）：" + JSON.stringify(shapeDrift))
+  assert.ok(String(shapeDrift.degraded ?? "").includes("形态"),
+    "T-41⑦：非数组 rows 的 degraded 必须点明「形态」不符：" + JSON.stringify(shapeDrift.degraded))
 })
 
 test("T-42（批 41 · 设计档 §八）：发货定义同步锁——cordis.patch.yml 的 preset 段（group 递归展开）逐项等于 CONSULT_READONLY_MODULES", () => {
@@ -1869,32 +1930,47 @@ test("T-42（批 41 · 设计档 §八）：发货定义同步锁——cordis.pa
    *   ① 锚定 Loader 行 id: preset-thincoder-consult-ro（不按行号；不存在的锚 ⇒ null）；
    *   ② 找到该行块里的 plugins:；
    *   ③ 只取 plugins: 之下、缩进更深的**清单行**的 name:（缩进建树；group: true 的行递归展开其子树）；
-   *   ④ 排除 preset 自身包装行 name 与 config.name（它们不是清单行的 +2 属性，见下）。
+   *   ④ 排除 preset 自身包装行 name 与 config.name（它们不是清单行的 +2 属性，见下）；
+   *   ⑤ 容忍等价格式（修复轮 #3）：name 接受 ' / " 两种引号，锚点行与 plugins: 行允许行尾注释。
    */
   const moduleNamesOfPreset = (src) => {
+    // ★ 修复轮 #3（交付评审 #3）：等价格式容忍 —— 行尾注释先剥（引号内的 # 不是注释；
+    //   # 需在行首或前面是空白），name: 接受 ' / " 两种引号，锚点行与 plugins: 行都允许行尾注释。
+    const stripComment = (raw) => {
+      const s = String(raw ?? "")
+      let quote = ""
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i]
+        if (quote !== "") { if (ch === quote) quote = ""; continue }
+        if (ch === "'" || ch === '"') { quote = ch; continue }
+        if (ch === "#" && (i === 0 || s[i - 1] === " " || s[i - 1] === "\t")) return s.slice(0, i)
+      }
+      return s
+    }
     const all = String(src ?? "").split(/\r?\n/)
-    const headIdx = all.findIndex((l) => /^( *)- id: preset-thincoder-consult-ro[ \t]*$/.test(l))
+    const clean = all.map(stripComment)
+    const headIdx = clean.findIndex((l) => /^( *)- id: preset-thincoder-consult-ro[ \t]*$/.test(l))
     if (headIdx < 0) return null                       // 锚点不在 ⇒ 切不到（自证用）
     const headIndent = /^ */.exec(all[headIdx])[0].length
     const block = []
     for (let i = headIdx; i < all.length; i++) {
-      if (i > headIdx && /^ *- id: /.test(all[i]) && /^ */.exec(all[i])[0].length === headIndent) break
+      if (i > headIdx && /^ *- id: /.test(clean[i]) && /^ */.exec(clean[i])[0].length === headIndent) break
       block.push(all[i])
     }
     let pluginsIdx = -1
     let pluginsIndent = -1
     for (let i = 0; i < block.length; i++) {
-      const m = /^( *)plugins:[ \t]*$/.exec(block[i])
+      const m = /^( *)plugins:[ \t]*$/.exec(stripComment(block[i]))
       if (m) { pluginsIdx = i; pluginsIndent = m[1].length; break }
     }
     if (pluginsIdx < 0) return null
     const items = []
     for (let i = pluginsIdx + 1; i < block.length; i++) {
-      const raw = block[i]
-      if (raw.trim() === "" || raw.trimStart().startsWith("#")) continue
+      const raw = stripComment(block[i])
+      if (raw.trim() === "") continue                  // 空行 / 整行注释（注释已剥 ⇒ 只剩空白）
       const ind = /^ */.exec(raw)[0].length
       if (ind <= pluginsIndent) break                  // 离开 plugins 段
-      const m = /^( *)- id: *(\S+?)[ \t]*(?:#.*)?$/.exec(raw)
+      const m = /^( *)- id: *(\S+?)[ \t]*$/.exec(raw)
       if (!m) continue
       items.push({ index: i, indent: m[1].length, id: m[2], name: null, group: false, children: [] })
     }
@@ -1906,11 +1982,11 @@ test("T-42（批 41 · 设计档 §八）：发货定义同步锁——cordis.pa
         if (items[j].indent <= it.indent) { end = items[j].index; break }
       }
       for (let i = it.index + 1; i < end; i++) {
-        const raw = block[i]
-        if (raw.trim() === "" || raw.trimStart().startsWith("#")) continue
+        const raw = stripComment(block[i])
+        if (raw.trim() === "") continue
         if (/^ */.exec(raw)[0].length !== it.indent + 2) continue
-        const nm = /^ *name:[ \t]*'([^']*)'[ \t]*$/.exec(raw)
-        if (nm) it.name = nm[1]
+        const nm = /^ *name:[ \t]*(?:'([^']*)'|"([^"]*)"|([^ \t'"][^ \t]*))[ \t]*$/.exec(raw)
+        if (nm) it.name = nm[1] !== undefined ? nm[1] : (nm[2] !== undefined ? nm[2] : nm[3])
         if (/^ *group:[ \t]*true[ \t]*$/.test(raw)) it.group = true
       }
     }
@@ -1977,6 +2053,20 @@ test("T-42（批 41 · 设计档 §八）：发货定义同步锁——cordis.pa
   const renamed = synthetic.replace("name: '@x/tool-b'", "name: '@x/tool-b2'")
   assert.deepEqual(moduleNamesOfPreset(renamed).sort(), ["@x/tool-a", "@x/tool-b2"],
     "T-42 自证：改名会被原样读出（比对面不是名字不敏感）")
+
+  // ★ 修复轮 #3（交付评审 #3）**反向腿**：等价格式不算漂移 —— name 换**双引号**、锚点行与
+  //   plugins: 行加**行尾注释** ⇒ 解析结果仍须等于同一份合成完整集（格式容忍不是恒真：
+  //   前置断言证明这些替换真的落到了文本上）。
+  const tolerated = synthetic
+    .replace("    - id: preset-thincoder-consult-ro", "    - id: preset-thincoder-consult-ro  # 锚点行尾注释")
+    .replace("        plugins:", "        plugins:  # 段起点行尾注释")
+    .replace("name: '@x/tool-a'", 'name: "@x/tool-a"')
+    .replace("name: '@x/tool-b'", 'name: "@x/tool-b"')
+  assert.notEqual(tolerated, synthetic, "T-42 自证④ 前置：等价格式替换必须真的落到文本上（否则这条腿恒真）")
+  const toleratedParsed = moduleNamesOfPreset(tolerated)
+  assert.deepEqual([...(toleratedParsed ?? [])].sort(), [...SYNTHETIC_FULL].sort(),
+    "T-42 自证④（反向）：双引号 name + 锚点/plugins 行尾注释 ⇒ 仍须等于同一合成集（等价格式不算漂移）：实测 "
+      + JSON.stringify(toleratedParsed))
 })
 
 
