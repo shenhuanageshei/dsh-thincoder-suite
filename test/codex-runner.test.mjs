@@ -18,6 +18,11 @@ import {
   normalizeRunnerValue, validateRunnerValue, resolveCodexCliGlobals, CODEX_RUNNER_VALUE_HINT,
   buildCodexArgs, resolveExecutableFile, runCodexTask, discoverCodexModels, codexRowLabel, sweepStaleCodexTempDirs,
 } from "../lib/codex-adapter.mjs"
+// 批 40（台账 t-7）：Windows 系统代理继承（设计档 docs/2026-10-18-codex-system-proxy-design.md §八 T-P1…T-P4）
+import {
+  WINDOWS_PROXY_REG_PATH, parseRegQueryOutput, proxyUrlForScheme, noProxyFromOverride,
+  systemProxyEnvFromReg, readWindowsSystemProxyRaw, applyInheritedSystemProxy, _resetSystemProxyCacheForTests,
+} from "../lib/system-proxy.mjs"
 // 批 33：codex 的第二条通道（app-server 腿，独立成档）——标签函数 + 行任务入口 + 常量
 import {
   runCodexAppServerRow, codexAppServerRowLabel, CODEX_APP_SERVER_PROVIDER, CODEX_APP_SERVER_MODEL_EFFORT_NOTE,
@@ -5547,4 +5552,302 @@ test("批 21 AC-6 / A4 (静态锁): codex 路径的判定仍是 `=== true`（两
   // 对照（同一条锁的另一半，防「两处一起改了就都看不出」）：dsh 路径必须是三态形态
   assert.equal(engSrc.split("if (args?.background !== false) {").length - 1, 1, "eng 的 dsh 判定是三态（A1）")
   assert.equal(escSrc.split("if (background !== false) {").length - 1, 1, "escalate 的 dsh 判定是三态（A2）")
+})
+
+
+// ————————————— 批 40（台账 t-7）：Windows 系统代理继承 —————————————
+// 设计档：docs/2026-10-18-codex-system-proxy-design.md §八（T-P1…T-P4）。
+// 夹具纪律：**只注入 deps.regQuery 桩 + platform:"win32"**，绝不读真实注册表；「非 Windows 零读取」
+// 腿用 platform:"linux" 证伪。REG_ON 的 ProxyOverride 取设计档 §2.5 的本机真实样本（逐字）。
+
+const REG_KEY_LINE = WINDOWS_PROXY_REG_PATH
+const regText = (entries) => [REG_KEY_LINE]
+  .concat(entries.map(([n, t, v]) => "    " + n + "    " + t + "    " + v))
+  .join("\r\n") + "\r\n"
+const REG_REAL_OVERRIDE = "localhost;127.*;192.168.*;10.*;172.16.*;172.31.*;<local>"
+const REG_ON = regText([
+  ["ProxyEnable", "REG_DWORD", "0x1"],
+  ["ProxyServer", "REG_SZ", "127.0.0.1:7897"],
+  ["ProxyOverride", "REG_SZ", REG_REAL_OVERRIDE],
+])
+const REG_OFF = regText([
+  ["ProxyEnable", "REG_DWORD", "0x0"],
+  ["ProxyOverride", "REG_SZ", REG_REAL_OVERRIDE],
+])
+
+/** 记录真正那次 codex exec 的 opts.env（探测 --version 的 spawn 不算——它不经 childEnvFor）。 */
+function captureCodexSpawn(scripts) {
+  const base = fakeSpawnFactory(scripts)
+  const envs = []
+  const spawn = (file, args, opts) => {
+    if (!args.includes("--version")) envs.push({ ...((opts && opts.env) || {}) })
+    return base(file, args, opts)
+  }
+  return { spawn, envs }
+}
+
+const okCodexScript = (args) => (args.includes("--version") ? probeScript(args) : { events: [], exitCode: 0, outText: "OK" })
+const failCodexScript = (args) => (args.includes("--version") ? probeScript(args) : { events: [{ stream: "stderr", data: "boom" }], exitCode: 1 })
+
+test("批 40 T-P1 系统代理: reg query 解析与三态（单值同址 · 分协议各取各 · 关闭不注入 · PAC 告警 · 畸形不抛 · socks-only 告警 · 真实 override 翻译）", () => {
+  _resetSystemProxyCacheForTests()
+  // ① host:port 单值 → https/http 同址
+  assert.equal(proxyUrlForScheme("127.0.0.1:7897", "https"), "http://127.0.0.1:7897")
+  assert.equal(proxyUrlForScheme("127.0.0.1:7897", "http"), "http://127.0.0.1:7897")
+  const one = systemProxyEnvFromReg(REG_ON)
+  assert.equal(one.warning, null, "开启且有地址 ⇒ 无告警")
+  assert.equal(one.applied.https, "http://127.0.0.1:7897")
+  assert.equal(one.applied.http, "http://127.0.0.1:7897")
+  assert.deepEqual(Object.keys(one.applied).sort(), ["http", "https", "noProxy"],
+    "applied 形状固定三键（设计档 FR-1：没有 ALL_PROXY 字段，不假装支持 socks）")
+  // ② 分协议 http=a;https=b ⇒ 各取各的；只剩一侧时双向回退（评审 N4）
+  const splitSpec = "http=10.0.0.9:3128;https=10.0.0.9:8443"
+  assert.equal(proxyUrlForScheme(splitSpec, "https"), "http://10.0.0.9:8443")
+  assert.equal(proxyUrlForScheme(splitSpec, "http"), "http://10.0.0.9:3128")
+  const two = systemProxyEnvFromReg(regText([["ProxyEnable", "REG_DWORD", "0x1"], ["ProxyServer", "REG_SZ", splitSpec]]))
+  assert.equal(two.applied.https, "http://10.0.0.9:8443", "分协议：https 侧取 https 项")
+  assert.equal(two.applied.http, "http://10.0.0.9:3128", "分协议：http 侧取 http 项")
+  const onlyHttps = systemProxyEnvFromReg(regText([["ProxyEnable", "REG_DWORD", "0x1"], ["ProxyServer", "REG_SZ", "https=10.0.0.9:8443"]]))
+  assert.equal(onlyHttps.applied.http, "http://10.0.0.9:8443", "http 侧缺失 ⇒ 回退到 https 地址")
+  const onlyHttp = systemProxyEnvFromReg(regText([["ProxyEnable", "REG_DWORD", "0x1"], ["ProxyServer", "REG_SZ", "http=10.0.0.9:3128"]]))
+  assert.equal(onlyHttp.applied.https, "http://10.0.0.9:3128", "https 侧缺失 ⇒ 回退到 http 地址")
+  // ③ ProxyEnable=0 ⇒ 不注入、不告警（本机真实形态）
+  assert.equal(parseRegQueryOutput(REG_OFF).proxyEnable, 0, "REG_DWORD 0x0 解析为 0")
+  assert.equal(parseRegQueryOutput(REG_OFF).proxyServer, null)
+  assert.deepEqual(systemProxyEnvFromReg(REG_OFF), { applied: null, warning: null })
+  // ④ 只有 PAC ⇒ 告警且不注入（D-4；ProxyEnable 0/1 两形态都认）
+  for (const flag of ["0x0", "0x1"]) {
+    const pac = systemProxyEnvFromReg(regText([["ProxyEnable", "REG_DWORD", flag], ["AutoConfigURL", "REG_SZ", "http://wpad.example/proxy.pac"]]))
+    assert.equal(pac.applied, null, "PAC 不求值 ⇒ 不注入（ProxyEnable=" + flag + "）")
+    assert.ok(String(pac.warning).includes("PAC"), "PAC 必须告警: " + String(pac.warning))
+  }
+  // ⑤ 畸形/空文本 ⇒ 不抛、不注入、不制造噪音
+  for (const junk of [null, undefined, "", "\r\n", REG_KEY_LINE, "    ProxyEnable REG_SZ ???", "    ProxyEnable    REG_DWORD    not-a-number"]) {
+    const r = systemProxyEnvFromReg(junk)
+    assert.equal(r.applied, null, "畸形输入不得注入: " + JSON.stringify(junk))
+    assert.equal(r.warning, null, "畸形输入不制造噪音: " + JSON.stringify(junk))
+  }
+  // ⑥ socks-only / 未知协议 ⇒ 告警且不注入（评审 #1 定案 B）
+  for (const spec of ["socks=127.0.0.1:1080", "socks5=127.0.0.1:1080", "ftp=10.0.0.9:21"]) {
+    const r = systemProxyEnvFromReg(regText([["ProxyEnable", "REG_DWORD", "0x1"], ["ProxyServer", "REG_SZ", spec]]))
+    assert.equal(r.applied, null, "只支持 http/https，其它一律不注入: " + spec)
+    assert.ok(String(r.warning).includes("socks-only"), "告警点名支持面: " + String(r.warning))
+  }
+  assert.equal(proxyUrlForScheme("socks=127.0.0.1:1080", "https"), null)
+  assert.equal(proxyUrlForScheme("socks5://127.0.0.1:1080", "http"), null)
+  // ⑦ 真实 ProxyOverride 样本 ⇒ <local> 翻 loopback、127.* 折 CIDR、分号换逗号
+  const np = noProxyFromOverride(REG_REAL_OVERRIDE)
+  assert.ok(np.includes("localhost") && np.includes("127.0.0.1") && np.includes("::1"), "<local> → loopback: " + np)
+  assert.ok(!np.includes("<local>") && !np.includes(";"), "<local> 与分号都不得原样泄漏: " + np)
+  assert.ok(np.includes("127.0.0.0/8"), "127.* → CIDR: " + np)
+  assert.ok(np.includes("192.168.0.0/16") && np.includes("172.16.0.0/16") && np.includes("172.31.0.0/16") && np.includes("10.0.0.0/8"), "各 IP 前缀都折: " + np)
+  assert.equal(one.applied.noProxy, np, "同一 override 进 applied.noProxy")
+  assert.equal(noProxyFromOverride("*.corp.example;foo"), "*.corp.example,foo", "折不了的按原样保留")
+  assert.equal(noProxyFromOverride(""), null, "空 override ⇒ null（不写 NO_PROXY）")
+})
+
+test("批 40 T-P2 系统代理: inherit 注入 + 环境变量优先 + none/url 回归", async () => {
+  _resetSystemProxyCacheForTests()
+  // ① inherit + 无 env 代理 + 系统开 ⇒ 子进程环境真的拿到代理（此前 inherit 是空操作）
+  const cap1 = captureCodexSpawn(okCodexScript)
+  let reads1 = 0
+  const env1 = await runCodexTask(
+    { spawn: cap1.spawn, platform: "win32", env: {}, regQuery: () => { reads1++; return REG_ON } },
+    { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS },
+  )
+  assert.equal(env1.code, "OK", "任务本身成功: " + env1.diagnostics)
+  assert.equal(reads1, 1, "win32 ⇒ 读一次注册表")
+  assert.equal(cap1.envs.length, 1, "只捕获真正那次 exec 的 env")
+  const injected = "http://127.0.0.1:7897"
+  assert.equal(cap1.envs[0].HTTPS_PROXY, injected, "① inherit 真的注入了系统代理")
+  assert.equal(cap1.envs[0].https_proxy, injected)
+  assert.equal(cap1.envs[0].HTTP_PROXY, injected)
+  assert.equal(cap1.envs[0].http_proxy, injected)
+  assert.equal(cap1.envs[0].NO_PROXY, noProxyFromOverride(REG_REAL_OVERRIDE), "ProxyOverride 一并搬进 NO_PROXY")
+  assert.equal(cap1.envs[0].no_proxy, cap1.envs[0].NO_PROXY)
+  assert.equal(cap1.envs[0].ALL_PROXY, undefined, "不写 ALL_PROXY")
+  // FR-2 的**生产侧**接线（交付偏差补全，见报告）：四个机制的工具层 deps 都必须显式带 platform——
+  // system-proxy 只认 deps.platform，绝不靠 process.platform 兜底；漏一处 = 该机制的 codex 行
+  // 永远静默「没有代理」。设计档 FR-2 只点名了 consult 那处（父会话按 `const deps = {` 检索），
+  // 而 advisor / eng_coder / escalate 的 deps 是内联字面量 ⇒ 本断言把四处一起钉住。
+  const idxSrc = readFileSync(new URL("../lib/index.mjs", import.meta.url), "utf8")
+  assert.equal(idxSrc.split("platform: process.platform").length - 1, 4,
+    "consult / advisor / eng_coder / escalate 四个工具层 deps 都显式带 platform")
+  // 三态字面的模块级来源（FR-3）：env / none / system(url)
+  assert.equal(applyInheritedSystemProxy({}, { platform: "win32", regQuery: () => REG_ON }).note, "system(" + injected + ")")
+  assert.equal(applyInheritedSystemProxy({}, { platform: "linux", env: {} }).note, "none")
+  assert.equal(applyInheritedSystemProxy({ HTTPS_PROXY: "http://keep:1" }, { platform: "win32" }).note, "env")
+  // ② inherit + 环境里已有代理 ⇒ 原值保留（不覆盖、且根本不读注册表）
+  const cap2 = captureCodexSpawn(okCodexScript)
+  let reads2 = 0
+  const env2 = await runCodexTask(
+    { spawn: cap2.spawn, platform: "win32", env: { HTTPS_PROXY: "http://user-proxy:1234" }, regQuery: () => { reads2++; return REG_ON } },
+    { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS },
+  )
+  assert.equal(env2.code, "OK")
+  assert.equal(cap2.envs[0].HTTPS_PROXY, "http://user-proxy:1234", "② 用户环境优先，不得被注册表覆盖")
+  assert.equal(cap2.envs[0].HTTP_PROXY, undefined, "② 不得凭空补 HTTP_PROXY")
+  assert.equal(reads2, 0, "② 环境里已有代理 ⇒ 零读取")
+  // ③ proxyMode:none + 系统开 ⇒ 零代理变量（负控：新分支不得污染 none）
+  const cap3 = captureCodexSpawn(okCodexScript)
+  let reads3 = 0
+  const env3 = await runCodexTask(
+    { spawn: cap3.spawn, platform: "win32", env: {}, regQuery: () => { reads3++; return REG_ON } },
+    { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: { ...GLOBALS, proxyMode: "none" } },
+  )
+  assert.equal(env3.code, "OK")
+  for (const k of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]) {
+    assert.equal(cap3.envs[0][k], undefined, "③ none ⇒ 零代理变量（" + k + "）")
+  }
+  assert.equal(reads3, 0, "③ none 分支不读注册表")
+  // ④ proxyMode:url ⇒ 用配置地址（负控：新分支不得污染 url）
+  const cap4 = captureCodexSpawn(okCodexScript)
+  let reads4 = 0
+  const env4 = await runCodexTask(
+    { spawn: cap4.spawn, platform: "win32", env: {}, regQuery: () => { reads4++; return REG_ON } },
+    { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: { ...GLOBALS, proxyMode: "url", proxyUrl: "http://127.0.0.1:8888" } },
+  )
+  assert.equal(env4.code, "OK")
+  assert.equal(cap4.envs[0].HTTPS_PROXY, "http://127.0.0.1:8888", "④ url ⇒ 用配置地址")
+  assert.equal(cap4.envs[0].HTTP_PROXY, "http://127.0.0.1:8888")
+  assert.equal(reads4, 0, "④ url 分支不读注册表")
+  // ⑤ 行级 runner.proxy URL 优先于全局
+  const cap5 = captureCodexSpawn(okCodexScript)
+  const env5 = await runCodexTask(
+    { spawn: cap5.spawn, platform: "win32", env: {}, regQuery: () => REG_ON },
+    { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: { ...RUNNER, proxy: "http://10.1.2.3:3128" }, globals: { ...GLOBALS, proxyMode: "url", proxyUrl: "http://127.0.0.1:8888" } },
+  )
+  assert.equal(env5.code, "OK")
+  assert.equal(cap5.envs[0].HTTPS_PROXY, "http://10.1.2.3:3128", "⑤ 行级 URL 优先于全局 url")
+})
+
+test("批 40 T-P3 系统代理: 非 Windows 零读取 + 读取失败 fail-open + 60s 缓存", async () => {
+  _resetSystemProxyCacheForTests()
+  // ① platform:"linux" ⇒ regQuery 零调用（评审 #3/N1：绝不用 process.platform 兜底）
+  const cap1 = captureCodexSpawn(okCodexScript)
+  let reads1 = 0
+  const env1 = await runCodexTask(
+    { spawn: cap1.spawn, platform: "linux", env: {}, regQuery: () => { reads1++; return REG_ON } },
+    { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS },
+  )
+  assert.equal(env1.code, "OK")
+  assert.equal(reads1, 0, "① 非 Windows 零读取")
+  assert.equal(cap1.envs[0].HTTPS_PROXY, undefined, "① 非 Windows 不注入")
+  assert.equal(readWindowsSystemProxyRaw({ platform: "linux", regQuery: () => { reads1++; return REG_ON } }), null, "① 模块级同一判定")
+  assert.equal(reads1, 0, "① 模块级也零读取")
+  // ② regQuery 抛错 ⇒ 不抛给调用方、不注入（fail-open 到「没有代理」）
+  _resetSystemProxyCacheForTests()
+  const cap2 = captureCodexSpawn(okCodexScript)
+  const env2 = await runCodexTask(
+    { spawn: cap2.spawn, platform: "win32", env: {}, regQuery: () => { throw new Error("reg.exe 被策略禁用") } },
+    { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS },
+  )
+  assert.equal(env2.code, "OK", "② 读注册表失败不得中断 codex 任务")
+  assert.equal(cap2.envs[0].HTTPS_PROXY, undefined, "② 读取失败 ⇒ 不注入")
+  assert.equal(readWindowsSystemProxyRaw({ platform: "win32", regQuery: () => { throw new Error("boom") } }), null, "② 模块级返回 null 而非抛出")
+  // ③ 60s 内二次调用 ⇒ regQuery 只被调 1 次；④ 过期后重读
+  _resetSystemProxyCacheForTests()
+  let clock = 1000000
+  let reads3 = 0
+  const cacheDeps = { spawn: captureCodexSpawn(okCodexScript).spawn, platform: "win32", env: {}, now: () => clock, regQuery: () => { reads3++; return REG_ON } }
+  const c1 = await runCodexTask(cacheDeps, { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS })
+  const c2 = await runCodexTask(cacheDeps, { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS })
+  assert.equal(c1.code, "OK")
+  assert.equal(c2.code, "OK")
+  assert.equal(reads3, 1, "③ 60s 内二次调用只读一次注册表（命中缓存）")
+  clock += 30000
+  await runCodexTask(cacheDeps, { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS })
+  assert.equal(reads3, 1, "③ 30s 后仍在 TTL 内 ⇒ 不重读")
+  clock += 31000
+  const c4 = await runCodexTask(cacheDeps, { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS })
+  assert.equal(c4.code, "OK")
+  assert.equal(reads3, 2, "④ 超过 60s ⇒ 重读一次")
+})
+
+test("批 40 T-P4 系统代理: 诊断可见（失败信封带 proxy= 且**居末尾** / 成功信封零噪音 / warn 恰一次 / none 提示句 / 空诊断无前导分隔符 / env 三态）", async () => {
+  _resetSystemProxyCacheForTests()
+  // ① 注入后失败 ⇒ 诊断串末尾含 proxy=system(<实际注入的 https 代理>)
+  const failSpawn = fakeSpawnFactory(failCodexScript)
+  const env1 = await runCodexTask(
+    { spawn: failSpawn, platform: "win32", env: {}, regQuery: () => REG_ON },
+    { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS },
+  )
+  assert.equal(env1.code, "PROCESS_ERROR")
+  assert.ok(env1.diagnostics.includes("proxy=system(http://127.0.0.1:7897)"), "① 失败信封带三态（字面逐字）: " + env1.diagnostics)
+  // 审计 #6-a 收口锁（批 40 修复轮）：三态必须在诊断串的**末尾**——「包含即可」不够，
+  // 前置或中置都算坏（设计档 FR-3：**末尾**追加）。变异自证：把 tail 拼到 head 之前 ⇒ 本断言红。
+  assert.ok(env1.diagnostics.endsWith("proxy=system(http://127.0.0.1:7897)"),
+    "①+ 三态必须是诊断串的结尾（前置/中置都不算）: " + JSON.stringify(env1.diagnostics))
+  assert.ok(!env1.diagnostics.includes("codexCli.proxyUrl"), "① 有代理时不得出现本地代理提示句（不制造噪音）")
+  // ② 未注入时的**成功**信封不含 proxy=（既有夹具零污染）
+  _resetSystemProxyCacheForTests()
+  const okSpawn = fakeSpawnFactory(okCodexScript)
+  const env2 = await runCodexTask(baseDeps(okSpawn), { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS })
+  assert.equal(env2.code, "OK")
+  assert.ok(!env2.diagnostics.includes("proxy="), "② 成功信封不追加（真实读数: " + JSON.stringify(env2.diagnostics) + "）")
+  // ③ warn 恰一次：连续两次注入只 warn 一次；未注入零 warn
+  _resetSystemProxyCacheForTests()
+  const warnSpawn = fakeSpawnFactory(okCodexScript)
+  const injectDeps = { spawn: warnSpawn, platform: "win32", env: {}, regQuery: () => REG_ON }
+  const w1 = await captureWarn(async () => {
+    await runCodexTask(injectDeps, { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS })
+    await runCodexTask(injectDeps, { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS })
+  })
+  const injectWarns = w1.warnings.filter((m) => m.includes("继承系统代理"))
+  assert.equal(injectWarns.length, 1, "③ 连续两次注入只 warn 一次（实得: " + JSON.stringify(injectWarns) + "）")
+  assert.ok(injectWarns[0].includes("HTTPS_PROXY=http://127.0.0.1:7897") && injectWarns[0].includes("Windows 系统设置"),
+    "③ warn 文案含实际地址与来源: " + injectWarns[0])
+  _resetSystemProxyCacheForTests()
+  const offDeps = { spawn: warnSpawn, platform: "win32", env: {}, regQuery: () => REG_OFF }
+  const w2 = await captureWarn(async () => {
+    await runCodexTask(offDeps, { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS })
+  })
+  assert.equal(w2.warnings.filter((m) => m.includes("继承系统代理")).length, 0, "③ 未注入零 warn（实得: " + JSON.stringify(w2.warnings) + "）")
+  // ④ proxy=none 且 TIMEOUT / PROCESS_ERROR ⇒ 追加「未使用任何代理…」提示句
+  _resetSystemProxyCacheForTests()
+  const noneFailSpawn = fakeSpawnFactory(failCodexScript)
+  const env4 = await runCodexTask(baseDeps(noneFailSpawn), { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS })
+  assert.equal(env4.code, "PROCESS_ERROR")
+  assert.ok(env4.diagnostics.includes("proxy=none"), "④ 无代理时三态是 proxy=none: " + env4.diagnostics)
+  assert.ok(env4.diagnostics.includes("未使用任何代理") && env4.diagnostics.includes("codexCli.proxyUrl"),
+    "④ PROCESS_ERROR 带本地代理提示句: " + env4.diagnostics)
+  const noneHangSpawn = fakeSpawnFactory((args) => (args.includes("--version") ? probeScript(args) : { events: [], hang: true }))
+  const envT = await runCodexTask(baseDeps(noneHangSpawn), { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", timeoutMs: 200, runner: RUNNER, globals: GLOBALS })
+  assert.equal(envT.code, "TIMEOUT")
+  assert.ok(envT.diagnostics.includes("proxy=none") && envT.diagnostics.includes("codexCli.proxyUrl"),
+    "④ TIMEOUT 同样带提示句: " + envT.diagnostics)
+  // ⑤ 审计 #6-b 收口锁（批 40 修复轮）：**空诊断**的失败信封 ⇒ 追加后**不得以 " | " 开头**
+  // （设计档 §十三 D-6）。夹具 = ABORTED：它不写 diagnostics（emptyEnvelope 默认 ""），且不在
+  // 提示码闭集里 ⇒ 诊断串应**逐字等于** "proxy=none"。变异自证：把 head === "" 的分支改成
+  // head + " | " + tail ⇒ 诊断串变成 " | proxy=none" ⇒ 本组断言红。
+  _resetSystemProxyCacheForTests()
+  const abortSpawn = fakeSpawnFactory((args) => (args.includes("--version") ? probeScript(args) : { events: [], hang: true }))
+  const ctrlAbort = new AbortController()
+  ctrlAbort.abort() // 预取消：spawn 之后立即走 onAbort ⇒ 空诊断的 ABORTED 信封
+  const envAbort = await runCodexTask(baseDeps(abortSpawn), {
+    taskText: "hi", cwd: tmpdir(), sandbox: "read-only", timeoutMs: 30000, runner: RUNNER, globals: GLOBALS, signal: ctrlAbort.signal,
+  })
+  assert.equal(envAbort.code, "ABORTED", "⑤ 夹具必须真的落在空诊断的失败信封上（否则本条腿触达不了 head === \"\"）")
+  assert.ok(envAbort.diagnostics.startsWith("proxy=none"),
+    "⑤ 空诊断也要追加三态（head 为空 ⇒ 只剩 tail）: " + JSON.stringify(envAbort.diagnostics))
+  assert.ok(!envAbort.diagnostics.startsWith(" | "),
+    "⑤ 空诊断不得以分隔符开头: " + JSON.stringify(envAbort.diagnostics))
+  assert.equal(envAbort.diagnostics, "proxy=none",
+    "⑤ 空诊断 ⇒ 逐字等于三态（ABORTED 不在提示码闭集，无提示句）: " + JSON.stringify(envAbort.diagnostics))
+  // ⑥ 审计 #6-c 收口锁（批 40 修复轮）：环境里**已有**代理（用户环境优先）⇒ 失败信封的三态是
+  // proxy=env（不是 none / system）。变异自证：把 applyInheritedSystemProxy 的 env 分支写成
+  // note: "none" ⇒ 本断言红（同时 T-P2 的 note 契约断言也红）。
+  _resetSystemProxyCacheForTests()
+  const envProxySpawn = fakeSpawnFactory(failCodexScript)
+  let readsEnvProxy = 0
+  const envEnvProxy = await runCodexTask(
+    { spawn: envProxySpawn, platform: "win32", env: { HTTPS_PROXY: "http://user-proxy:1234" }, regQuery: () => { readsEnvProxy++; return REG_ON } },
+    { taskText: "hi", cwd: tmpdir(), sandbox: "read-only", runner: RUNNER, globals: GLOBALS },
+  )
+  assert.equal(envEnvProxy.code, "PROCESS_ERROR")
+  assert.ok(envEnvProxy.diagnostics.includes("proxy=env"),
+    "⑥ 用户环境已有代理 ⇒ 三态 proxy=env: " + JSON.stringify(envEnvProxy.diagnostics))
+  assert.ok(!envEnvProxy.diagnostics.includes("proxy=none") && !envEnvProxy.diagnostics.includes("proxy=system"),
+    "⑥ 不得误报 none / system: " + JSON.stringify(envEnvProxy.diagnostics))
+  assert.equal(readsEnvProxy, 0, "⑥ 用户环境优先 ⇒ 零读取注册表")
 })

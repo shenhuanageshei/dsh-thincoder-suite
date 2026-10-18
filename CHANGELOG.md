@@ -2,6 +2,47 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.34.0] — 2026-10-18
+
+> **一句话（人话）**：设置里的「继承代理」在 Windows 上其实**什么都没继承** —— 它只复制环境变量，而 Windows 的系统代理存在**注册表**里。这版把它补成**真的继承**（环境变量优先，没有就读系统代理再注入给 codex），并补上了这块**从来没有测试腿**的缺口。
+
+**【计数行】**：`node --test` **656/656**（**基线 652 + 本批 4**：新增 4 条顶层用例 T-P1…T-P4）。
+
+**一、为什么做（人话）**
+
+`codexCli.proxyMode` 默认 `inherit`。旧实现的 inherit 只做一件事：**把环境变量原样复制**给 codex 子进程。
+而 Windows 的系统代理**不是环境变量** —— 它住在 `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
+（`ProxyEnable` / `ProxyServer` / `ProxyOverride`）。⇒ 开了系统代理的机器上，codex 子进程**等于没有代理**。
+
+**本机实测**（2026-10-18）：系统代理关闭时，`chatgpt.com` 的 DNS 解析到 `157.240.17.36`（Facebook 的 IP，**污染**）且 TCP 443 不通；
+把 `HTTPS_PROXY` 指到本机 Clash 的 `127.0.0.1:7897` 后，`codex exec` **成功返回 `OK`**（`turn.completed`）。
+
+**二、你会看到什么**
+
+· 在代理软件里打开「系统代理」后，**四条 codex 链路**（会诊 codex 行 / `advisor` / `eng_coder` / `escalate`）**不用再手配 `codexCli.proxyUrl`**。
+· 失败时诊断串**末尾**会写明用了什么代理：`proxy=env` / `proxy=system(<url>)` / `proxy=none` —— 这是排障最缺的那句话。
+
+**三、技术面**
+
+| 项 | 内容 |
+|---|---|
+| **新模块** | `lib/system-proxy.mjs`：`reg.exe query` 读注册表（60s 缓存、1.5s 超时）+ 纯函数解析（`ProxyServer` 单值/分协议、`ProxyOverride` → `NO_PROXY`、PAC 识别、输出去重保序） |
+| **注入规则** | 环境变量优先（用户环境**一字节不动**）；环境里没有代理才读系统代理；`HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` 大小写各一份 |
+| **fail-open** | `reg.exe` 不存在 / 被策略禁 / 超时 / 输出畸形 ⇒ 视为「没有代理」，**与改动前行为一致**；绝不中断 codex 任务 |
+| **只告警不注入** | PAC（`AutoConfigURL`）与 socks-only 代理 |
+| **三态诊断** | 只追加到**失败**信封末尾；`proxy=none` 且是连接类失败（TIMEOUT / PROCESS_ERROR / NO_OUTPUT）时补一句「若你依赖本地代理软件，请配置 `codexCli.proxyUrl`」；pre-spawn 失败（`RUNNER_UNAVAILABLE` / `CONCURRENCY_LIMIT`）**不追加**（那时还没算代理，编一个反而是假信息） |
+| **回归** | 显式 `none` / `url` / 行级 `runner.proxy` 三分支**逐字未动**（T-P2 的负向断言钉住） |
+| **测试** | 新增 4 条顶层用例：T-P1 解析与三态 · T-P2 注入/环境优先/三分支回归 · T-P3 非 Windows 零读取/缓存/fail-open · T-P4 诊断可见性（末尾/空诊断/env/none 提示）。**每条都做过变异自证** |
+
+**四、过程与诚实清单**
+
+· 设计评审 **3 轮**（FAIL → PASS → PASS 复核），**12 条**发现全部处置（8 条 + N1–N4）。
+· 实施后跑了**独立偏离审计**：6 条 = 1 🔴 阻塞（T-SG4 执行面计数由 2 提到 3）+ 2 条真发现（`none` 分支越界加三态、`NO_PROXY` 重复）+ 3 条建议（其中 2 条**改设计而非改代码**）。全部处置。
+· 交付代码评审 **PASS**（3 条：1 条父侧收口协调项、2 条注释卫生已修）。
+· **真机验证**：新读取器对**真实注册表**跑通（临时 `ProxyEnable=1` + `ProxyServer=127.0.0.1:7897` ⇒ 得到 `proxy=system(http://127.0.0.1:7897)` 与正确的 `NO_PROXY`，**随后已还原**并复读证明）。
+· **仍未闭环**：整条 codex 任务在**运行中的 DSH** 里走一遍（需要插件重载才能加载新 `lib/`）。本机系统代理当前是关的 ⇒ 这条等用户打开「系统代理」后复验。
+· **本批顺手补掉的旧缺口**：代理这块（研究档的 B10）**此前零测试覆盖** —— 全仓 `test/` 里 grep `HTTPS_PROXY` 零命中。
+
 ## [0.33.0] — 2026-10-18
 
 > **一句话（人话）**：DSH 0.2.1 把「限制子代理能用哪些工具」的开关**删掉了** —— 我们的**会诊**因此一度停摆。这版把限制搬进 **DSH 的 Agent Preset**（随插件分发），**会诊的 dsh 通道恢复可用**；顺带把你丢的**工程模式预设**也补回来了。
