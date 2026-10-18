@@ -986,7 +986,7 @@ DSH 0.2.1 **移除了** `subagent.start` 请求里的 `persona` / `toolFilter`�
 | 1 | `@deepseek-ai/dsh-persona` 的 `config.text:` | **`config.prefix`（必填）** + `complete: true` | 原样搬 ⇒ 预设 broken |
 | 2 | `tool-subagent` 的 `backgroundMode: continuable` / `enableRunInBackground: false` | 两个键**已不存在**（`persona`/`toolFilter` 更是显式抛错移除） | 原样搬 ⇒ 预设 broken |
 
-**包名核验判据（可复核）**：按 `app.asar` 的 **asar 头 JSON**（header 起始 offset 16）逐档列出，再对 `package.json#exports` 校验子路径 ⇒ `@deepseek-ai/` 下 306 个包中，本批引入的 **24 个（含 1 个子路径 `tool-subagent-control/list-agents`）全部命中**，版本一律 `0.2.1-rc.2`。
+**包名核验判据（可复核）**：按 `app.asar` 的 **asar 头 JSON**（header 起始 offset 16）逐档列出，再对 `package.json#exports` 校验子路径。**父侧独立复核实测**（真 `yaml` 解析 `cordis.patch.yml` 后对两条预设递归收集 `name:` 去重）：两条预设实际引用 **14 个真实包 + 1 个伪插件 `cordis:group`** —— 清单为 persona · agent-instructions · tool-bash · tool-pwsh · tool-fs · tool-fs-search · tool-str-replace-editor · tool-jobs · skill-filesystem · tool-skill · tool-goal · tool-ask-user · tool-todo · tool-web，全部在 `@deepseek-ai/` 下命中且版本为 `0.2.1-rc.2`。★ 原先写「24 个」是**把实施方核查过的候选集当成了实引集**，已按实测订正。
 
 **fail-closed 的超集（比设计档更严）**：除「未注册」外，**`broken` / `list()` 抛错 / 服务不可用**也一律拒绝派发 —— 工具面不是我们要的那一份，同样等于拿不到只读保证。
 
