@@ -955,7 +955,7 @@ DSH 0.2.1 **移除了** `subagent.start` 请求里的 `persona` / `toolFilter`�
 | 预设 `config.id` | 用途 | 组成要点 |
 |---|---|---|
 | **`thincoder-eng`** | 工程模式一键入口（插件 `lib/index.mjs:1863` 的 `PRESET_MATCH` 靠它自动 enter） | 移植老 `agent.cordis.yml`；★ **`config.id` 必须精确为 `thincoder-eng`**（header 存的就是它） |
-| **`thincoder-consult-ro`** | **只读会诊**（替代被移除的 `toolFilter`） | 只留读/检索类工具（fs 读、fs-search、web、skill 读），**剔除**写/执行类（bash / pwsh / fs 写 / str-replace-editor / jobs / ralph / workflow） |
+| **`thincoder-consult-ro`** | **只读会诊**（替代被移除的 `toolFilter`） | 只留读/检索类工具（fs 读、fs-search、web、skill 读），**剔除**写/执行类（bash / pwsh / fs 写 / str-replace-editor / jobs / ralph / workflow）。★ **另含** `agent-instructions` 与整组 `compaction`（含 `command-compact`）—— 二者**不是工具面**、不在 T-36 的禁用集内，方向无害，此处登记以消除档面与 YAML 的列举差 |
 
 **移植老组成档时必修**：`@deepseek-ai/dsh-workflow-worker-thread` 在 0.2.1 装机包**不存在** ⇒ 换 `@deepseek-ai/dsh-workflow-ptc`，并**先删 `config.provider`**（形状不同，先让它起来）。其余行已逐条核实存在。
 
@@ -986,8 +986,4 @@ DSH 0.2.1 **移除了** `subagent.start` 请求里的 `persona` / `toolFilter`�
 | 1 | `@deepseek-ai/dsh-persona` 的 `config.text:` | **`config.prefix`（必填）** + `complete: true` | 原样搬 ⇒ 预设 broken |
 | 2 | `tool-subagent` 的 `backgroundMode: continuable` / `enableRunInBackground: false` | 两个键**已不存在**（`persona`/`toolFilter` 更是显式抛错移除） | 原样搬 ⇒ 预设 broken |
 
-**包名核验判据（可复核）**：按 `app.asar` 的 **asar 头 JSON**（header 起始 offset 16）逐档列出，再对 `package.json#exports` 校验子路径。**父侧独立复核实测**（真 `yaml` 解析 `cordis.patch.yml` 后对两条预设递归收集 `name:` 去重）：两条预设实际引用 **14 个真实包 + 1 个伪插件 `cordis:group`** —— 清单为 persona · agent-instructions · tool-bash · tool-pwsh · tool-fs · tool-fs-search · tool-str-replace-editor · tool-jobs · skill-filesystem · tool-skill · tool-goal · tool-ask-user · tool-todo · tool-web，全部在 `@deepseek-ai/` 下命中且版本为 `0.2.1-rc.2`。★ 原先写「24 个」是**把实施方核查过的候选集当成了实引集**，已按实测订正。
-
-**fail-closed 的超集（比设计档更严）**：除「未注册」外，**`broken` / `list()` 抛错 / 服务不可用**也一律拒绝派发 —— 工具面不是我们要的那一份，同样等于拿不到只读保证。
-
-**未验的部分（如实登记）**：**预设真的能被 `agentPresets.list()` 列出**这一步需**重启后**才能验；本批以「真 YAML 解析 + 24 个包名在 asar 内逐个核实 + 逐插件 `Config` 与老档逐键比对」作为静态证据链。
+**包名核验判据（可复核）**：按 `app.asar` 的 **asar 头 JSON**（header 起始 offset 16）逐档列出，再对 `package.json#exports` 校验子路径。**口径与读数（父侧实测，2026-10-18 二次订正）**：对两条预设块做**文本级** `name:` 扫描（覆盖 `cordis:group` 嵌套子行）⇒ 出现 **38 次 / 去重 25 个**，其中含预设行自身的 `@deepseek-ai/dsh-agent-preset` 与 1 个子路径 `@deepseek-ai/dsh-tool-subagent-control/list-agents` ⇒ **真实插件包 24 个**，全部在 `@deepseek-ai/` 下命中且版本为 `0.2.1-rc.2`。★ 订正轨迹：初稿写 24（正确）；父侧用**结构递归**复查得 14 并误判初稿有错 ⇒ 改为 14（**错**：结构递归没覆盖 `cordis:group` 的嵌套形状）；交付评审指出后按**文本口径**复得 24 ⇒ 改回。**教训：计数口径必须写明（结构递归 vs 文本扫描），两者会给出不同数。**

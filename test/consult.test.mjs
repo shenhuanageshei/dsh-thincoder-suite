@@ -1635,5 +1635,26 @@ test("A29-7 (D-52): 会诊只读白名单对位锁——静态成员集 = 只读
     assert.match(r38c.error, /只读预设不可用/, "T-38：broken 预设的拒绝文案必须点明「只读预设不可用」")
     assert.equal(t38cCalls.length, 0, "T-38：broken 预设时不得派发任何子代理")
   } finally { cleanup(hT38c.sessionId, hT38c.state) }
+
+  // ★ 批39 交付评审 #1 追加夹具：`broken: false`（平台「字段恒在、健康时为 false」形状）⇒ **必须放行**。
+  //   原谓词用 `String(x) !== ""`，而 `String(false) === "false"` 非空 ⇒ 被误判 broken
+  //   ⇒ 健康预设被拒、整条会诊被误锁死。本条钉住收紧后的**真值判定**（改回 String 谓词 ⇒ 本夹具红）。
+  const t38dCalls = []
+  const t38dHost = {
+    getProvider: () => t38Provider,
+    async startActivation(spec) {
+      t38dCalls.push(spec)
+      return { childId: "t38d-child", result: Promise.resolve({ output: [], stopReason: "completed" }), dispose: async () => {} }
+    },
+  }
+  const hT38d = makeDeps({
+    subagents: t38dHost,
+    services: { agentPresets: { async list() { return [{ id: "thincoder-consult-ro", broken: false }] } } },
+  })
+  try {
+    const r38d = await startConsultSession(hT38d.deps, "problem", undefined)
+    assert.ok(!(r38d && typeof r38d.error === "string"),
+      "T-38：broken:false（健康）⇒ 必须放行，不得误判为 broken：" + JSON.stringify(r38d))
+  } finally { cleanup(hT38d.sessionId, hT38d.state) }
 })
 
