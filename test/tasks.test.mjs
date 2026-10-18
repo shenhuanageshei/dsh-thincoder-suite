@@ -42,6 +42,15 @@
 //   T-32 优先级语义化：档位词（紧急/高/中/低）· 0/负数不渲染 · 台账仍存数字 ⇒ 并入 T-4a（源码）/ T-12（④-a）
 //   T-33 全部展开/全部收起：两控件 · 收起态不渲染 meta 与按钮 · 默认展开 ⇒ 并入 T-12 块（④-c）
 //   T-34 五态显眼：行色条 · 实心 pill · 分区色条 · 五态图例          ⇒ 并入 T-12 块（④-d）
+//   —— 批42（t-4 七条 🔵 除尘；同样**并入既有块** ⇒ 本档顶层 `test(` 数仍为 21）——
+//   ④ 文档路径清单：**去重后**判上限（含重复 ⇒ 通过 / 非字符串 ⇒ false 不抛）⇒ 并入 T-4a 块（⑦）
+//   ⑥ task_update 契约文本锁（描述与 schema 都写 createdBy / owner / claimedFrom 只读）⇒ 并入 T-3 块
+//   ⑦ 零写入包装器 withZeroWrite：旧的 assertRejectNoWrite 调用点**全部**改成「包装 + 独立拒绝码断言」
+//      （旧 grep 命中 21 行 = 1 处定义 + 20 处调用点，20 处全改）；抛错分支自证 ⇒ 并入 T-1 块（⑦）
+//   ⑧ T-7③ 真实档改「能解析才断言」+ diagnostic 留痕；loader 注入的不可解析腿 ⇒ 并入 T-7 块（④-b）
+//   ⑨ commandArgsOf 谓词逐字（只认 m[1] === name，无 startsWith 兜底）⇒ 并入 T-20 块
+//   ⑩ 注入行成本注释（`lib/index.mjs`，**纯注释**、行为零变化）—— 无新腿（既有 T-15 注入点断言照旧）
+//   ⑤ 无代码改动（`lib/client.js` 早已拆 propsScope / scopeKey）—— 无腿
 //
 // ★ 每条腿都带「变异自证」注释：说明**去掉哪一处实现会让该腿变红**（本仓纪律：腿必须咬得住实现）。
 // ★ 每条腿都带**阳性/阴性对照**（防「恒红断言」与「恒真空断言」两种假绿）。
@@ -63,7 +72,7 @@ import {
   renderTaskDigest, resolveLedgerConfig, resolveTasksPath, serializeLedger, tasksFileSha256, workspaceRootOf,
 } from "../lib/tasks.mjs"
 import { buildTaskClaimResult, buildTasksBoardPayload, makeTaskTools, readChecklistDocs, renderBoardText } from "../lib/tool-tasks.mjs"
-import { TASK_COMMAND_DEFINITION_PREFIX, TASK_COMMAND_NAMES, registerTaskCommands } from "../lib/task-commands.mjs"
+import { TASK_COMMAND_DEFINITION_PREFIX, TASK_COMMAND_NAMES, commandArgsOf, registerTaskCommands } from "../lib/task-commands.mjs"
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -97,12 +106,33 @@ function task(id, over = {}) {
   }
 }
 
-/** 断言：某次写操作**拒绝**且带指定拒绝码，且**文件字节未变**（sha256 前后相同）。 */
-function assertRejectNoWrite(ws, result, code) {
+/**
+ * **零写入包装器**（批 42 ⑦；替换旧 helper「先跑完再核对」的事后形态）。
+ * @pre  `ws` = 会话工作区；`fn` = **会尝试写盘**的函数（同步或异步都吃；抛错也照测）
+ * @post 返回 `fn()` 的结果（thenable 则 await 后的值）
+ * @post 期间文件字节变了 ⇒ 抛断言错误（腿红）；**`fn` 抛错时同样先断言零写入再把错误抛出去**
+ *       （否则抛错分支上的 sha 断言被整个跳过 ⇒ 假绿）
+ * @post 判据是**期间不变**（先取 sha → 跑 → 再取），不是「跑完之后再比一次」
+ * 变异自证：删掉任一分支里的 `assert.equal(tasksFileSha256(ws), before, …)` ⇒ 让某条拒绝路径
+ * 真写一次即红（catch 分支的删除 ⇒ 本档 T-1 ⑦ 的「先写再抛」腿红）。
+ */
+const withZeroWrite = async (ws, fn) => {
   const before = tasksFileSha256(ws)
+  try {
+    let r = fn()
+    if (r && typeof r.then === "function") r = await r
+    assert.equal(tasksFileSha256(ws), before, "**拒绝路径必须零写入**（文件 sha256 期间相同）")
+    return r
+  } catch (e) {
+    assert.equal(tasksFileSha256(ws), before, "**拒绝路径（抛错分支）同样必须零写入**")
+    throw e
+  }
+}
+
+/** 拒绝断言（零写入不在这里 —— 它由上面的包装器在**操作期间**结构性保证）。 */
+function assertRejectCode(result, code) {
   assert.equal(result?.ok, false, "该操作必须被拒（实测 " + JSON.stringify(result) + "）")
   if (code) assert.equal(result.code, code, "拒绝码必须点名（实测 " + result?.code + "：" + result?.reason + "）")
-  assert.equal(tasksFileSha256(ws), before, "**拒绝路径必须零写入**（文件 sha256 前后相同）")
   assert.ok(REJECT_CODES.includes(result.code), "拒绝码必须在闭集内（实测 " + result.code + "）")
   return result
 }
@@ -120,13 +150,13 @@ function toDoing(ws) {
 
 // ═══════════════ T-1：无凭据 done ⇒ 拒且零写入（US-2） ═══════════════
 
-test("T-1（US-2）: 无凭据的 done 被拒且零写入；有凭据才放行", () => {
+test("T-1（US-2）: 无凭据的 done 被拒且零写入；有凭据才放行", async () => {
   const ws = freshWs()
   try {
     const t = toDoing(ws)
-    // 阴性：无凭据 ⇒ 拒
-    const bad = applyTaskTransition(ws, { id: t.id, to: "完成", expectedRev: t.rev })
-    assertRejectNoWrite(ws, bad, "evidence-required")
+    // 阴性：无凭据 ⇒ 拒（操作**整个**包进零写入包装器 ⇒ 断言覆盖「期间不变」，不是事后核对）
+    const bad = await withZeroWrite(ws, () => applyTaskTransition(ws, { id: t.id, to: "完成", expectedRev: t.rev }))
+    assertRejectCode(bad, "evidence-required")
     assert.ok(bad.reason.includes("凭据"), "拒写文案必须指路「完成必须留凭据」：" + bad.reason)
     assert.equal(readTasksView(ws).tasks[0].status, "在做", "被拒后状态**不能**前进")
 
@@ -137,28 +167,41 @@ test("T-1（US-2）: 无凭据的 done 被拒且零写入；有凭据才放行",
     assert.equal(v.tasks[0].status, "完成")
     assert.ok(v.tasks[0].evidence.includes("12/12"), "凭据必须落盘")
     assert.ok(v.tasks[0].doneAt, "完成时刻必须记下")
+
+    // ⑦ 包装器自身的**抛错分支**自证（批 42 · 评审 #4）：`fn` **先写再抛** ⇒ 包装器必须先断言
+    //   零写入、再把错误抛出去。变异：删掉 catch 里的那条断言 ⇒ 抛出去的是原始的 "boom" ⇒ 本段红。
+    const wsThrow = freshWs()
+    try {
+      seedLedger(wsThrow, [task("t-1")], 0)
+      await assert.rejects(
+        async () => { await withZeroWrite(wsThrow, () => { seedRaw(wsThrow, "被写坏了"); throw new Error("boom") }) },
+        /零写入/,
+        "fn 抛错时必须**先断言零写入**（否则 sha 断言被跳过 = 假绿）",
+      )
+      assert.equal(readFileSync(resolveTasksPath(wsThrow), "utf8"), "被写坏了", "夹具自证：fn 确实写过盘（否则本段恒真空）")
+    } finally { rmSync(wsThrow, { recursive: true, force: true }) }
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
 })
 // 变异自证：删掉 `applyTaskTransition` 里的 `to === "完成" && evidence === ""` 分支 ⇒ 第一次调用返回 ok:true
-// ⇒ 本腿的 assertRejectNoWrite 当场红（且 sha256 断言同时红，因为文件被改写）。
+// ⇒ 本腿的 assertRejectCode 当场红（且包装器的零写入断言同时红，因为文件被改写）。
 
 // ═══════════════ T-2：blocked 缺 reason / 缺 blockedBy ⇒ 拒（US-3 / US-4） ═══════════════
 
-test("T-2（US-3 · US-4）: blocked 缺 reason、缺/错 blockedBy 均被拒且零写入", () => {
+test("T-2（US-3 · US-4）: blocked 缺 reason、缺/错 blockedBy 均被拒且零写入", async () => {
   const ws = freshWs()
   try {
     const c = applyTaskCreate(ws, { kind: "work", title: "等批 R 落地", check: "对端提交后复核形状", expectedRev: 0 })
     assert.equal(c.ok, true, JSON.stringify(c))
     // ① 缺 reason
-    const noReason = applyTaskTransition(ws, { id: c.id, to: "卡住", blockedBy: "external", expectedRev: c.rev })
-    assertRejectNoWrite(ws, noReason, "reason-required")
+    const noReason = await withZeroWrite(ws, () => applyTaskTransition(ws, { id: c.id, to: "卡住", blockedBy: "external", expectedRev: c.rev }))
+    assertRejectCode(noReason, "reason-required")
     // ② 有 reason 但 blockedBy 缺失 / 非法
-    const noBy = applyTaskTransition(ws, { id: c.id, to: "卡住", reason: "对端还没提交", expectedRev: c.rev })
-    assertRejectNoWrite(ws, noBy, "blockedby-required")
-    const badBy = applyTaskTransition(ws, { id: c.id, to: "卡住", reason: "对端还没提交", blockedBy: "somebody", expectedRev: c.rev })
-    assertRejectNoWrite(ws, badBy, "blockedby-required")
+    const noBy = await withZeroWrite(ws, () => applyTaskTransition(ws, { id: c.id, to: "卡住", reason: "对端还没提交", expectedRev: c.rev }))
+    assertRejectCode(noBy, "blockedby-required")
+    const badBy = await withZeroWrite(ws, () => applyTaskTransition(ws, { id: c.id, to: "卡住", reason: "对端还没提交", blockedBy: "somebody", expectedRev: c.rev }))
+    assertRejectCode(badBy, "blockedby-required")
     assert.ok(badBy.reason.includes("external") && badBy.reason.includes("self"), "文案必须给出两个合法朝向：" + badBy.reason)
     // ③ 阳性对照：两个朝向都能落地（先 external）
     const g = applyTaskTransition(ws, { id: c.id, to: "卡住", reason: "对端还没提交", blockedBy: "external", expectedRev: c.rev })
@@ -192,11 +235,12 @@ test("T-3: 非法迁移被拒（25 组逐对断言 = 迁移表本身）＋ 工�
         // 每个组合用**干净的**一份台账（rev=0），避免前一次成功迁移污染后续判定
         seedLedger(ws, [task("t-1", { status: from })], 0)
         const legal = ALLOWED_MIGRATIONS[from].includes(to)
-        const r = applyTaskTransition(ws, { id: "t-1", to, evidence: "凭据", reason: "原因", blockedBy: "self", expectedRev: 0 })
+        const runMigration = () => applyTaskTransition(ws, { id: "t-1", to, evidence: "凭据", reason: "原因", blockedBy: "self", expectedRev: 0 })
         if (legal) {
+          const r = runMigration()
           assert.equal(r.ok, true, "合法迁移 " + from + " → " + to + " 必须放行：" + JSON.stringify(r))
         } else {
-          assertRejectNoWrite(ws, r, "illegal-migration")
+          assertRejectCode(await withZeroWrite(ws, runMigration), "illegal-migration")
         }
         checked++
       }
@@ -205,24 +249,24 @@ test("T-3: 非法迁移被拒（25 组逐对断言 = 迁移表本身）＋ 工�
 
     // 非法状态名也在同一道门前被拒（不是「静默当成合法值」）
     seedLedger(ws, [task("t-1")], 0)
-    const junk = applyTaskTransition(ws, { id: "t-1", to: "已经做完了", expectedRev: 0 })
-    assertRejectNoWrite(ws, junk, "status-invalid")
+    const junk = await withZeroWrite(ws, () => applyTaskTransition(ws, { id: "t-1", to: "已经做完了", expectedRev: 0 }))
+    assertRejectCode(junk, "status-invalid")
 
     // —— 同一道门的另一半：`applyTaskUpdate` 的可改字段**闭集**（设计档 §六 FR-3 的后置）——
     // 设计档 §九 没有为 `applyTaskUpdate` 单列腿；它的后置与状态迁移同住一道写门 ⇒ 并入本腿（同一判据域）。
     seedLedger(ws, [task("t-1", { status: "在做" })], 0)
     assert.deepEqual([...UPDATABLE_FIELDS].sort(), ["check", "priority", "title", "why"], "可改字段闭集是契约本身")
     // ① 命中只读字段 ⇒ **拒**（不是静默忽略）
-    const roPatch = applyTaskUpdate(ws, { id: "t-1", patch: { status: "完成", evidence: "偷偷写凭据" }, expectedRev: 0 })
-    assertRejectNoWrite(ws, roPatch, "field-not-updatable")
+    const roPatch = await withZeroWrite(ws, () => applyTaskUpdate(ws, { id: "t-1", patch: { status: "完成", evidence: "偷偷写凭据" }, expectedRev: 0 }))
+    assertRejectCode(roPatch, "field-not-updatable")
     assert.ok(roPatch.reason.includes("status") && roPatch.reason.includes("可改字段闭集"), "文案必须点名不可改字段与可改闭集：" + roPatch.reason)
     // ② 空 patch ⇒ 拒（不空转 rev）
-    assertRejectNoWrite(ws, applyTaskUpdate(ws, { id: "t-1", patch: {}, expectedRev: 0 }), "no-fields")
+    assertRejectCode(await withZeroWrite(ws, () => applyTaskUpdate(ws, { id: "t-1", patch: {}, expectedRev: 0 })), "no-fields")
     // ③ 空标题 / 空判据 ⇒ 拒
-    assertRejectNoWrite(ws, applyTaskUpdate(ws, { id: "t-1", patch: { title: "   " }, expectedRev: 0 }), "title-required")
-    assertRejectNoWrite(ws, applyTaskUpdate(ws, { id: "t-1", patch: { check: "" }, expectedRev: 0 }), "check-required")
+    assertRejectCode(await withZeroWrite(ws, () => applyTaskUpdate(ws, { id: "t-1", patch: { title: "   " }, expectedRev: 0 })), "title-required")
+    assertRejectCode(await withZeroWrite(ws, () => applyTaskUpdate(ws, { id: "t-1", patch: { check: "" }, expectedRev: 0 })), "check-required")
     // ④ 不存在的条目 ⇒ 拒
-    assertRejectNoWrite(ws, applyTaskUpdate(ws, { id: "t-404", patch: { title: "x" }, expectedRev: 0 }), "id-missing")
+    assertRejectCode(await withZeroWrite(ws, () => applyTaskUpdate(ws, { id: "t-404", patch: { title: "x" }, expectedRev: 0 })), "id-missing")
     // ⑤ 阳性对照：合法 patch ⇒ 放行且真的改了
     const up = applyTaskUpdate(ws, { id: "t-1", patch: { title: "改过的标题", priority: 7 }, expectedRev: 0 })
     assert.equal(up.ok, true, "合法 patch 必须放行：" + JSON.stringify(up))
@@ -267,6 +311,22 @@ test("T-3: 非法迁移被拒（25 组逐对断言 = 迁移表本身）＋ 工�
     const added = readTasksView(ws).tasks.find((x) => x.title === "省略 kind 的一条")
     assert.ok(added, "省略 kind 的那条必须真的落盘")
     assert.equal(added.kind, "work", "省略 kind ⇒ 必须默认 work（描述面与实现一致）")
+
+    // —— ⑥ **契约文本锁**（批 42 · 设计档 §八「⑥ 的契约文本锁」）——
+    // 上面两条拒写断言证明「越界键确实被拒」；这里钉住**模型可见面**也说了同一件事
+    // （描述面与实现一致）：描述必须含「只读」+ createdBy / owner / claimedFrom 三个字段名。
+    // 变异自证：删掉 tool-tasks.mjs 里那句「createdBy / owner / claimedFrom 只读」⇒ 本段红。
+    const updDesc = String(tools.task_update.description ?? "")
+    for (const word of ["只读", "createdBy", "owner", "claimedFrom"]) {
+      assert.ok(updDesc.includes(word), "task_update 的**描述**必须含「" + word + "」（只读字段声明）：" + updDesc)
+    }
+    assert.ok(updDesc.includes("createdBy / owner / claimedFrom 只读"),
+      "描述必须**逐字**写明这三个字段只读、本工具不接受：" + updDesc)
+    // schema 面同一句（parameters 的 description）—— 工具描述与 schema 不许各说一套
+    const updParamDesc = String(tools.task_update.parameters?.description ?? "")
+    for (const word of ["只读", "createdBy", "owner", "claimedFrom"]) {
+      assert.ok(updParamDesc.includes(word), "task_update 的 **schema** 也必须含「" + word + "」：" + updParamDesc)
+    }
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
@@ -277,7 +337,7 @@ test("T-3: 非法迁移被拒（25 组逐对断言 = 迁移表本身）＋ 工�
 
 // ═══════════════ T-6：畸形输入（读面 fail-open / 写面 fail-closed） ═══════════════
 
-test("T-6: 畸形 tasks.json ⇒ 读面不抛（fail-open）、写面拒（fail-closed）", () => {
+test("T-6: 畸形 tasks.json ⇒ 读面不抛（fail-open）、写面拒（fail-closed）", async () => {
   const ws = freshWs()
   try {
     const cases = [
@@ -295,8 +355,8 @@ test("T-6: 畸形 tasks.json ⇒ 读面不抛（fail-open）、写面拒（fail-
       assert.equal(view.malformed, true, label + "：必须如实标 malformed（畸形不是静默降级）")
       assert.ok(typeof view.trace === "string" && view.trace.length > 0, label + "：必须有「一行痕」：" + JSON.stringify(view.trace))
       // 写面 fail-closed：拒绝，且**零写入**
-      const r = applyTaskCreate(ws, { kind: "work", title: "新任务", check: "判据", expectedRev: view.rev })
-      assertRejectNoWrite(ws, r, "malformed")
+      const r = await withZeroWrite(ws, () => applyTaskCreate(ws, { kind: "work", title: "新任务", check: "判据", expectedRev: view.rev }))
+      assertRejectCode(r, "malformed")
       assert.equal(readFileSync(resolveTasksPath(ws), "utf8"), text, label + "：畸形文件必须**逐字节**保持原样")
     }
     // 阳性对照（防「恒判畸形」）：合法文件 ⇒ malformed=false 且写门放行
@@ -320,11 +380,11 @@ test("T-6: 畸形 tasks.json ⇒ 读面不抛（fail-open）、写面拒（fail-
 })
 // 变异自证：让读面直接 `JSON.parse(text)` 不兜 try/catch（或把 malformed 恒置 false）⇒ 本腿第一个 case 的
 // doesNotThrow / malformed 断言红；删掉写门的 `loaded.malformed` 分支 ⇒ 写门会真的落盘覆盖畸形文件
-// ⇒ assertRejectNoWrite 的 sha256 断言红。
+// ⇒ 包装器的零写入断言（sha256 期间相同）红。
 
 // ═══════════════ T-10：疑似凭据 ⇒ 拒写（非打码） ═══════════════
 
-test("T-10（N-7）: evidence/reason 命中疑似凭据 ⇒ 拒写（不是打码）", () => {
+test("T-10（N-7）: evidence/reason 命中疑似凭据 ⇒ 拒写（不是打码）", async () => {
   const ws = freshWs()
   try {
     // 谓词自证（正负两侧都要能判）
@@ -337,20 +397,20 @@ test("T-10（N-7）: evidence/reason 命中疑似凭据 ⇒ 拒写（不是打�
     const leak = detectSecretShape("sk-live-ABCDEFGHIJKLMNOPQRSTUVWX")
     assert.equal(leak.hit, true, "自证④：sk- 形态必须命中")
     const before = readFileSync(resolveTasksPath(ws), "utf8")
-    const r = applyTaskTransition(ws, {
+    const r = await withZeroWrite(ws, () => applyTaskTransition(ws, {
       id: t.id, to: "完成",
       evidence: "跑了 node --test 后把 sk-live-ABCDEFGHIJKLMNOPQRSTUVWX 贴进来了",
       expectedRev: t.rev,
-    })
-    assertRejectNoWrite(ws, r, "secret-suspected")
+    }))
+    assertRejectCode(r, "secret-suspected")
     const after = readFileSync(resolveTasksPath(ws), "utf8")
     assert.equal(after, before, "拒写必须是**零写入**（打码会把疑似凭据留在盘上，本设计明令不做）")
     assert.ok(!after.includes("sk-live"), "盘上不得出现该串（连打码形态都不许出现）")
     assert.ok(r.reason.includes("拒写"), "文案必须说清是「拒写」不是「打码」：" + r.reason)
 
     // reason 字段同族（卡住原因也是自由文本）
-    const b = applyTaskTransition(ws, { id: t.id, to: "卡住", reason: "AKIAIOSFODNN7EXAMPLE 过期了", blockedBy: "external", expectedRev: t.rev })
-    assertRejectNoWrite(ws, b, "secret-suspected")
+    const b = await withZeroWrite(ws, () => applyTaskTransition(ws, { id: t.id, to: "卡住", reason: "AKIAIOSFODNN7EXAMPLE 过期了", blockedBy: "external", expectedRev: t.rev }))
+    assertRejectCode(b, "secret-suspected")
 
     // 阳性对照：正常凭据照常放行（门不是恒拒）
     const g = applyTaskTransition(ws, { id: t.id, to: "完成", evidence: "跑了 login.test：12/12 绿；sha256 前后相同", expectedRev: t.rev })
@@ -364,7 +424,7 @@ test("T-10（N-7）: evidence/reason 命中疑似凭据 ⇒ 拒写（不是打�
 
 // ═══════════════ T-11：rev 冲突（D5 / §13.3 必做项）+ 跨会话读回（N-3） ═══════════════
 
-test("T-11（N-2 · N-3 · D5）: 陈旧 expectedRev ⇒ 拒且零写入 + fail-loud；合法 rev ⇒ 放行；跨会话读回", () => {
+test("T-11（N-2 · N-3 · D5）: 陈旧 expectedRev ⇒ 拒且零写入 + fail-loud；合法 rev ⇒ 放行；跨会话读回", async () => {
   const ws = freshWs()
   try {
     // 两个会话各自读一次（同一 rev）—— 这正是真实部署的形态（用户原话：「还有别的会话在工作」）
@@ -377,8 +437,8 @@ test("T-11（N-2 · N-3 · D5）: 陈旧 expectedRev ⇒ 拒且零写入 + fail-
     const afterA = tasksFileSha256(ws)
 
     // B 拿**陈旧** rev 写 ⇒ 必须拒，且**一个字节都不能动**
-    const b = applyTaskCreate(ws, { kind: "work", title: "会话 B 建的单", check: "判据 B", expectedRev: sessionB })
-    assertRejectNoWrite(ws, b, "rev-conflict")
+    const b = await withZeroWrite(ws, () => applyTaskCreate(ws, { kind: "work", title: "会话 B 建的单", check: "判据 B", expectedRev: sessionB }))
+    assertRejectCode(b, "rev-conflict")
     assert.equal(tasksFileSha256(ws), afterA, "冲突写必须零写入（原子写只防半文件，**不防丢更新**——D5）")
     assert.ok(b.reason.includes("其他会话"), "fail-loud 文案必须点名冲突来源：" + b.reason)
     assert.ok(b.reason.includes("你的 rev=" + sessionB), "文案必须给出「你的 rev」：" + b.reason)
@@ -389,8 +449,8 @@ test("T-11（N-2 · N-3 · D5）: 陈旧 expectedRev ⇒ 拒且零写入 + fail-
     assert.equal(b2.ok, true, "读到最新 rev 后必须放行：" + JSON.stringify(b2))
 
     // rev 号缺失 / 非法 ⇒ 同一族前置拒绝（不猜、不静默用盘上值）
-    const noRev = applyTaskCreate(ws, { kind: "work", title: "x", check: "y" })
-    assertRejectNoWrite(ws, noRev, "expected-rev-invalid")
+    const noRev = await withZeroWrite(ws, () => applyTaskCreate(ws, { kind: "work", title: "x", check: "y" }))
+    assertRejectCode(noRev, "expected-rev-invalid")
 
     // 跨会话 / 跨重启读回（N-3）：**新的一次读**（等价于另一个进程冷启动）必须看到同一份台账
     const fresh = readTasksView(ws)
@@ -419,7 +479,7 @@ test("T-11（N-2 · N-3 · D5）: 陈旧 expectedRev ⇒ 拒且零写入 + fail-
   }
 })
 // 变异自证：删掉写门的 `loaded.file.rev !== expectedRev` 分支 ⇒ B 的陈旧写会成功、rev 变成 2 ⇒
-// assertRejectNoWrite 与 sha256 两条断言同时红；把键控改成读 DSH_HOME ⇒ 最后一段的 DSH_HOME 断言红。
+// assertRejectCode 与包装器的零写入断言同时红；把键控改成读 DSH_HOME ⇒ 最后一段的 DSH_HOME 断言红。
 
 // ═══════════════ T-4b：注入行 ⊆ 看板（US-5 ② / §13.4 收紧后的口径） ═══════════════
 
@@ -821,6 +881,27 @@ test("T-4a（US-5 ① · N-1）: 看板 ≡ 工具读（同一 ws 逐条相等�
     assert.ok(tasksRoot, "必须能定位 .tc-tasks 根规则（定位不到 ⇒ 本段恒真空，必须红）")
     assert.ok(tasksRoot[1].includes("flex:1 1 auto") && tasksRoot[1].includes("min-height:0"),
       "根容器必须 flex:1 1 auto + min-height:0（面板高度约束才能传到内容区）：" + tasksRoot[1])
+
+    // ⑦ 批 42 ④（**并入既有 T-4 块**，不新开顶层用例）：文档路径清单 —— 判上限读**去重后**的条数
+    //   T-4a ⓐ：9 条但**含重复** ⇒ 去重后 ≤ MAX_DOC_PATHS ⇒ **通过**
+    //     （旧实现先判 v.length=9 ⇒ 会拒 —— 这是本批**唯一**的用户可见放宽，设计档 §0-1 / §三-2）
+    //   T-4a′：数组含非字符串（42 / null）⇒ 返回 false **且不抛**
+    //     （纯函数后置；String() 强转**只用于算去重**，合法性仍要求每项本身是非空字符串）
+    //   变异自证：把 isValidDocPathList 改回「先判 v.length」⇒ ⓐ 红；把 every 里的 typeof 判断删掉
+    //   改成直接 p.trim() ⇒ ⓐ′ 抛 TypeError ⇒ 红。
+    const dup9 = ["a.md", "a.md", "b.md", "b.md", "c.md", "c.md", "d.md", "d.md", "e.md"]
+    assert.equal(dup9.length, 9, "夹具自证：9 项（> 上限 " + MAX_DOC_PATHS + "）")
+    assert.equal(new Set(dup9).size, 5, "夹具自证：去重后只有 5 个互异项")
+    assert.equal(isValidDocPathList(dup9), true,
+      "★ 9 条**含重复** ⇒ 去重后 5 条 ≤ 上限 ⇒ 必须**通过**（旧实现按 v.length=9 拒）")
+    // 阴性对照（防「凡含重复必过」的过度放宽）：9 条**互异** ⇒ 仍拒（上限没被放宽）
+    assert.equal(isValidDocPathList(Array.from({ length: MAX_DOC_PATHS + 1 }, (_, i) => "u" + i + ".md")), false,
+      "9 条互异 ⇒ 仍拒（去重只免掉重复项的配额，上限不变）")
+    // T-4a′ 非字符串元素：**不抛**且 false（不得因 String() 强转而变成合法项）
+    assert.doesNotThrow(() => isValidDocPathList([42]), "非字符串元素 ⇒ 绝不抛（纯函数后置）")
+    assert.equal(isValidDocPathList([42]), false, "数字项 ⇒ false（不抛）")
+    assert.equal(isValidDocPathList([null]), false, "null 项 ⇒ false（不抛）")
+    assert.equal(isValidDocPathList(["a.md", 42, "b.md"]), false, "混合数组里有一个非字符串 ⇒ false")
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
@@ -1450,7 +1531,7 @@ test("T-14（US-8）: 决策分区在任务区**之前**且空集给明确空态
 
 // ═══════════════ T-7：结构化文档只读源（US-10 / D10「不猜、不部分解析」） ═══════════════
 
-test("T-7（US-10 · D10）: parseChecklistDoc —— 列数不足/无状态列 ⇒ null；实例验收表解析出条数与状态分布", () => {
+test("T-7（US-10 · D10）: parseChecklistDoc —— 列数不足/无状态列 ⇒ null；实例验收表解析出条数与状态分布", (t) => {
   // ① 阴性：不达标一律 null（**不部分解析**）
   assert.equal(parseChecklistDoc("| ID | 项目 | 证据 |\n|---|---|---|\n| 1 | a | b |"), null, "3 列 ⇒ null")
   assert.equal(parseChecklistDoc("| ID | 项目 | 说明 | 证据 |\n|---|---|---|---|\n| 1 | a | b | c |"), null, "4 列但**无状态列** ⇒ null")
@@ -1484,23 +1565,36 @@ test("T-7（US-10 · D10）: parseChecklistDoc —— 列数不足/无状态列 
   assert.equal(p.rows[0].pieces.command, false, "空格子不算「有命令」（`—` 也不算）")
   assert.equal(p.rows[1].pieces.command, true)
 
-  // ③ **真实验收档**（本仓实例）：条数与**独立数出**的数据行数相等
-  const realText = readFileSync(join(PLUGIN_DIR, "docs", "2026-09-05-defect-registry.md"), "utf8")
-  const real = parseChecklistDoc(realText)
-  assert.ok(real, "本仓真实登记表必须能被识别（≥4 列且含状态列）")
-  assert.equal(real.rows.length, firstTableDataRows(realText),
-    "解析出的条数必须 == 独立数出的数据行数（两处不同算法互证）")
-  assert.equal(real.counts.total, real.rows.length)
-  // ★ 2026-10-17 交付评审 #5：原断言 (=="UNKNOWN 恰等于行数") 把这条腿**钉死在该档当前的列形状**上
-  //   （状态列是中文长句 ⇒ 全部「未识别」）；该档将来把状态列改成英文枚举就会红 —— 那是
-  //   「对**不属于本契约**的文档形状的依赖」（R4 脆弱测试形态）。改为**守恒式**：
-  //   每一行必须恰好落进一个状态桶；UNKNOWN 作为**读数**打印，不再作断言。
-  const bucketSum = ["TODO", "DOING", "BLOCKED", "PASS", "FAIL", "UNKNOWN"]
-    .reduce((a, k) => a + (real.counts[k] ?? 0), 0)
-  assert.equal(bucketSum, real.rows.length,
-    "守恒式：各行必须恰好落进一个状态桶（桶和 == 行数）—— 实测桶和 " + bucketSum + " / 行数 "
-    + real.rows.length + " / UNKNOWN = " + (real.counts.UNKNOWN ?? 0) + "（读数，不作断言）")
-  assert.ok(real.columns.length >= 4, "列数 ≥4：实测 " + real.columns.length)
+  // ③ **真实验收档**（本仓实例）：**能解析才断言**（批 42 ⑧ / 设计档 §四 D-3）
+  //    ★ 为什么改：原写法要求「本仓这份文档此刻恰好可解析」—— 档一变（哪怕只加一行）或导出环境里
+  //      根本没有这份档，腿就红，且红的原因与本插件无关（R4 脆弱测试形态）。
+  //    ⇒ 现在：可解析 ⇒ 条数必须与**独立数出的**数据行数相等（判据**没有**放宽）；
+  //      不可解析/不存在 ⇒ **明确留痕**（t.diagnostic）而**不是**静默跳过（静默跳过 = 假腿）。
+  //    ★ 辨析：diagnostic 只记录「这条腿这次没跑」，不是「通过」—— 留痕不等于断言。
+  const realPath = join(PLUGIN_DIR, "docs", "2026-09-05-defect-registry.md")
+  const realText = existsSync(realPath) ? readFileSync(realPath, "utf8") : null
+  const real = realText === null ? null : parseChecklistDoc(realText)
+  if (real) {
+    assert.equal(real.rows.length, firstTableDataRows(realText),
+      "解析出的条数必须 == 独立数出的数据行数（两处不同算法互证）")
+    assert.equal(real.counts.total, real.rows.length)
+    // ★ 2026-10-17 交付评审 #5：原断言 (=="UNKNOWN 恰等于行数") 把这条腿**钉死在该档当前的列形状**上
+    //   （状态列是中文长句 ⇒ 全部「未识别」）；该档将来把状态列改成英文枚举就会红 —— 那是
+    //   「对**不属于本契约**的文档形状的依赖」（R4 脆弱测试形态）。改为**守恒式**：
+    //   每一行必须恰好落进一个状态桶；UNKNOWN 作为**读数**打印，不再作断言。
+    const bucketSum = ["TODO", "DOING", "BLOCKED", "PASS", "FAIL", "UNKNOWN"]
+      .reduce((a, k) => a + (real.counts[k] ?? 0), 0)
+    assert.equal(bucketSum, real.rows.length,
+      "守恒式：各行必须恰好落进一个状态桶（桶和 == 行数）—— 实测桶和 " + bucketSum + " / 行数 "
+      + real.rows.length + " / UNKNOWN = " + (real.counts.UNKNOWN ?? 0) + "（读数，不作断言）")
+    assert.ok(real.columns.length >= 4, "列数 ≥4：实测 " + real.columns.length)
+    t.diagnostic("T-7③ 真实验收档可解析：" + realPath + " ⇒ 条数断言已生效（" + real.rows.length + " 条）")
+  } else {
+    // 不可解析 / 档不存在：**留痕不静默**（批 42 ⑧ 的 diagnostic 分支；本节不得变成静默跳过）
+    t.diagnostic("T-7③ 真实验收档**不可解析**（" + realPath
+      + (realText === null ? "：文件不存在" : "：未找到 ≥4 列且含状态列的表格")
+      + "）—— 条数断言按设计（D-3）跳过；诊断留痕见本条 diagnostic")
+  }
 
   // ④ 文档**读入口**的边界（`readChecklistDocs`；定点修复 5 的安全型扩张，已登记设计档 §15.2）：
   //    **越出工作区的路径一律拒读** —— 配置不能变成任意文件读；且拒绝必须发生在**读之前**。
@@ -1523,6 +1617,27 @@ test("T-7（US-10 · D10）: parseChecklistDoc —— 列数不足/无状态列 
       "★ 越界路径必须**在读之前**被拒（loader 只应看到工作区内那一条）：实测 " + JSON.stringify(seen))
     // 谓词自证（防「凡路径皆拒」的假绿）：把同一份内容放到工作区**内** ⇒ 解析成功且拿到要数
     assert.ok(got[2].counts && got[2].counts.total === 6, "工作区内那条必须真的解析出 6 条：" + JSON.stringify(got[2].counts))
+
+    // ④-b（批 42 ⑧ · **套件内**跑 diagnostic 分支）：用 readChecklistDocs 的 **loader 注入缝**
+    //   （lib/tool-tasks.mjs:31 第三个参数，已导出）喂一份**不可解析**的文本 ⇒ 必须 ok:false 且
+    //   error 非空 —— **不许静默**（静默 = 不可解析的文档看起来像「没有待办」）。
+    //   ★ 不需要临时目录：loader 就是那条可注入的读取口（设计档 §八 T-7 的「做成可注入路径」）。
+    //   变异自证：把 if (!parsed) 分支写成「跳过该项」（不 push 结果）或回填 ok:true ⇒ 本段红。
+    const unparseable = readChecklistDocs({
+      ws,
+      docPaths: ["docs/unparseable.md"],
+      loader: () => "这是一段自由文本：没有 ≥4 列且含状态列的表格。",
+    })
+    assert.equal(unparseable.length, 1, "逐条给结果（不可解析也必须留下一条**结果项**，不能消失）")
+    assert.equal(unparseable[0].ok, false, "不可解析 ⇒ ok:false（不许静默当作成功）：" + JSON.stringify(unparseable[0]))
+    assert.ok(typeof unparseable[0].error === "string" && unparseable[0].error.length > 0,
+      "不可解析 ⇒ error 必须非空（留痕，不许静默）：" + JSON.stringify(unparseable[0]))
+    assert.equal(unparseable[0].rows, undefined, "不可解析 ⇒ **不部分解析**（不得回填空 rows 冒充成功）")
+    // 阳性对照（防「凡注入必拒」的假绿）：同一注入缝换成可解析文本 ⇒ ok:true
+    const okViaLoader = readChecklistDocs({ ws, docPaths: ["docs/ok.md"], loader: () => fixture })
+    assert.equal(okViaLoader.length, 1, "逐条给结果")
+    assert.equal(okViaLoader[0].ok, true, "同一注入缝喂可解析文本必须 ok:true：" + JSON.stringify(okViaLoader[0]))
+    assert.equal(okViaLoader[0].counts.total, 6, "可解析时条数照常给出：" + JSON.stringify(okViaLoader[0].counts))
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
@@ -1530,6 +1645,8 @@ test("T-7（US-10 · D10）: parseChecklistDoc —— 列数不足/无状态列 
 // 变异自证：允许 3 列也解析（把 `columns.length < 4` 改成 `< 1`）⇒ ① 红；把不认识的写法猜成默认状态
 // （如 `status = status ?? "TODO"`）⇒ ② 的 UNKNOWN 与 null 断言红；④ 把 `readChecklistDocs` 的越界
 // 分支删掉（`continue` 换成直接读）⇒ 越界两条断言 + `seen` 那条同时红。
+// ★ 批 42 ⑧：③ 改成「能解析才断言」后，**删掉真实档**或把它换成无表文档 ⇒ 本腿**不红**，
+//   但会打印一条 diagnostic（留痕，不静默）；④-b 的 loader 注入腿仍**必红**（不可解析 ⇒ ok:false）。
 
 /** 独立数法（与 `parseChecklistDoc` 不同的实现）：文档**第一张表**的数据行数（去掉表头与分隔线）。 */
 function firstTableDataRows(doc) {
@@ -1605,7 +1722,7 @@ test("T-9（US-9）: ledger.mode = off ⇒ 个人台账分区消失、**防漂�
 
 // ═══════════════ T-16：claim **只改 owner**（设计档 §16.4；交接 = 改归属不改状态） ═══════════════
 
-test("T-16（§16.2 · §16.4）: applyTaskClaim 只改 owner/claimedFrom，status/evidence/createdBy 逐字不变", () => {
+test("T-16（§16.2 · §16.4）: applyTaskClaim 只改 owner/claimedFrom，status/evidence/createdBy 逐字不变", async () => {
   const ws = freshWs()
   try {
     // 夹具：一条「旧会话留在在做」的活 + 一条已完成（带凭据）的条目 —— 两条都要经得起 claim
@@ -1644,12 +1761,12 @@ test("T-16（§16.2 · §16.4）: applyTaskClaim 只改 owner/claimedFrom，stat
 
     // ④ 阴性（同一道门）：缺会话 id / 条目不存在 / 陈旧 rev ⇒ 拒且**零写入**
     const cur = readTasksView(ws).rev
-    assertRejectNoWrite(ws, applyTaskClaim(ws, { id: "t-1", expectedRev: cur }), "owner-required")
-    assertRejectNoWrite(ws, applyTaskClaim(ws, { id: "t-404", sessionId: "s-new", expectedRev: cur }), "id-missing")
-    assertRejectNoWrite(ws, applyTaskClaim(ws, { id: "t-1", sessionId: "s-new", expectedRev: cur - 1 }), "rev-conflict")
+    assertRejectCode(await withZeroWrite(ws, () => applyTaskClaim(ws, { id: "t-1", expectedRev: cur })), "owner-required")
+    assertRejectCode(await withZeroWrite(ws, () => applyTaskClaim(ws, { id: "t-404", sessionId: "s-new", expectedRev: cur })), "id-missing")
+    assertRejectCode(await withZeroWrite(ws, () => applyTaskClaim(ws, { id: "t-1", sessionId: "s-new", expectedRev: cur - 1 })), "rev-conflict")
 
     // ⑤ 归属只有 claim 一条路：改单 / 状态迁移**都不得**动 owner（含试图直接写）
-    assertRejectNoWrite(ws, applyTaskUpdate(ws, { id: "t-1", patch: { owner: "s-evil" }, expectedRev: cur }), "field-not-updatable")
+    assertRejectCode(await withZeroWrite(ws, () => applyTaskUpdate(ws, { id: "t-1", patch: { owner: "s-evil" }, expectedRev: cur })), "field-not-updatable")
     assert.equal(applyTaskTransition(ws, { id: "t-1", to: "完成", evidence: "跑完了", expectedRev: cur }).ok, true)
     const t1b = readTasksView(ws).tasks.find((t) => t.id === "t-1")
     assert.equal(t1b.owner, "s-new", "状态迁移**不**改归属")
@@ -1942,6 +2059,17 @@ test("T-20（§16.3 · 铁律 4）: /task_done 无凭据 ⇒ 写门拒且零写�
     const byName = new Map(calls.registered.map((d) => [d.name, d]))
     const agent = { session: { id: "s-1", header: { cwd: ws } } }
     const sha0 = tasksFileSha256(ws)
+
+    // ★ 批 42 ⑨ **谓词逐字**（并入 T-20 命令块，不新开顶层用例）：commandArgsOf 只认首个捕获组
+    //   逐字相等，**不再**有 startsWith("task_") 兜底。
+    //   ① 名字匹配 ⇒ 仍正确剥出参数（回归；下面端到端的 ① 也依赖它）
+    //   ② 名字**不匹配** ⇒ **不剥**（旧兜底会把 /task_add x 的 x 当成 /task_done 的参数 ⇒
+    //      报出与用户输入无关的 id-missing，用户看不出是自己打错了命令）
+    //   变异自证：把谓词改回 m[1] === name || m[1].startsWith("task_") ⇒ ② 红。
+    assert.equal(commandArgsOf("task_done", "/task_done t-1"), "t-1", "① 名字匹配 ⇒ 必须剥出 t-1")
+    assert.equal(commandArgsOf("task_done", "/task_add x"), "/task_add x",
+      "② 名字不匹配 ⇒ **不剥**（原文整串交给写门去拒）")
+    assert.equal(commandArgsOf("task_done", "t-1"), "t-1", "无命令名的裸参数 ⇒ 原样当参数")
 
     // ① 无凭据 ⇒ **写门**拒（拒绝码 `evidence-required` 只有写门会产出 ⇒ 命令层确实把判定交出去了）
     const bad = await byName.get("task_done").handler({ rawInput: "/task_done t-1", agent })
