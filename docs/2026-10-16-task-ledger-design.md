@@ -974,3 +974,20 @@ DSH 0.2.1 **移除了** `subagent.start` 请求里的 `persona` / `toolFilter`�
 | **T-36** | 只读预设的工具面**不含**写/执行类（`tool-pwsh` / `tool-bash` / `tool-fs` 的写模式 / `tool-str-replace-editor` / `tool-jobs` / `tool-ralph` / `tool-workflow`） | 把 `tool-pwsh` 加进去 ⇒ 红 |
 | **T-37** | `package.json` 的 `@deepseek-ai/dsh` peer 下限 ≥ `0.2.1-rc.2` | 改回 `^0.2.0-rc.1` ⇒ 红 |
 | **T-38** | consult 派发带 `agentPreset: "thincoder-consult-ro"`；预设缺失时 **fail-closed**（不退化成无约束） | 删掉 agentPreset ⇒ 红；改成缺了也放行 ⇒ 红 |
+
+### 22.6 实施回填（2026-10-18 批39 落地）
+
+**落点**：`cordis.patch.yml:59`（`preset-thincoder-eng`）· `:212`（`preset-thincoder-consult-ro`）· `package.json` peer `^0.2.1-rc.2` · `lib/consult.mjs:955/973/1191/1213/1358/1413` · `lib/subagent-dispatch.mjs:105-136`。
+
+**★ 设计档未列、实施时必须做的两条移植修正**（都会让预设 `broken`）：
+
+| # | 老档写法 | 0.2.1 要求 | 后果 |
+|---|---|---|---|
+| 1 | `@deepseek-ai/dsh-persona` 的 `config.text:` | **`config.prefix`（必填）** + `complete: true` | 原样搬 ⇒ 预设 broken |
+| 2 | `tool-subagent` 的 `backgroundMode: continuable` / `enableRunInBackground: false` | 两个键**已不存在**（`persona`/`toolFilter` 更是显式抛错移除） | 原样搬 ⇒ 预设 broken |
+
+**包名核验判据（可复核）**：按 `app.asar` 的 **asar 头 JSON**（header 起始 offset 16）逐档列出，再对 `package.json#exports` 校验子路径 ⇒ `@deepseek-ai/` 下 306 个包中，本批引入的 **24 个（含 1 个子路径 `tool-subagent-control/list-agents`）全部命中**，版本一律 `0.2.1-rc.2`。
+
+**fail-closed 的超集（比设计档更严）**：除「未注册」外，**`broken` / `list()` 抛错 / 服务不可用**也一律拒绝派发 —— 工具面不是我们要的那一份，同样等于拿不到只读保证。
+
+**未验的部分（如实登记）**：**预设真的能被 `agentPresets.list()` 列出**这一步需**重启后**才能验；本批以「真 YAML 解析 + 24 个包名在 asar 内逐个核实 + 逐插件 `Config` 与老档逐键比对」作为静态证据链。

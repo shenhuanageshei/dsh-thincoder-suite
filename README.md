@@ -194,10 +194,10 @@ flowchart TD
 
 ## 安装
 
-要求：**DSH（DeepSeek Harness）本体**——**不需要桌面壳**（本机那种包装壳只是 DSH 的一种运行方式）。具体：**DSH ≥ `0.2.0-rc.1`**（`peerDependencies` 声明的门槛，由**平台自己**的组合兼容闸门在装配前执行；本版九条平台触点锁逐条对齐并真机验证过的版本是 **`0.2.0-rc.2`**）+ cordis `^4.0.0-rc.7` + web profile 标准服务（tools / llm / subagents / systemPrompt / webServer——webServer 缺失时仅设置页 API 降级，host 工具不受影响）。
+要求：**DSH（DeepSeek Harness）本体**——**不需要桌面壳**（本机那种包装壳只是 DSH 的一种运行方式）。具体：**DSH ≥ `0.2.1-rc.2`**（`peerDependencies` 声明的门槛，由**平台自己**的组合兼容闸门在装配前执行；本版九条平台触点锁逐条对齐并真机验证过的版本是 **`0.2.0-rc.2`**）+ cordis `^4.0.0-rc.7` + web profile 标准服务（tools / llm / subagents / systemPrompt / webServer——webServer 缺失时仅设置页 API 降级，host 工具不受影响）。
 
-> **⚠ 平台版本门槛（v0.30.0 起）**：**本版只支持 DSH ≥ `0.2.0-rc.1`**。
-> **如果你的 DSH 低于 `0.2.0-rc.1`（例如 `0.1.7-rc.2`），请改用旧版 release**：[**v0.29.11**](https://github.com/shenhuanageshei/dsh-thincoder-suite/releases/tag/v0.29.11)（及更早）支持 `0.1.7-rc.2`。
+> **⚠ 平台版本门槛（v0.30.0 起 · v0.33.0 上调）**：**本版只支持 DSH ≥ `0.2.1-rc.2`**（低版本由平台自身的 peer 兼容闸门**拒绝安装**，不会出现「装上了起不来」）。
+> **如果你的 DSH 低于 `0.2.1-rc.2`（例如 `0.2.0-rc.x` / `0.1.7-rc.2`），请改用旧版 release**：[**v0.29.11**](https://github.com/shenhuanageshei/dsh-thincoder-suite/releases/tag/v0.29.11)（及更早）支持 `0.1.7-rc.2`。
 > 硬装到低版平台上的表现是**整包被平台拦下**（不是半残运行）：插件管理页该包显示「异常」，启动日志出现 `dsh: skipping profile bundle "@dsh-external/dsh-thincoder-suite"`，并给出该包的 peer 范围与豁免指引——**这属于预期行为，不是安装损坏**。
 > 装配期还会有一条版本哨兵告警（`[thincoder-suite] 平台版本哨兵…`，只警告不阻断），两种形态都指向此处；也可随时调用只读工具 `contractWatch` 看当前平台版本、版本来源与九条触点锁现状。
 > **预期内的告警**：哨兵比对的是**本版验证过的那个平台版本**，所以同一 peer 区间里**别的**版本（例如将来的 `0.2.0-rc.3`，或区间内更早的 `0.2.0-rc.1`）也会各打**一次**告警——那不是在断言「不支持」，而是提示「本版尚未对该版本复核过」，照 `contractWatch` 走一遍九条触点锁即可（这正是它存在的意义）。

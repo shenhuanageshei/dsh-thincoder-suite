@@ -103,8 +103,10 @@ function makeJobs() {
   }
 }
 
-/** deps stub：ctx.subagents 假服务 + 假 jobs 服务 + 会话级 state（真实 sessionState 形状）。 */
-function makeDeps({ subagents, signal, config = {}, noJobs = false } = {}) {
+/** deps stub：ctx.subagents 假服务 + 假 jobs 服务 + 会话级 state（真实 sessionState 形状）。
+ *  `services`：额外宿主服务（批 39 的 `agentPresets` 假注册表就由此注入；缺省 ⇒ 一律 null，
+ *  与「服务缺席」同义——这正是 T-29/T-38 的负向夹具）。 */
+function makeDeps({ subagents, signal, config = {}, noJobs = false, services = null } = {}) {
   const sessionId = "consult-test-" + (++seq)
   const state = sessionState(sessionId)
   const j = makeJobs()
@@ -118,7 +120,13 @@ function makeDeps({ subagents, signal, config = {}, noJobs = false } = {}) {
     cwd,
     dshHome,
     deps: {
-      ctx: { subagents, get: (svc) => (svc === "jobs" && !noJobs ? j.jobs : null) },
+      ctx: {
+        subagents,
+        get: (svc) => {
+          if (svc === "jobs" && !noJobs) return j.jobs
+          return services && Object.hasOwn(services, svc) ? services[svc] : null
+        },
+      },
       agent: {
         session: { id: sessionId, header: { cwd }, deriveMessages: () => [] },
         options: { provider: "p", model: "m" },
@@ -1436,5 +1444,196 @@ test("A29-7 (D-52): 会诊只读白名单对位锁——静态成员集 = 只读
     /拒绝派发/,
     "新宿主不遵守组合字段 ⇒ 默认拒绝派发（只有显式 allowUnsupportedComposition 才降级）",
   )
+
+  // ═════ 批 39 / 设计档 §二十二 22.5：Agent Preset 随包分发的四条腿（T-35…T-38）═════
+  //
+  // 受测对象 = 本**仓**的三处交付面：cordis.patch.yml 的两条 preset 行（T-35 / T-36）·
+  // package.json 的 peer 下限（T-37）· consult 的派发与 fail-closed（T-38）。全部并入本块
+  // （台账 §三零改：零新增顶层 test(）。
+
+  // —— T-35：两条 preset 行都在，config.id 精确，plugins 非空 ——
+  const patchSrc = readFileSync(new URL("../cordis.patch.yml", import.meta.url), "utf8")
+  /** 从 patch 源码切出一行 Loader 条目：以同缩进的 `- id:` 兄弟行收尾（缩进感知，避免吞掉相邻行）。 */
+  const loaderRow = (src, rowId) => {
+    const esc = rowId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const head = new RegExp("^( *)- id: " + esc + "[ \\t]*$", "m")
+    const m = head.exec(src)
+    if (!m) return null
+    const sib = new RegExp("^" + m[1] + "- id: ", "gm")
+    sib.lastIndex = m.index + m[0].length
+    const n = sib.exec(src)
+    return src.slice(m.index, n ? n.index : src.length)
+  }
+  assert.equal(loaderRow(patchSrc, "preset-does-not-exist"), null,
+    "T-35 谓词自证：不存在的行名必须切不到（切片器不是恒真）")
+  const engPresetSrc = loaderRow(patchSrc, "preset-thincoder-eng")
+  const roPresetSrc = loaderRow(patchSrc, "preset-thincoder-consult-ro")
+  assert.ok(engPresetSrc !== null && roPresetSrc !== null,
+    "T-35：cordis.patch.yml 必须含两条 preset 行（preset-thincoder-eng / preset-thincoder-consult-ro）")
+  for (const [label, block, wantId] of [
+    ["thincoder-eng", engPresetSrc, "thincoder-eng"],
+    ["thincoder-consult-ro", roPresetSrc, "thincoder-consult-ro"],
+  ]) {
+    assert.match(block, /name:[ \t]*'@deepseek-ai\/dsh-agent-preset'/,
+      "T-35：" + label + " 必须是 @deepseek-ai/dsh-agent-preset 的 Loader 条目")
+    assert.match(block, new RegExp("^ +id: " + wantId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?:[ \\t]+#.*)?[ \\t]*$", "m"),
+      "T-35：" + label + " 的 config.id 必须逐字为 " + wantId + "（插件侧按它认会话）")
+    assert.match(block, /^ +plugins:[ \t]*\n(?: +.*\n)*? +- id: /m,
+      "T-35：" + label + " 的 plugins 必须是非空的行清单（schema 要求 id + plugins）")
+    // 行清单至少有一项：块内 `- id:` 出现次数 > 1（第 1 次是行自身）
+    assert.ok([...block.matchAll(/^ +- id: \S+[ \t]*$/gm)].length > 1,
+      "T-35：" + label + " 的 plugins 不得为空")
+  }
+
+  // —— T-36：只读预设**不含**写/执行类；fs 写能力由 config 关掉；读面仍在 ——
+  /** 块内所有 `name:` 值（**只认带引号的 name 行**——注释里点名的裸词不算，防假阳性）。 */
+  const namesIn = (block) => [...block.matchAll(/^[ \t]+name:[ \t]*'([^']+)'[ \t]*$/gm)].map((m) => m[1])
+  const roNames = namesIn(roPresetSrc)
+  const RO_FORBIDDEN = [
+    "@deepseek-ai/dsh-tool-pwsh", "@deepseek-ai/dsh-tool-bash",
+    "@deepseek-ai/dsh-tool-bash-persistent", "@deepseek-ai/dsh-tool-pwsh-persistent",
+    "@deepseek-ai/dsh-tool-terminal", "@deepseek-ai/dsh-tool-str-replace-editor",
+    "@deepseek-ai/dsh-tool-jobs", "@deepseek-ai/dsh-tool-ralph",
+    "@deepseek-ai/dsh-tool-workflow", "@deepseek-ai/dsh-workflow-ptc",
+    "@deepseek-ai/dsh-tool-subagent", "@deepseek-ai/dsh-tool-cordis",
+  ]
+  // 谓词自证：塞一个写类工具进去必须被判出（本断言不恒真）
+  assert.deepEqual(
+    ["@deepseek-ai/dsh-tool-fs", "@deepseek-ai/dsh-tool-pwsh"].filter((n) => RO_FORBIDDEN.includes(n)),
+    ["@deepseek-ai/dsh-tool-pwsh"], "T-36 谓词自证：写/执行类名单必须能判出违规成员")
+  assert.deepEqual(roNames.filter((n) => RO_FORBIDDEN.includes(n)), [],
+    "T-36：只读预设不得含写/执行/后台作业/再委派类工具：" + JSON.stringify(roNames))
+  // tool-fs 的写能力：0.2.1 的 tool-fs Config 有 write / edit 两个开关 ⇒ 必须逐字关掉
+  const roFsRow = loaderRow(roPresetSrc, "tool-fs")
+  assert.ok(roFsRow !== null, "T-36：只读预设的 tool-fs 行必须可定位")
+  assert.match(roFsRow, /^ +write: false[ \t]*$/m, "T-36：tool-fs 的 write 必须显式关掉（不能靠缺省）")
+  assert.match(roFsRow, /^ +edit: false[ \t]*$/m, "T-36：tool-fs 的 edit 必须显式关掉（不能靠缺省）")
+  // 只读面必须**还在**（不然「砍干净」也能让上一条恒绿）
+  for (const need of ["@deepseek-ai/dsh-tool-fs", "@deepseek-ai/dsh-tool-fs-search",
+    "@deepseek-ai/dsh-tool-web", "@deepseek-ai/dsh-tool-skill"]) {
+    assert.ok(roNames.includes(need), "T-36：只读预设必须保留读/检索类行：" + need + "（实得 " + JSON.stringify(roNames) + "）")
+  }
+
+  // —— T-37：package.json 的 @deepseek-ai/dsh peer 下限 ≥ 0.2.1-rc.2 ——
+  /** 极简 semver 比较（只服务本腿：major.minor.patch + 可选 prerelease，语义按 semver §11）。 */
+  const parseVer = (s) => {
+    const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(s))
+    return m ? { nums: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] ?? null } : null
+  }
+  const cmpVer = (a, b) => {
+    for (let i = 0; i < 3; i++) if (a.nums[i] !== b.nums[i]) return a.nums[i] < b.nums[i] ? -1 : 1
+    if (a.pre === null && b.pre === null) return 0
+    if (a.pre === null) return 1          // 正式版 > 同号预发布
+    if (b.pre === null) return -1
+    const pa = a.pre.split("."), pb = b.pre.split(".")
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      if (pa[i] === undefined) return -1
+      if (pb[i] === undefined) return 1
+      const na = /^\d+$/.test(pa[i]), nb = /^\d+$/.test(pb[i])
+      if (na && nb) { const x = Number(pa[i]), y = Number(pb[i]); if (x !== y) return x < y ? -1 : 1 }
+      else if (na !== nb) return na ? -1 : 1   // 数字标识符 < 字母标识符
+      else if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1
+    }
+    return 0
+  }
+  const floorAtLeast = (range, floor) => {
+    const m = /^\^\s*([0-9A-Za-z.+-]+)$/.exec(String(range).trim())
+    if (!m) return false
+    const a = parseVer(m[1]), b = parseVer(floor)
+    return a !== null && b !== null && cmpVer(a, b) >= 0
+  }
+  // 比较器自证（四个方向都要对；否则「≥」恒真/恒假都能混过）
+  assert.equal(floorAtLeast("^0.2.1-rc.2", "0.2.1-rc.2"), true, "T-37 谓词自证：等于下限 ⇒ 通过")
+  assert.equal(floorAtLeast("^0.2.0-rc.1", "0.2.1-rc.2"), false, "T-37 谓词自证：低于下限 ⇒ 不通过")
+  assert.equal(floorAtLeast("^0.2.2", "0.2.1-rc.2"), true, "T-37 谓词自证：更高正式版 ⇒ 通过")
+  assert.equal(floorAtLeast("^0.1.7-rc.2", "0.2.1-rc.2"), false, "T-37 谓词自证：老宿主下限 ⇒ 不通过")
+  assert.equal(floorAtLeast("^0.2.1-rc.1", "0.2.1-rc.2"), false, "T-37 谓词自证：低一个 rc ⇒ 不通过")
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))
+  const dshPeer = String(pkg?.peerDependencies?.["@deepseek-ai/dsh"] ?? "")
+  assert.ok(floorAtLeast(dshPeer, "0.2.1-rc.2"),
+    "T-37：@deepseek-ai/dsh 的 peer 下限必须 ≥ 0.2.1-rc.2（低版本由平台 peer 闸门拒绝安装）：实际 "
+      + JSON.stringify(dshPeer))
+
+  // —— T-38 ★：派发带 agentPreset；预设缺失/不可用 ⇒ fail-closed（零派发） ——
+  // 正向：注册表里有只读预设 ⇒ consult 恢复可用，且 spec.request 里 agentPreset 逐字在场、
+  //       **不带** toolFilter / persona（0.2.1 契约里没有它们，夹带只会被剥掉或拒绝）。
+  const t38Calls = []
+  const t38Provider = {
+    name: "spawn",
+    capabilities: { agentOptions: true, agentPreset: true, outputSchema: true, depthLimit: true },
+    async prepareContinuable() { return {} },
+  }
+  const t38Host = {
+    getProvider: (name) => (name === "spawn" ? t38Provider : undefined),
+    async startActivation(spec) {
+      t38Calls.push(spec)
+      return {
+        childId: "t38-child",
+        result: Promise.resolve({ output: [{ type: "text", text: "ro-ok" }], stopReason: "completed" }),
+        dispose: async () => {},
+      }
+    },
+  }
+  const t38Presets = {
+    async list() { return [{ id: "standard" }, { id: "thincoder-consult-ro" }] },
+  }
+  const hT38 = makeDeps({ subagents: t38Host, services: { agentPresets: t38Presets } })
+  try {
+    const r38 = await startConsultSession(hT38.deps, "problem", undefined)
+    assert.ok(r38 && r38.error === undefined,
+      "T-38：只读预设已注册 ⇒ consult 必须恢复可用（不再 fail-closed）：" + JSON.stringify(r38))
+    await waitFor(() => t38Calls.length >= 1)
+    assert.equal(t38Calls[0].request.agentPreset, "thincoder-consult-ro",
+      "T-38：派发必须带 agentPreset = 随包分发的只读预设（实得 "
+        + JSON.stringify(t38Calls[0].request.agentPreset) + "）")
+    assert.equal("toolFilter" in t38Calls[0].request, false,
+      "T-38：预设路线不得再夹带 toolFilter（0.2.1 契约不含它）")
+    assert.equal("persona" in t38Calls[0].request, false,
+      "T-38：预设路线不得再夹带 persona（0.2.1 契约不含它）")
+  } finally { cleanup(hT38.sessionId, hT38.state) }
+
+  // 负向①：注册表里**没有**该 id ⇒ 拒绝运行 + 零派发（绝不退化成无约束会诊）
+  const t38bCalls = []
+  const t38bHost = {
+    getProvider: () => t38Provider,
+    async startActivation(spec) {
+      t38bCalls.push(spec)
+      return { childId: "t38b-child", result: Promise.resolve({ output: [], stopReason: "completed" }), dispose: async () => {} }
+    },
+  }
+  const hT38b = makeDeps({
+    subagents: t38bHost,
+    services: { agentPresets: { async list() { return [{ id: "standard" }] } } },
+  })
+  try {
+    const r38b = await startConsultSession(hT38b.deps, "problem", undefined)
+    assert.ok(r38b && typeof r38b.error === "string",
+      "T-38：只读预设缺失 ⇒ 必须拒绝运行：" + JSON.stringify(r38b))
+    assert.match(r38b.error, /只读预设缺失/, "T-38：拒绝文案必须点名「只读预设缺失」")
+    assert.match(r38b.error, /无法保证只读/, "T-38：拒绝文案必须点明「无法保证只读」")
+    assert.match(r38b.error, /拒绝运行/, "T-38：拒绝文案必须点明「拒绝运行」")
+    assert.equal(t38bCalls.length, 0,
+      "T-38：预设缺失时不得派发任何子代理（实调 " + t38bCalls.length + " 次）")
+  } finally { cleanup(hT38b.sessionId, hT38b.state) }
+
+  // 负向②：注册了但**挂载失败**（broken）⇒ 同样 fail-closed（工具面不是我们要的那一份）
+  const t38cCalls = []
+  const t38cHost = {
+    getProvider: () => t38Provider,
+    async startActivation(spec) {
+      t38cCalls.push(spec)
+      return { childId: "t38c-child", result: Promise.resolve({ output: [], stopReason: "completed" }), dispose: async () => {} }
+    },
+  }
+  const hT38c = makeDeps({
+    subagents: t38cHost,
+    services: { agentPresets: { async list() { return [{ id: "thincoder-consult-ro", broken: "row tool-fs: never started" }] } } },
+  })
+  try {
+    const r38c = await startConsultSession(hT38c.deps, "problem", undefined)
+    assert.ok(r38c && typeof r38c.error === "string", "T-38：broken 预设 ⇒ 拒绝运行：" + JSON.stringify(r38c))
+    assert.match(r38c.error, /只读预设不可用/, "T-38：broken 预设的拒绝文案必须点明「只读预设不可用」")
+    assert.equal(t38cCalls.length, 0, "T-38：broken 预设时不得派发任何子代理")
+  } finally { cleanup(hT38c.sessionId, hT38c.state) }
 })
 

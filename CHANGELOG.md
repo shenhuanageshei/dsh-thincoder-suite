@@ -2,6 +2,59 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.33.0] — 2026-10-18
+
+> **一句话（人话）**：DSH 0.2.1 把「限制子代理能用哪些工具」的开关**删掉了** —— 我们的**会诊**因此一度停摆。这版把限制搬进 **DSH 的 Agent Preset**（随插件分发），**会诊的 dsh 通道恢复可用**；顺带把你丢的**工程模式预设**也补回来了。
+
+**【计数行】**：`node --test` **652/652**（**基线 652 + 本批 0**：四条新腿 T-35…T-38 **全部并入既有顶层块** ⇒ 用例总数与档数不变）。
+
+**一、为什么要做（人话）**
+
+DSH 0.2.1 移除了子代理请求里的 `persona` / `toolFilter`（源码原话：`is no longer supported`），替代方案是 **Agent Preset**。
+`consult`（会诊）原本靠 `toolFilter` 保证「**只看不改**」—— 开关没了，上一版只能让它**拒绝运行**。
+
+**这版把限制搬回来了**，而且**随插件分发**：装上就有，不用手写配置。
+
+**二、你会看到什么**
+
+· **会诊的 dsh 通道恢复** —— 你那 4 家（deepseek / zai / kimi / opencode）重新可用，只读由预设的工具面保证。
+· **工程模式预设回来了** —— `thincoder-eng` 随插件分发；新建会话选它，**第一句就进工程模式**（不再需要那个已经失效的 `~/.dsh/.agent-presets/` 目录）。
+
+**三、技术面**
+
+| 项 | 内容 |
+|---|---|
+| **两条预设随包分发** | `cordis.patch.yml` 新增 `preset-thincoder-eng` · `preset-thincoder-consult-ro`（`name: '@deepseek-ai/dsh-agent-preset'`，`config.id` 逐字） |
+| **只读工具面** | 只留读/检索：`tool-fs`（`write:false`/`edit:false`）· `tool-fs-search` · `skill-filesystem` · `tool-skill` · `tool-web` · `agent-instructions` · compaction 组。**刻意不含** bash / pwsh / str-replace-editor / jobs / ralph / workflow / subagent |
+| **会诊派发** | 带 `agentPreset: "thincoder-consult-ro"`；★ **预设缺失 / `broken` / 服务不可用 ⇒ 仍 fail-closed**，绝不退化成无约束会诊 |
+| **版本守卫** | peer `@deepseek-ai/dsh` 由 `^0.2.0-rc.1` 提到 **`^0.2.1-rc.2`** ⇒ 低版本由平台 peer 闸门**拒绝安装**，不会「装上了起不来」 |
+| **平台基线** | `PLATFORM_VERSION_BASELINE` → `0.2.1-rc.2` |
+
+**四、移植时踩到的两个坑（老预设照搬必挂）**
+
+1. `dsh-persona` 的 `config.text:` → 0.2.1 要求 **`config.prefix`（必填）** + `complete: true`
+2. `tool-subagent` 的 `backgroundMode` / `enableRunInBackground` → **已不存在**（`persona`/`toolFilter` 更是显式抛错移除）
+
+**五、验证读数（父会话亲跑）**
+
+```
+node --test test/consult.test.mjs        ⇒ 7/7    exit 0
+node --test test/advisor-config.test.mjs ⇒ 67/67  exit 0
+node --test test/tasks.test.mjs          ⇒ 21/21  exit 0
+node --test test/config-api.test.mjs     ⇒ 34/34  exit 0
+node --test                              ⇒ 652/652 exit 0
+node --test doc-hygiene + test-lifecycle ⇒ 31/31  exit 0
+```
+
+新腿 **T-35**（两条 preset 行在场）· **T-36**（只读预设不含写/执行类）· **T-37**（peer 下限）· **T-38**（派发带 `agentPreset`；预设缺失/`broken` 时 fail-closed），每条都做过**变异自证**。
+
+**六、诚实清单**
+
+1. ★ **「预设真的能挂起来」这一步没有真机验证** —— 要**重启 DSH** 才能确认。本批用「真 YAML 解析 + **24 个包名在 asar 头 JSON 里逐个核实**（含 1 个子路径）+ 逐插件 `Config` 与老档逐键比对」作为静态证据链。
+2. **只读的残余面**：平台的语义是「作用域注册只遮蔽全局」⇒ 预设能收窄的是**预设贡献的那一层**；其它插件在宿主面全局注册的工具**无法被预设隐藏**。所以 `CONSULT_READONLY_DISCLAIMER` 那句「本部署无法保证只读」**依然成立**，本批没有改写它。
+3. **只读预设没有 persona 行** —— 子代理拿部署级 persona。会诊在生产从来没传过人格，不构成降级。
+4. **`viz/` 仍未跟踪**（我的 UI 原型），一直没定留还是删。
+
 ## [0.32.0] — 2026-10-18
 
 > **一句话（人话）**：侧栏看板**看得懂了**——任务带**优先级徽标**、顶部一张**五态环形图**、默认**展开**、卡片改成**毛玻璃**；设置页从「一堆裸配置键」重构成**4 个 tab + 全中文人话**。
