@@ -561,6 +561,11 @@ test("U3c2 (D10-10 / AC-D5 / 锚 M6): 设置页可产出的顶层键 ⊆ 服务�
     { ledger: { mode: "standalone", docPathsText: "", copyTemplate: tooLong } }, // 超长模板
     { ledger: { mode: "standalone", docPathsText: "", copyTemplate: atLimit } }, // 恰好上限
     { ledger: { mode: "standalone", docPaths: "not-an-array", copyTemplate: "话术" } },
+    // ★ 批 44 修复轮 2（交付代码评审 #2）：旧 10 条夹具**不覆盖****数组侧** trim 变体 / 稀疏数组 ⇒ 实测把镜像的
+    //   `trim` 去掉、或把 `Array.from(paths).every` 换成 `paths.every`，本腿仍全绿（**假腿**）。
+    //   下面两条就是给这两个洞各补一条**能红**的夹具：
+    { ledger: { mode: "standalone", docPaths: [" a.md ", "a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md"], copyTemplate: "话术" } }, // ① trim 变体 + 重复（数组侧；文本侧的空行/空白由 textToDocPaths 吃掉）
+    { ledger: { mode: "standalone", docPaths: Array(9), copyTemplate: "话术" } }, // ② 稀疏数组：空洞必须被 Array.from 稠密化后才逐项判非法
   ]
   for (const fx of lgFixtures) {
     assert.deepEqual(mirror.ledgerDraftErrors(fx), lgDraftErrors(fx),
