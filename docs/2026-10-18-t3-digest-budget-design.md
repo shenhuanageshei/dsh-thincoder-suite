@@ -99,10 +99,22 @@ renderTaskDigest(view, opts):
 
 assembleInjection(adLine, taskLine):
   前置：两段都是字符串（可能为空）
-  后置：总长 ≤ INJECT_TOTAL_MAX_CHARS；**adLine 不裁**
-  if adLine.length + 1 + taskLine.length <= INJECT_TOTAL_MAX_CHARS: return [adLine, taskLine].join("\n")
-  可用 = INJECT_TOTAL_MAX_CHARS - adLine.length - 1 - TAIL_RESERVE
-  return [adLine, clipLines(taskLine, 可用) + "\n…（摘要已截断）"].join("\n")
+  后置：总长 ≤ INJECT_TOTAL_MAX_CHARS；**adLine 一律不裁**（纪律面优先）
+  若 adLine.length >= INJECT_TOTAL_MAX_CHARS:
+      ⇒ 直接返回 adLine（摘要整段让位），**不**再拼半行 —— 宁可没有摘要，不留残句
+  if adLine.length + 1 + taskLine.length <= INJECT_TOTAL_MAX_CHARS:
+      return [adLine, taskLine].join("\n")
+  TAIL = "\n…（摘要已截断）"
+  预算内可用 = INJECT_TOTAL_MAX_CHARS - adLine.length - 1 - TAIL.length
+  clipLines(taskLine, 可用)：**按行**累加，**首行（摘要头 rev/计数）必留**，
+      之后每行只有在「已用 + 该行长度 + 1 ≤ 可用」时才追加；
+      一旦某行放不下 ⇒ **停止**（不切半行、不跳行续接）
+  若连首行都放不下 ⇒ 返回 [adLine, "…（摘要已截断）"]（不带残行）
+  return [adLine, clipLines(...) + TAIL].join("\n")
+
+前置/后置补充：
+  · 纯函数、无 IO、确定性（同入参 ⇒ 逐字节同输出，可被 T-4e 直接对拍）
+  · 不做字节级裁剪（本批只按字符计量，见 §十二 第 1 条）
 ```
 
 ---
