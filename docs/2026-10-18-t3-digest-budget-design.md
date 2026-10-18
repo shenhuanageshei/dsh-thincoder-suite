@@ -117,6 +117,11 @@ assembleInjection(adLine, taskLine):
 
 **不新增测试档**；并进既有 `test/tasks.test.mjs` 的既有块（**顶层 `test(` 保持 21**，全量保持 **660**）：
 
+★ **必须先改一条既有腿**（本轮核对发现）：**T-5**（`test/tasks.test.mjs:505`）现在写死 `long.length <= 512`。
+预算改 768 后它会**立刻变红**。正确处置不是放宽数字，而是**改引常量**：`<= DIGEST_MAX_CHARS`
+（腿的原意是「有界」，不是「恰好 512」）。其 40 条决策项夹具（每条 ≈60 字符中文）**仍会溢出 768**，
+所以 T-5 的尾串与「列出 + 还有 = 总数」两条断言**照旧成立**。
+
 | 腿 | 判据 |
 |---|---|
 | **T-4c**（并入既有 T-4 块） | **Top-N 截断可见**：30 条活任务 ⇒ 摘要含 `…还有 25 项`（旧行为：不含 ⇒ 红） |
@@ -151,7 +156,7 @@ assembleInjection(adLine, taskLine):
 |---|---|
 | `lib/tasks.mjs` | FR-1 常量 + FR-2 尾串口径（`listable` 改全量） |
 | `lib/index.mjs` | FR-3 注入合计上限 |
-| `test/tasks.test.mjs` | T-4c/T-4d/T-4e 三条断言（并入既有块） |
+| `test/tasks.test.mjs` | **T-5 的 `<= 512` 改 `<= DIGEST_MAX_CHARS`**（引常量）+ T-4c/T-4d/T-4e 三条断言（并入既有块） |
 | `docs/2026-10-16-task-ledger-design.md` | §十一 U-4 写入实测数字（FR-4） |
 | `CHANGELOG.md` / `package.json` / 交接档 / `.thincoder/tasks.json` | 收口（版本 + `t-3` 结项） |
 
