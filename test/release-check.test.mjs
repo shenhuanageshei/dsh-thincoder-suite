@@ -79,7 +79,8 @@ test("G-常驻4: 依赖键集合不变（零新增依赖）+ 门的 script 已�
   assert.deepEqual(Object.keys(pkg.devDependencies ?? {}), [], "devDependencies 键集合必须为空（现状）——加一个键即红")
   // ★ 批 31 上调（单点登记）：peerDependencies 由 ["cordis"] → ["@deepseek-ai/dsh", "cordis"]。
   //   理由 = peer 不是依赖：`@deepseek-ai/dsh` 是**宿主**提供的运行时，声明它只把「本版只支持
-  //   DSH ≥ 0.2.0-rc.1」交给**平台自己的**组合兼容闸门（evaluatePluginCompatibility）在装配前执行；
+  //   DSH ≥ 0.2.0-rc.1」（★ 批39 起该下限已抬到 **0.2.1-rc.2**，见 package.json 与 README 门槛节；
+  //   本句保留批 31 当时的写法作历史记录）交给**平台自己的**组合兼容闸门（evaluatePluginCompatibility）在装配前执行；
   //   零新增依赖口径（dependencies/devDependencies 两空）逐字不变。刻意**不做**「dsh 前缀白名单」
   //   式的宽松断言——那会让任何 @deepseek-ai/dsh-* peer 静默通过（本次要的就是逐键可审计）。
   assert.deepEqual(Object.keys(pkg.peerDependencies ?? {}), ["@deepseek-ai/dsh", "cordis"],
