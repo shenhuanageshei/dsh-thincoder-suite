@@ -35,7 +35,11 @@ import {
   undigestedConsultSessions, CONSULT_DIGEST_REPLY_CAP,
   // 批 30 / US-5：注入面消毒（A30-8）与落盘日志定位 slug（A30-9 的证据通道）
   sanitizeInjectedText, projectKeySlug,
+  // 批 41（台账 t-6）：只读预设**内容**闸门的受测入口（T-39…T-41 直接驱动它，不手搓等价物）
+  resolveConsultReadonlyRoute,
 } from "../lib/consult.mjs"
+// 批 41（台账 t-6 / 设计档 §五 FR-1）：发货模块名常量的单一事实源（T-42 的静态同步锁对位它）
+import { CONSULT_READONLY_MODULES } from "../lib/preset-readonly-guard.mjs"
 // 批 30 / US-6（D30-6 · 锚 A30-10/A30-12）：**模型面**证据的捕获与成文（eng.mjs 侧实现，
 // 读取器复用 consult.mjs 的补导出——设计 §2.6「不得新建模块」）
 import { readChildModelToolSurface, renderModelSurfaceEvidence } from "../lib/eng.mjs"
@@ -1657,4 +1661,297 @@ test("A29-7 (D-52): 会诊只读白名单对位锁——静态成员集 = 只读
       "T-38：broken:false（健康）⇒ 必须放行，不得误判为 broken：" + JSON.stringify(r38d))
   } finally { cleanup(hT38d.sessionId, hT38d.state) }
 })
+
+// ═════════ 批 41（台账 t-6 / 设计档 docs/2026-10-18-consult-preset-drift-design.md §八）═════════
+// 只读会诊预设的「内容漂移」检测——四条顶层腿（T-39 … T-42）。
+//
+// 受测对象：
+//   T-39 / T-40 / T-41 = lib/consult.mjs 的 resolveConsultReadonlyRoute（内容层）+ lib/preset-readonly-guard.mjs；
+//   T-42 = 发货定义 cordis.patch.yml 与 CONSULT_READONLY_MODULES 的**静态同步锁**。
+// ★ 三条纪律（设计档 §八）：① 每条腿都必须**能红**（变异自证读数见交付报告）；
+//   ② T-42 的解析规则**写死在腿里**（不引 YAML 解析器——本仓零依赖）；
+//   ③ 停用行与顺序都按 D-1 / 评审 #9 判（先滤行再取名、顺序无关）。
+// ★ 夹具全部是**注入的 agentPresets 桩对象**，零真实服务、零 LLM 调用。
+
+/** 发货模块名 → compositionInventory 的扁平化声明行（enabled 缺省 = 在用）。 */
+const shippedRows = (names = CONSULT_READONLY_MODULES) =>
+  names.map((moduleName, i) => ({ entryId: "e" + i, moduleName }))
+
+/** 0.2.1 预设路线的假宿主（与 T-38 的 t38Host 同形；本组只看闸门判定，不校验派发载荷）。 */
+function roPresetHost() {
+  return {
+    getProvider: () => ({
+      name: "spawn",
+      capabilities: { agentOptions: true, agentPreset: true, outputSchema: true, depthLimit: true },
+      async prepareContinuable() { return {} },
+    }),
+    async startActivation() {
+      return {
+        childId: "ro-child",
+        result: Promise.resolve({ output: [{ type: "text", text: "ro-ok" }], stopReason: "completed" }),
+        dispose: async () => {},
+      }
+    },
+  }
+}
+
+/** ctx：预设路线 + 注入的 agentPresets 桩（**不碰真实服务**）。 */
+const roPresetCtx = (presets) => ({ subagents: roPresetHost(), get: (n) => (n === "agentPresets" ? presets : null) })
+
+/**
+ * 注入的 agentPresets 桩：list() 恒说「已注册」；观测面的四种失效形态各由一个开关造出来
+ * （T-41 的受测面：无 inventory / inventory 抛错 / readDocument 抛错 / 缺该预设行）。
+ */
+function presetsStub({ rows = null, content = null, inventory, noInventory = false, inventoryThrows = false, docThrows = false, noReadDocument = false } = {}) {
+  const p = {
+    async list() { return [{ id: "standard" }, { id: "thincoder-consult-ro" }] },
+    async readDocument() {
+      if (docThrows) throw new Error("readDocument boom")
+      return { agentPreset: "thincoder-consult-ro", content }
+    },
+  }
+  if (noReadDocument) delete p.readDocument
+  if (!noInventory) {
+    p.compositionInventory = async () => {
+      if (inventoryThrows) throw new Error("compositionInventory boom")
+      return inventory !== undefined
+        ? inventory
+        : [{ id: "standard", rows: [] }, { id: "thincoder-consult-ro", rows }]
+    }
+  }
+  return p
+}
+
+/** 正常内容的 YAML 形态（与发货定义同形：写 / 改显式 false）。 */
+const RO_GOOD_DOC = "plugins:\n  - id: tool-fs\n    name: '@deepseek-ai/dsh-tool-fs'\n    config:\n      write: false\n      edit: false\n"
+
+test("T-39（批 41 · 设计档 §八）：模块集合漂移——精确等值（顺序无关），多出 / 缺失 / 停用三向各自判红", async () => {
+  // ① 集合完全一致（**顺序打乱**）⇒ 放行
+  const shuffled = [...CONSULT_READONLY_MODULES].reverse()
+  assert.notDeepEqual(shuffled, [...CONSULT_READONLY_MODULES], "T-39① 前置：顺序确实被打乱（否则「顺序无关」没被测到）")
+  const r1 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(shuffled), content: RO_GOOD_DOC })))
+  assert.equal(r1.ok, true, "T-39①：集合等值（顺序不同）⇒ 必须放行：" + JSON.stringify(r1))
+  assert.equal(r1.degraded, null, "T-39①：两层都核验通过 ⇒ degraded 必须恰为 null（不得用空串/含糊值冒充「验过」）")
+
+  // ② 多一个 tool-pwsh ⇒ 拒绝；reason 点名它**且**带「（写/执行类）」文案
+  const r2 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({
+    rows: shippedRows([...CONSULT_READONLY_MODULES, "@deepseek-ai/dsh-tool-pwsh"]), content: RO_GOOD_DOC,
+  })))
+  assert.equal(r2.ok, false, "T-39②：多出的模块必须判红：" + JSON.stringify(r2))
+  assert.match(String(r2.reason), /无法保证只读/, "T-39②：拒绝文案必含「无法保证只读」（T-29 判据）")
+  assert.ok(String(r2.reason).includes("多出"), "T-39②：必须点明是「多出」：" + r2.reason)
+  assert.ok(String(r2.reason).includes("@deepseek-ai/dsh-tool-pwsh"), "T-39②：必须点名多出的模块：" + r2.reason)
+  assert.ok(String(r2.reason).includes("（写/执行类）"),
+    "T-39②：词表只做**文案解释器**（拒因来自集合层，评审 #1）——多出的执行类模块必须被解释：" + r2.reason)
+
+  // ③ 少一个 tool-web ⇒ 拒绝且点名
+  const r3 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({
+    rows: shippedRows(CONSULT_READONLY_MODULES.filter((n) => n !== "@deepseek-ai/dsh-tool-web")), content: RO_GOOD_DOC,
+  })))
+  assert.equal(r3.ok, false, "T-39③：缺失模块必须判红：" + JSON.stringify(r3))
+  assert.ok(String(r3.reason).includes("缺失"), "T-39③：必须点明是「缺失」：" + r3.reason)
+  assert.ok(String(r3.reason).includes("@deepseek-ai/dsh-tool-web"), "T-39③：必须点名缺失的模块：" + r3.reason)
+
+  // ④ 发货集合**之外**的写能力行若 enabled:false ⇒ 不算在用（放行；评审 #9 的「先滤行」）
+  const r4 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({
+    rows: [...shippedRows(), { entryId: "x", moduleName: "@deepseek-ai/dsh-tool-pwsh", enabled: false }],
+    content: RO_GOOD_DOC,
+  })))
+  assert.equal(r4.ok, true, "T-39④：停用的**额外**写能力行不算在用 ⇒ 必须放行：" + JSON.stringify(r4))
+
+  // ⑤ 发货集合**之内**的行被 enabled:false 停用 ⇒ 拒绝（= 缺失；§九 钉的方向，无二选一）
+  const r5 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({
+    rows: shippedRows().map((r) => (r.moduleName === "@deepseek-ai/dsh-tool-fs-search" ? { ...r, enabled: false } : r)),
+    content: RO_GOOD_DOC,
+  })))
+  assert.equal(r5.ok, false, "T-39⑤：发货集合内的行被停用 = 缺失 ⇒ 必须拒绝：" + JSON.stringify(r5))
+  assert.ok(String(r5.reason).includes("@deepseek-ai/dsh-tool-fs-search"),
+    "T-39⑤：必须点名被停用（= 缺失）的模块：" + r5.reason)
+})
+
+test("T-40（批 41 · 设计档 §八）：配置层翻转——write:true / edit:true 判红；正常与无键内容不误报", async () => {
+  const withLine = (line) => "plugins:\n  - id: tool-fs\n    config:\n      " + line + "\n"
+
+  // ① write: true ⇒ 拒绝
+  const r1 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(), content: withLine("write: true") })))
+  assert.equal(r1.ok, false, "T-40①：write 被翻成 true ⇒ 必须判红：" + JSON.stringify(r1))
+  assert.match(String(r1.reason), /无法保证只读/, "T-40①：拒绝文案必含「无法保证只读」")
+  assert.ok(String(r1.reason).includes("关键配置被翻转"), "T-40①：必须点明失败层 = 关键配置：" + r1.reason)
+  assert.ok(String(r1.reason).includes("write: true"), "T-40①：必须点名 write: true：" + r1.reason)
+
+  // ② edit: true ⇒ 拒绝
+  const r2 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(), content: withLine("edit: true") })))
+  assert.equal(r2.ok, false, "T-40②：edit 被翻成 true ⇒ 必须判红：" + JSON.stringify(r2))
+  assert.ok(String(r2.reason).includes("edit: true"), "T-40②：必须点名 edit: true：" + r2.reason)
+
+  // ③ 正常内容（write: false / edit: false）⇒ 放行
+  const r3 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(), content: RO_GOOD_DOC })))
+  assert.equal(r3.ok, true, "T-40③：正常内容 ⇒ 必须放行：" + JSON.stringify(r3))
+  assert.equal(r3.degraded, null, "T-40③：两层都核验 ⇒ degraded 恰为 null")
+
+  // ④ 无 write / edit 键（模块没这些开关）⇒ 放行（**不误报**）
+  const noKeys = "plugins:\n  - id: agent-instructions\n    name: '@deepseek-ai/dsh-agent-instructions'\n"
+  const r4 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(), content: noKeys })))
+  assert.equal(r4.ok, true, "T-40④：内容不含 write / edit 键 ⇒ 必须放行（不误报）：" + JSON.stringify(r4))
+  assert.equal(r4.degraded, null, "T-40④：内容已被读到并扫过 ⇒ degraded 恰为 null（不是「未核验」）")
+})
+
+test("T-41（批 41 · 设计档 §八）：观测面缺失与服务面异常——缺失降级放行且告警可见；缺行拒绝；模块层优先", async () => {
+  // ① 服务只有 list()（无 inventory）⇒ 放行 + degraded 非空 + **派发文本**带告警（FR-3 / FR-4）
+  const listOnly = { async list() { return [{ id: "thincoder-consult-ro" }] } }
+  const r1 = await resolveConsultReadonlyRoute(roPresetCtx(listOnly))
+  assert.equal(r1.ok, true, "T-41①：inventory 不可得 ⇒ 降级**放行**（D-2，不把安全强化变成可用性事故）：" + JSON.stringify(r1))
+  assert.equal(typeof r1.degraded, "string", "T-41①：degraded 必须是字符串（不是 undefined/假值）")
+  assert.ok(String(r1.degraded).length > 0, "T-41①：degraded 必须非空（评审 #2：不许静默）")
+  assert.ok(String(r1.degraded).includes("compositionInventory"), "T-41①：degraded 必须点名缺的观测面：" + r1.degraded)
+
+  const h1 = makeDeps({ subagents: roPresetHost(), services: { agentPresets: listOnly } })
+  try {
+    const started = await startConsultSession(h1.deps, "问题", undefined)
+    assert.equal(started.error, undefined, "T-41①：降级放行 ⇒ start 必须成功：" + JSON.stringify(started))
+    const dispatchText = String(started.text ?? "")
+    assert.ok(dispatchText.includes("只读预设内容未能核验"),
+      "T-41①（FR-3）：degraded 必须并入**派发文本**（warnPrefix 通道，不许只进 console）：" + dispatchText)
+    assert.ok(dispatchText.includes("compositionInventory 不可用"),
+      "T-41①：派发文本必须带出**具体原因**：" + dispatchText)
+    assert.ok(dispatchText.includes("本部署的「只读」仍是弱证"),
+      "T-41①：派发文本必须如实声明「只读」仍是弱证（不假装验过）：" + dispatchText)
+  } finally { cleanup(h1.sessionId, h1.state) }
+
+  // ② compositionInventory 抛错 ⇒ 放行 + degraded
+  const r2 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ inventoryThrows: true, rows: shippedRows(), content: RO_GOOD_DOC })))
+  assert.equal(r2.ok, true, "T-41②：inventory 抛错 ⇒ 降级放行：" + JSON.stringify(r2))
+  assert.ok(String(r2.degraded ?? "").includes("compositionInventory"), "T-41②：degraded 非空且点名观测面：" + r2.degraded)
+
+  // ③ readDocument 抛错但 inventory 正常 ⇒ **放行 + degraded 非空**（评审 #2：不许静默）
+  const r3 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ rows: shippedRows(), docThrows: true })))
+  assert.equal(r3.ok, true, "T-41③：配置层不可用 ⇒ 模块层仍生效、整体放行：" + JSON.stringify(r3))
+  assert.equal(typeof r3.degraded, "string", "T-41③：degraded 必须是字符串")
+  assert.ok(String(r3.degraded).length > 0, "T-41③：★ 配置层未核验必须**明说**（评审 #2：degraded 为空即红）")
+  assert.ok(String(r3.degraded).includes("配置层"), "T-41③：degraded 必须点名失败层 = 配置层：" + r3.degraded)
+
+  // ④ inventory 可用但**缺该预设行** ⇒ 拒绝（评审 #11：观测面自相矛盾）
+  const r4 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({ inventory: [{ id: "standard", rows: [] }] })))
+  assert.equal(r4.ok, false, "T-41④：list() 说有、inventory 说没有 ⇒ 必须拒绝：" + JSON.stringify(r4))
+  assert.match(String(r4.reason), /无法保证只读/, "T-41④：拒绝文案必含「无法保证只读」")
+  assert.ok(String(r4.reason).includes("观测面自相矛盾"), "T-41④：必须点明自相矛盾：" + r4.reason)
+
+  // ⑤ 集合不符 + readDocument 抛错 ⇒ **仍拒绝**（模块层优先，配置层缺失不掩盖模块层实物）
+  const r5 = await resolveConsultReadonlyRoute(roPresetCtx(presetsStub({
+    rows: shippedRows([...CONSULT_READONLY_MODULES, "@deepseek-ai/dsh-tool-terminal"]), docThrows: true,
+  })))
+  assert.equal(r5.ok, false, "T-41⑤：模块层已判红 ⇒ 配置层不可用不得把它降级成放行：" + JSON.stringify(r5))
+  assert.ok(String(r5.reason).includes("@deepseek-ai/dsh-tool-terminal"), "T-41⑤：必须点名多出的执行类模块：" + r5.reason)
+})
+
+test("T-42（批 41 · 设计档 §八）：发货定义同步锁——cordis.patch.yml 的 preset 段（group 递归展开）逐项等于 CONSULT_READONLY_MODULES", () => {
+  /**
+   * 静态解析器（**规则写死在本腿里**——本仓零依赖，不引 YAML 解析器）：
+   *   ① 锚定 Loader 行 id: preset-thincoder-consult-ro（不按行号；不存在的锚 ⇒ null）；
+   *   ② 找到该行块里的 plugins:；
+   *   ③ 只取 plugins: 之下、缩进更深的**清单行**的 name:（缩进建树；group: true 的行递归展开其子树）；
+   *   ④ 排除 preset 自身包装行 name 与 config.name（它们不是清单行的 +2 属性，见下）。
+   */
+  const moduleNamesOfPreset = (src) => {
+    const all = String(src ?? "").split(/\r?\n/)
+    const headIdx = all.findIndex((l) => /^( *)- id: preset-thincoder-consult-ro[ \t]*$/.test(l))
+    if (headIdx < 0) return null                       // 锚点不在 ⇒ 切不到（自证用）
+    const headIndent = /^ */.exec(all[headIdx])[0].length
+    const block = []
+    for (let i = headIdx; i < all.length; i++) {
+      if (i > headIdx && /^ *- id: /.test(all[i]) && /^ */.exec(all[i])[0].length === headIndent) break
+      block.push(all[i])
+    }
+    let pluginsIdx = -1
+    let pluginsIndent = -1
+    for (let i = 0; i < block.length; i++) {
+      const m = /^( *)plugins:[ \t]*$/.exec(block[i])
+      if (m) { pluginsIdx = i; pluginsIndent = m[1].length; break }
+    }
+    if (pluginsIdx < 0) return null
+    const items = []
+    for (let i = pluginsIdx + 1; i < block.length; i++) {
+      const raw = block[i]
+      if (raw.trim() === "" || raw.trimStart().startsWith("#")) continue
+      const ind = /^ */.exec(raw)[0].length
+      if (ind <= pluginsIndent) break                  // 离开 plugins 段
+      const m = /^( *)- id: *(\S+?)[ \t]*(?:#.*)?$/.exec(raw)
+      if (!m) continue
+      items.push({ index: i, indent: m[1].length, id: m[2], name: null, group: false, children: [] })
+    }
+    // 归属：清单行**自己**的属性行缩进恰为 item.indent + 2（更深的是子行 / config 体）
+    for (let k = 0; k < items.length; k++) {
+      const it = items[k]
+      let end = block.length
+      for (let j = k + 1; j < items.length; j++) {
+        if (items[j].indent <= it.indent) { end = items[j].index; break }
+      }
+      for (let i = it.index + 1; i < end; i++) {
+        const raw = block[i]
+        if (raw.trim() === "" || raw.trimStart().startsWith("#")) continue
+        if (/^ */.exec(raw)[0].length !== it.indent + 2) continue
+        const nm = /^ *name:[ \t]*'([^']*)'[ \t]*$/.exec(raw)
+        if (nm) it.name = nm[1]
+        if (/^ *group:[ \t]*true[ \t]*$/.test(raw)) it.group = true
+      }
+    }
+    // 缩进建树（文档顺序 = 先父后子）
+    const roots = []
+    const stack = []
+    for (const it of items) {
+      while (stack.length > 0 && stack[stack.length - 1].indent >= it.indent) stack.pop()
+      if (stack.length === 0) roots.push(it)
+      else stack[stack.length - 1].children.push(it)
+      stack.push(it)
+    }
+    // 展开：group ⇒ 递归子树（其 name: cordis:group **不是**模块名）；叶子 ⇒ 取 name
+    const out = []
+    const walk = (nodes) => {
+      for (const n of nodes) {
+        if (n.group) walk(n.children)
+        else if (typeof n.name === "string" && n.name !== "") out.push(n.name)
+      }
+    }
+    walk(roots)
+    return out
+  }
+
+  const patchSrc = readFileSync(new URL("../cordis.patch.yml", import.meta.url), "utf8")
+  const parsed = moduleNamesOfPreset(patchSrc)
+  assert.ok(parsed !== null, "T-42：cordis.patch.yml 必须能锚定 id: preset-thincoder-consult-ro 并定位到 plugins:")
+  assert.deepEqual([...parsed].sort(), [...CONSULT_READONLY_MODULES].sort(),
+    "T-42：发货定义的模块名（group 展开后）必须**逐项等于** CONSULT_READONLY_MODULES（多/少/改名都红）——实测 "
+      + JSON.stringify([...parsed].sort()))
+
+  // —— 谓词自证（律 3；评审 #5「解析规则写死在腿里」⇒ 解析器本身必须先被证明不是恒真）——
+  assert.equal(moduleNamesOfPreset(String(patchSrc).replace("id: preset-thincoder-consult-ro", "id: preset-does-not-exist")), null,
+    "T-42 自证：锚点不存在 ⇒ 必须切不到（切片器不是恒真）")
+  const synthetic = [
+    "    - id: preset-thincoder-consult-ro",
+    "      name: '@deepseek-ai/dsh-agent-preset'",
+    "      config:",
+    "        id: thincoder-consult-ro",
+    "        name: '显示名（config.name 不是模块名）'",
+    "        plugins:",
+    "          - id: a",
+    "            name: '@x/tool-a'",
+    "            config:",
+    "              write: false",
+    "          - id: grp",
+    "            name: 'cordis:group'",
+    "            group: true",
+    "            config:",
+    "              - id: b",
+    "                name: '@x/tool-b'",
+  ].join("\n")
+  assert.deepEqual(moduleNamesOfPreset(synthetic).sort(), ["@x/tool-a", "@x/tool-b"],
+    "T-42 自证：group 必须被**递归展开**、group 自身名与 config.name 都必须被排除（评审 N1）")
+  const dropped = synthetic.replace("              - id: b\n", "")
+  assert.notDeepEqual(moduleNamesOfPreset(dropped).sort(), [...CONSULT_READONLY_MODULES].sort(),
+    "T-42 自证：少一项 ⇒ 与常量不等 ⇒ 必红")
+  const renamed = synthetic.replace("name: '@x/tool-b'", "name: '@x/tool-b2'")
+  assert.deepEqual(moduleNamesOfPreset(renamed).sort(), ["@x/tool-a", "@x/tool-b2"],
+    "T-42 自证：改名会被原样读出（比对面不是名字不敏感）")
+})
+
 
