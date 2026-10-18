@@ -33,10 +33,10 @@ count-marks: 条|处|个
 | ④ | `isValidDocPathList` 去重与 JSDoc 对齐 | `lib/tasks.mjs:842-847`：JSDoc 写「**去重后** ≤ MAX_DOC_PATHS」，实现**没有去重**，且先判 `v.length` 再（无）去重 | **改代码**：先 trim+去重再判上限；JSDoc 同步 |
 | ⑤ | `TasksTab` 同名 `var scope` 改名消遮蔽 | **已修**（`lib/client.js:2683-2685`，2026-10-18 评审 #4 拆成 `propsScope`/`scopeKey`，带注释） | **不动代码**，本批只在结项写明「已修」 |
 | ⑥ | `task_update` 描述补 createdBy/owner/claimedFrom | `lib/tool-tasks.mjs` 的 `task_update` 段（:78 描述 + :119 schema）**没写**「哪些字段只读」 | **改描述**：加一句「createdBy / owner / claimedFrom **只读**，本工具不接受」 |
-| ⑦ | `assertRejectNoWrite` 改 `withZeroWrite(ws, fn)` 包装器 | `test/tasks.test.mjs:101` 现形是「传入**已算好的 result** 再断言零写入」——**操作已经跑完**才能断言，语义上是「事后核对」而非「期间不变」。★ **实测口径订正（实施轮）**：`grep 'assertRejectNoWrite('` 命中 **21 行 = 1 处定义 + 20 处真实调用点**；实施后 `grep -c 'withZeroWrite('` = 21（1 定义 + 20 调用）、`grep -c 'await withZeroWrite('` = 21（20 调用 + 1 条新增「先写再抛」腿） | **改脚手架**：新增 `withZeroWrite(ws, fn)`（先取 sha → 跑 `fn()` → 断言 sha 未变 → 返回结果）；**21 个调用点全部机械改为**「`withZeroWrite(ws, () => 操作)` + 独立断言拒绝码」，行为等价 |
+| ⑦ | `assertRejectNoWrite` 改 `withZeroWrite(ws, fn)` 包装器 | `test/tasks.test.mjs:101` 现形是「传入**已算好的 result** 再断言零写入」——**操作已经跑完**才能断言，语义上是「事后核对」而非「期间不变」。★ **实测口径订正（实施轮 + 代码评审 #3）**：`grep 'assertRejectNoWrite('` 命中 **21 行 = 1 处定义 + 20 处真实调用点**；实施后 **`grep -c 'withZeroWrite('` = 21 行全是调用行**（定义写作 `const withZeroWrite = async (ws, fn)`，**不含** `withZeroWrite(` 子串）—— 即 **20 个转换调用 + 1 条「先写再抛」自证腿**；`grep -c 'await withZeroWrite('` 同为 21。 | **改脚手架**：新增 `withZeroWrite(ws, fn)`（先取 sha → 跑 `fn()` → 断言 sha 未变 → 返回结果）；**21 个调用点全部机械改为**「`withZeroWrite(ws, () => 操作)` + 独立断言拒绝码」，行为等价 |
 | ⑧ | T-7③ 真实档断言改「能解析才断言」或固化为 fixture | `test/tasks.test.mjs:1487` 依赖**本仓真实档**的条数；档一变（哪怕只是加一行）腿就红，且红的原因与本插件无关 | **改法**：`const parsed = parseChecklistDoc(...); if (parsed) { …断言… }` 且**保留**「能解析 ⇒ 条数与独立数出的数据行相等」；不能解析 ⇒ 明确记 `t.diagnostic`（**不静默跳过**） |
 | ⑨ | `commandArgsOf` 谓词收窄为 `m[1] === name` | `lib/task-commands.mjs:58/132/153` | **改谓词**：只认**首个捕获组逐字相等**，不做包含匹配 |
-| ⑩ | 注入行双盘读加成本注释 | `lib/index.mjs:1533` 每回合注入读一次盘（`readTasksView` ⇒ 一次 fs 读 + 解析） | **只加注释**（说明成本与为何可接受），**不改行为** |
+| ⑩ | 注入行双盘读加成本注释 | ★ **订正（代码评审 #7）**：`lib/index.mjs:1533` 每回合注入**读两次盘** —— `tasks.json`（`readTasksView`）**与** `config.json`（`effectiveGlobalConfig` → `lib/config-store.mjs:181`） | **只加注释**（按两次读盘写），**不改行为** |
 
 ---
 
@@ -71,7 +71,7 @@ count-marks: 条|处|个
 
 - **FR-1**（④）`isValidDocPathList`：`const uniq = [...new Set(v.map((p) => String(p).trim()))]`（**`String()` 强转**，与 §六 伪代码一致，评审 #5：`v.map(p => p.trim())` 会对非字符串元素**抛错**，破坏「纯函数不抛」的后置）⇒ `uniq.length > MAX_DOC_PATHS` 拒；且每项必须是**非空字符串**。
 - **FR-2**（⑥）`task_update` 描述与 schema 各加一句只读字段声明；★ **必须配一条 grep 级断言**（评审 #2：交付单元不能没有验收面）：契约描述里必须同时出现「只读」与 `createdBy`/`owner`/`claimedFrom`。
-- **FR-3**（⑦）`withZeroWrite(ws, fn)`：取 sha → `fn()`（thenable 则 await）→ 断言 sha 不变 → 返回结果；**21 个调用点**逐点改成「包装 + 独立断言拒绝码」。★ **评审 #12 的硬要求**：包装器是 `async` ⇒ **每个调用点必须 `await withZeroWrite(...)`，且所在 `test(...)` 回调必须声明为 `async`**（否则断言会在腿返回之后才跑 = 假绿，正是这个包装器要消灭的那一类）。验收时用 `grep` 抽查：`withZeroWrite(` 的出现次数必须等于 `await withZeroWrite(` 的出现次数。
+- **FR-3**（⑦）`withZeroWrite(ws, fn)`：取 sha → `fn()`（thenable 则 await）→ 断言 sha 不变 → 返回结果；**20 个调用点**（`grep` 21 行命中 = 1 处定义 + 20 处调用）逐点改成「包装 + 独立断言拒绝码」。改完 `withZeroWrite(` 的 `grep` 计数 = **21**（20 旧调用 + 1 条新增「先写再抛」腿）——**这两件事不是同一个 21**（subagent 审计 #3）。★ **评审 #12 的硬要求**：包装器是 `async` ⇒ **每个调用点必须 `await withZeroWrite(...)`，且所在 `test(...)` 回调必须声明为 `async`**（否则断言会在腿返回之后才跑 = 假绿，正是这个包装器要消灭的那一类）。验收时用 `grep` 抽查：`withZeroWrite(` 的出现次数必须等于 `await withZeroWrite(` 的出现次数。
 - **FR-4**（⑧）T-7③ 改条件断言 + diagnostic 留痕。
 - **FR-5**（⑨）`commandArgsOf` 谓词改 `m[1] === name`。
 - **FR-6**（⑩）注入点加成本注释。
@@ -88,7 +88,7 @@ async withZeroWrite(ws, fn):
   before = tasksFileSha256(ws)
   try {
     r = fn()
-    if (r 是 thenable) r = await r            // 评审 #3：21 个调用点里有异步 handler ⇒ 必须 await 后再比 sha
+    if (r 是 thenable) r = await r            // 评审 #3：调用点里若有异步 handler ⇒ 必须 await 后再比 sha
     assert.equal(tasksFileSha256(ws), before, "拒绝路径必须零写入")
     return r
   } catch (e) {
@@ -96,7 +96,7 @@ async withZeroWrite(ws, fn):
     throw e
   }
 
-前置/后置补充：**实施第一步必须先核这 21 个调用点里哪些是 async**（工具 handler 多为 async）；
+前置/后置补充：**实施第一步必须先核这 20 个调用点里哪些是 async**（本批已核：四个写门 `applyTask*` 全同步，0 个调用点传 Promise）；
 若全部同步，保留 await 语义也无害（`await` 一个非 thenable 是恒等）。
 
 isValidDocPathList(v):
@@ -138,7 +138,7 @@ isValidDocPathList(v):
 | **⑩ 的落点**（评审 #11） | 只允许改 `lib/index.mjs` 的**注释行**：交付时用 `git diff -U0 lib/index.mjs` 证明变更行全为 `//` 开头 |
 | **⑤ 的复核**（评审 #9） | 收口时 `grep -n 'propsScope\|scopeKey' lib/client.js` 必须命中 —— 作为**人工核对**项写进交付记录 |
 
-**变异自证**：① ④ 去掉去重 ⇒ T-4a 红；② ⑦ 把零写入断言删掉 ⇒ 对应拒绝腿红；③ ⑨ 谓词改回包含匹配 ⇒ 命令腿红；④ ⑥ 删掉「只读」那句 ⇒ 契约文本锁红。
+**变异自证**：① ④ 去掉去重 ⇒ **T-9a** 红；② ⑦ 把零写入断言删掉 ⇒ 对应拒绝腿红；③ ⑨ 谓词改回包含匹配 ⇒ 命令腿红；④ ⑥ 删掉「只读」那句 ⇒ 契约文本锁红。
 
 ---
 
@@ -168,17 +168,17 @@ isValidDocPathList(v):
 | `lib/tool-tasks.mjs` | ⑥ 描述补只读字段 |
 | `lib/task-commands.mjs` | ⑨ 谓词收窄 |
 | `lib/index.mjs` | ⑩ 成本注释 |
-| `test/tasks.test.mjs` | ⑦ 脚手架（`withZeroWrite` + 20 调用点 await）· ⑧ 条件断言与 loader 注入腿 · **T-9a/T-9b/T-9c**（④ 三条）· ⑥ 契约文本锁 · ⑨ T-20 两条 · ⑤ 负向断言 —— **共 7 处测试面改动**（计数与 §八 列表同源） |
+| `test/tasks.test.mjs` | ⑦ 脚手架（`withZeroWrite` + 20 调用点 await）· ⑧ 条件断言与 loader 注入腿 · **T-9a/T-9b/T-9c**（④ 三条）· ⑥ 契约文本锁 · ⑨ T-20 两条 —— **共 6 处测试面改动**；**⑤ 不在测试面**（无代码改动、无腿：人工 `grep` 复核，见 §八 与 §十二 1b） |
 | `.thincoder/tasks.json` | ★ **不由实施方改**（评审 #8）：台账唯一写门是 `task_done`，**`t-4` 结项由父会话用 `task_done` 带凭据完成**（含「⑤ 已修」的注明） |
 | `CHANGELOG.md` / `package.json` / `docs/README.md` / 交接档 | 收口（版本与计数同批） |
 
-**计数（as-of 2026-10-18 实测，交付前复核）**：`test/tasks.test.mjs` 顶层用例 **21 不变**；全量 **660 不变**（本批不新增顶层用例）。★ 注意与「`assertRejectNoWrite(` **21 个调用点**」区分（评审 #7：同一个数字指的是两件不同的事）。
+**计数（as-of 2026-10-18 实测，交付前复核）**：`test/tasks.test.mjs` 顶层用例 **21 不变**；全量 **660 不变**（本批不新增顶层用例）。★ 注意区分（评审 #7 + 审计 #3）：`assertRejectNoWrite(` **21 行命中 = 1 定义 + 20 调用点**；`withZeroWrite(` **21 行 = 20 调用 + 1 条新增抛错腿**；顶层用例 **21 条** —— **三个 21 是三件不同的事**。
 
 ---
 
 ## §十二 已知未验证项
 
-1. ⑩ 的成本口径（评审 #11 要求先读再写）：**已读注入点** `lib/index.mjs:1533` —— 每回合 `renderTaskDigest(readTasksView(cwd))` **一次**；`readTasksView` = `loadLedger`（**一次 fs 读 + JSON 解析**）+ 分桶，**不做文档解析**。⇒ 成本注释按这个事实写（「每回合一次读盘」），**不写**「双盘读」。
+1. ~~⑩ 的成本口径（评审 #11）~~ ★ **已被 1d 订正**：本条原写「每回合一次读盘」，**是错的**（漏了 `effectiveGlobalConfig` 读的 `config.json`）；以 **1d** 为准（**两次读盘**）。
 1b. ⑤ 的「已修」以**交付日 `grep` 复核**为准（评审 #9）；复核不过 ⇒ 本批必须真改它。
 1c. ★ **④ 的镜像缺口（subagent 评审 #3，本批不修）**：`ledgerDraftErrors` / 客户端镜像 / `resolveLedgerConfig` 仍按**原始行数**判与截 ⇒ 在设置页里**存不进** 9 条含重复的清单，读面还可能把最后一条唯一路径截掉。已单独立台账（`t-8`）。
 1d. ★ **⑩ 的成本口径订正（subagent 评审 #2）**：注入行**每回合读两次盘** —— `tasks.json`（`readTasksView`）**与** `config.json`（`effectiveGlobalConfig` → `lib/config-store.mjs:393/181`）。原「一次 fs 读」的结论**是错的**，注释按两次读盘写。
