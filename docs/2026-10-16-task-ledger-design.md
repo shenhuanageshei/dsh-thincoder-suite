@@ -845,9 +845,20 @@ T-23 的「标签逐条在场」钉不住 §19 里两个**条件性**承诺，�
 | **断一** | 派发 API 由「Promise 句柄」改成「激活 + 投递」：`subagents.start(kind, opts)` → `subagents.startActivation({provider,label,request,signal,delivery})`，只返回 `{ childId }` | `:475-481` |
 | **断二** | **`persona` 与 `toolFilter` 被明确移除**：`throw new Error("… ${field} is no longer supported; configure persona and tool plugins in an Agent Preset and select it with agentPreset")` | `:355` |
 
-**但 provider 层仍是 Promise 语义**：`CodexProvider.start(request)` 返回带 `result`/`dispose` 的 run 句柄（`@deepseek-ai/dsh-subagent-codex/lib/index.js:834-853`），且 `subagents.getProvider(name)` 在新 API 里**仍在**（同档 `:371/:458/:506`）。
+**★ 主线的修正（2026-10-18 实施方实测推翻父侧假设，以此为准）**：下面这条**父侧原假设是错的**，保留原文以示更正轨迹 ——
 
-⇒ **修复主线 = 把 `start(kind, opts)` 换成 `getProvider(kind).start(request)`**，await 语义不变。
+> ~~`provider 层仍是 Promise 语义`，`getProvider(kind).start(request)` 可用~~ ⇒ **实测不成立**。
+
+实施方从装机 asar 解出 `@deepseek-ai/dsh-subagent-spawn-in-process@0.2.1-rc.2`，用真实 `apply()` + 桩 ctx 跑注册，得到：
+
+| 观测 | 读数 |
+|---|---|
+| `getProvider("spawn").start` | **`undefined`（不存在）** |
+| provider 实际能力 | `{ providerName:"spawn", prepareContinuable: function, capabilities:{agentOptions, agentPreset, outputSchema, depthLimit} }` |
+| 平台类型合同 | `SubagentProvider.start?` 是**可选**；`SubagentStartRequest` **不含** `persona` / `toolFilter` |
+| ★ `startActivation` 的 receipt | **`{ childId, result, dispose }`** —— 与旧 run 句柄**同形**，`result` resolve `{ output, stopReason }` |
+
+⇒ **修复主线（更正后）= 走 `startActivation({ provider, label, request, signal, delivery })`，直接用其 receipt 的 `result` / `dispose`** —— await 语义**本来就是保留的**，只是入口名字变了。
 
 ### 20.2 影响面（7 个真实调用点）
 
@@ -869,7 +880,12 @@ T-23 的「标签逐条在场」钉不住 §19 里两个**条件性**承诺，�
 ### 20.4 兼容与探测（不许裸崩）
 
 - `getProvider` 缺席 / 返回 undefined / `start` 非函数 ⇒ **显式点名断层**并给出可读文案，而不是裸 `TypeError`。
-- 老宿主（0.2.0 及以前）仍只有 `subagents.start` ⇒ **两代都在场时优先现名 `getProvider().start`，只有旧名时回退 `start()`**（与 `dsh-team-link` 的 pin API 两代处理同一纪律）。
+- ★ **四档分派**（判据看 **provider 实例能力**，不是只看服务方法名）：
+  ① provider 有 `start` ⇒ `getProvider(kind).start(request)`；
+  ② 只有 `prepareContinuable` ⇒ `startActivation({ … , delivery: "caller" })`，receipt（`{childId,result,dispose}`）**直接当 run 句柄**；
+  ③ 只有旧 `subagents.start` ⇒ 原样回退（老宿主）；
+  ④ 都没有 ⇒ 抛**含 `getProvider` / `subagents.start` / 「宿主子代理契约断层」**的可读错误。
+- ★ **禁止静默降级**：档② 剥离 `persona` / `toolFilter` 时**必须**在源码留显式注释（宿主不再接受，由 S2 的 Agent Preset 替代），且**调用方需要只读语义却走档②时必须抛错**（T-29 钉的正是这条）；**不许**用 `delete` 静默剥字段。
 
 ### 20.5 腿
 
