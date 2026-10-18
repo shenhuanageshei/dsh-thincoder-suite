@@ -67,9 +67,18 @@ count-marks: 条|处|个|行
 | # | 决策 | 理由 | 被否决的备选 |
 |---|---|---|---|
 | **D-1** | 预算 **512 → 768** | D=484 距 512 只有 28 字符；768 给「多 1–2 条决策 + 长中文标题」留出可观测余量，且仍在千字符内 | **保持 512** —— 现实中一条决策就截，等于默认截断；**提到 1024** —— 单回合注入过大，挤占正文 |
-| **D-2** | `DIGEST_TOP_N` **保持 5** | C 样本显示 5 条 + 尾串已经够表达「有很多」；加 Top-N 会把预算吃光而不增加信息 | 调到 8 —— 预算不够；调到 3 —— 看不见活任务全貌 |
+| **D-2** | `DIGEST_TOP_N` **保持 5** | ★ **措辞订正（副轨评审 #7）**：C 样本（30 活）**今天没有尾串**（正是本批要修的坑）；本批补上尾串后形态是「5 条 + …还有 25 项」，**已足够表达「有很多」**；再加 Top-N 只会多吃预算而不增信息 | 调到 8 —— 预算不够；调到 3 —— 看不见活任务全貌 |
 | **D-3** | **Top-N 截断也报「…还有 N 项」** | 现在「看不见的任务」与「不存在的任务」长得一样（C 样本）⇒ 静默误导。与预算截断同形 = 一处语义 | 只在预算溢出时报 —— 就是现状的坑 |
-| **D-4** | 合计上限 = **`DIGEST_MAX_CHARS + LINE_MAX_CHARS + 1` = 768 + 512 + 1 = 1281**（**派生量，不写死 1024**），**先砍摘要**（anti-drift 行整行保留） | ★ **评审 #2 修**：原定 1024 会与 768 互相蚕食（anti-drift 行硬顶 512 ⇒ 摘要实际可用只剩 ~497，**比现状 512 还小**）。改成派生量后两段预算**互不侵占**：摘要总能拿到 768，anti-drift 行总能拿到 512 | 硬写 **1024** —— 上面那个蚕食；**不设合计上限** —— 现状；**均分** —— 会把 anti-drift 行切半，最坏 |
+| **D-4** | 合计上限 = **1150 字符**（**标定值**），**先砍摘要**（anti-drift 行整行保留） | ★ **副轨评审 #1 修（致命）**：原定「派生量 768+512+1 = **1281**」，而两段**各自**都有硬顶（adLine ≤512、摘要 ≤768）⇒ **合法和恒 ≤1281** ⇒ 裁剪分支**生产永远不可达 = 假保护**，T-4e① 只能用**非法**输入（896 > 768）才触发。**1150** 才是能咬的合法值（见下表） | **1281（派生量）** —— 恒不可达；**1024** —— 与 768 互相蚕食（评审 #2）；**不设上限** —— 现状；**均分** —— 会把 anti-drift 行切半 |
+
+**为什么是 1150（三种 adLine 长度下的摘要可用额度）**
+
+| adLine 实测/上限 | 合计 1150 − adLine − 1 − 尾串(9) | 摘要能否拿满 768 | 说明 |
+|---|---|---|---|
+| **245**（实测典型） | 895 | ✅ | 典型场景**不裁剪**，预算全额到手 |
+| **326**（实测超长目标） | 814 | ✅ | 仍不裁剪 |
+| **512**（硬顶，最坏） | 628 | ❌（被裁到 628） | **裁剪只在这种情况下发生** —— 这正是它该干的活 |
+| 合法两段 **500 + 700 = 1201** | — | — | **> 1150 ⇒ 真触发裁剪**，两段都合法（500 ≤512、700 ≤768）✅ |
 
 ---
 
@@ -78,7 +87,7 @@ count-marks: 条|处|个|行
 - **FR-1** `DIGEST_MAX_CHARS` 512 → **768**；`DIGEST_TOP_N` 保持 5（常量注释写上本次实测）。
 - **FR-2** 尾串统一：`listable` 改为「**可列出总数**」（= 决策 + 卡住 + **全部活任务**），已列出数照旧；
   ⇒ Top-N 截断与预算截断都走同一个 `pending > 0` 分支。
-- **FR-3** 新增 **`export function assembleInjection(adLine, taskLine)`**（住 `lib/index.mjs`，**可导出纯函数**，评审 #3：否则 T-4e 无法 import ⇒ 腿不可实施）+ **`export const INJECT_TOTAL_MAX_CHARS = DIGEST_MAX_CHARS + 512 + 1`**（= **1281**，见 D-4）；拼接前若 `adLine.length + 1 + taskLine.length > 上限` ⇒ **按行裁剪 taskLine**（首行必留 + 尽可能多的行 + 「（摘要已截断）」尾），`adLine` **整行保留**。
+- **FR-3** 新增 **`export function assembleInjection(adLine, taskLine)`**（住 `lib/index.mjs`，**可导出纯函数**，评审 #3：否则 T-4e 无法 import ⇒ 腿不可实施）+ **`export const INJECT_TOTAL_MAX_CHARS = 1150`**（**标定值，非派生量** —— 见 D-4：派生量 1281 恒不可触发）；拼接前若 `adLine.length + 1 + taskLine.length > 上限` ⇒ **按行裁剪 taskLine**（首行必留 + 尽可能多的行 + 「（摘要已截断）」尾），`adLine` **整行保留**。
   ★ **实施方必须**在 `test/tasks.test.mjs` 顶部的 import 里加上 `assembleInjection`（与 `renderTaskDigest` 同处）。
 - **FR-4** 把 §二 的四行实测数字写进 `docs/2026-10-16-task-ledger-design.md` **§十一 U-4**。★ **已落盘（2026-10-18，`664fbd0`）**——本批实施时只**核对**该行存在且数字一致（评审 #6：不重复写两遍；权威书写位 = U-4）。
 - **FR-5** 腿（见 §八）。
@@ -91,10 +100,10 @@ count-marks: 条|处|个|行
 
 ```mermaid
 flowchart TD
-  A[adLine：anti-drift 行<br/>硬顶 LINE_MAX_CHARS=512] --> C{adLine.length + 1 + taskLine.length<br/>≤ INJECT_TOTAL_MAX_CHARS 1281?}
+  A[adLine：anti-drift 行<br/>硬顶 LINE_MAX_CHARS=512] --> C{adLine.length + 1 + taskLine.length<br/>≤ INJECT_TOTAL_MAX_CHARS 1150?}
   B[taskLine：renderTaskDigest<br/>预算 DIGEST_MAX_CHARS=768] --> C
   C -- 是 --> D[原样拼接：adLine + 换行 + taskLine<br/>★ 未超限路径，摘要与 renderTaskDigest 逐字相同]
-  C -- 否 --> E{adLine 自身 ≥ 1281?}
+  C -- 否 --> E{adLine 自身 ≥ 1150?}
   E -- 是 --> F[只返回 adLine<br/>摘要整段让位（当前不可达）]
   E -- 否 --> G[按行裁剪 taskLine<br/>首行必留 · 不切半行 · 不跳行]
   G --> H[adLine + 换行 + 裁剪后摘要 + 「（摘要已截断）」]
@@ -112,6 +121,7 @@ renderTaskDigest(view, opts):
 assembleInjection(adLine, taskLine):
   前置：两段都是字符串（可能为空）
   后置：总长 ≤ INJECT_TOTAL_MAX_CHARS，**除非 `adLine` 本身已超上限**（此时**只返回 adLine**，后置条件对该分支不适用 —— 评审 #4）
+  ★ **空段语义（副轨评审 #3）**：`taskLine === ""` ⇒ 返回 `adLine`（**不加**分隔符）；`adLine === ""` ⇒ **不加前导分隔符**、直接返回 `taskLine`；**两段皆空 ⇒ 空串**（不是 `"\n"`）。预算公式里分隔符按 `sep.length` 算（不是恒 1）
   若 adLine.length >= INJECT_TOTAL_MAX_CHARS:
       ⇒ 直接返回 adLine（摘要整段让位），**不**再拼半行 —— 宁可没有摘要，不留残句
   if adLine.length + 1 + taskLine.length <= INJECT_TOTAL_MAX_CHARS:
@@ -133,7 +143,7 @@ assembleInjection(adLine, taskLine):
 
 ## §七 状态与 schema
 
-**零变化**：不新增持久化字段、不改工具契约；只改两个常量 + 尾串语义 + 新增一个常量。
+**零变化**：不新增持久化字段、不改工具契约；只**改一个常量**（`DIGEST_MAX_CHARS` 512→768）+ **新增一个常量**（`INJECT_TOTAL_MAX_CHARS` = 1150）+ 尾串语义（Top-N 截断也报）。
 
 ---
 
@@ -149,8 +159,9 @@ assembleInjection(adLine, taskLine):
 | 腿 | 判据 |
 |---|---|
 | **T-4c**（并入 **T-4b** 块，`test/tasks.test.mjs:495` 起） | **Top-N 截断可见**：30 条活任务 ⇒ 摘要含 `…还有 25 项`（旧行为：不含 ⇒ 红）。★ 评审 #7：本档**没有** T-4 块，腿必须落到**已有块**里 |
+| **T-4f**（并入 T-5 块，副轨评审 #2） | **跨模块契约锁**：anti-drift 硬顶 `LINE_MAX_CHARS = 512`（`lib/anti-drift.mjs:820`，**未导出**）—— 用 **512 字符 adLine + 768 字符 taskLine**（合法最坏组合 1281 > 1150）断言**仍被裁剪**；这样任一侧常量变动而不同步 ⇒ 本腿红 |
 | **T-4d**（并入 **T-5** 块，`test/tasks.test.mjs:537` 起） | **预算边界**：构造 768 字符边缘样本 ⇒ ≤768 时全列、>768 时出尾串（两条都要，防「永远出尾串」）。★ 这里的 **768 是标定锁**（**有意写字面量**，改常量必须同步改腿，评审 #10）；与 T-5 的 `<= DIGEST_MAX_CHARS`（**有界锁**）不是一回事 |
-| **T-4e**（并入 **T-5** 块） | **注入合计上限**（`assembleInjection`，**已 export**）：<br>① `adLine` 500 + `taskLine` **896** ⇒ 结果 ≤ **1281** 且 **adLine 逐字完整**、摘要尾部带「（摘要已截断）」★ **数字订正（实施轮）**：原写 700 是 **1024 时代**的残留，500+1+700=1201 < 1281 **触发不了裁剪**；改 896 才是真超限（1397）<br>② ★ **反向腿**（评审 #5）：575 + 400（**未超限**）⇒ 摘要部分与 `renderTaskDigest` 输出**逐字相同**（防裁剪器误伤正常路径）<br>③ ★ `adLine` 长度 ≥ 上限 ⇒ 输出**恰为 adLine**、无残句<br>④ ★ `taskLine` 首行就放不下 ⇒ 输出 = `adLine` + 单行「（摘要已截断）」 |
+| **T-4e**（并入 **T-5** 块） | **注入合计上限**（`assembleInjection`，**已 export**）：<br>① `adLine` **500** + `taskLine` **700**（**两段都合法**，1201 > 1150）⇒ 真触发裁剪：结果 ≤ **1150**、**adLine 逐字完整**、摘要尾部「（摘要已截断）」★ **副轨评审 #1**：**不许再用 896**（896 > 摘要硬顶 768 是**非法输入**，腿只证明函数对非法输入可用）。原写 700 在 1024 时代不触发、改上限为 1150 后**恰好触发**且两段合法<br>② ★ **反向腿**（评审 #5）：575 + 400（**未超限**）⇒ 摘要部分与 `renderTaskDigest` 输出**逐字相同**（防裁剪器误伤正常路径）<br>③ ★ `adLine` 长度 ≥ 上限 ⇒ 输出**恰为 adLine**、无残句<br>④ ★ `taskLine` 首行就放不下 ⇒ 输出 = `adLine` + 单行「（摘要已截断）」 |
 
 **变异自证**：① 去掉 `listable` 的全量口径 ⇒ T-4c 红；② 把 768 改回 512 ⇒ T-4d 红；③ 去掉合计裁剪 ⇒ T-4e①红；④ 裁剪器误伤未超限路径 ⇒ T-4e②红。
 
@@ -165,14 +176,14 @@ assembleInjection(adLine, taskLine):
 | 账本为空 | 摘要空串（既有） |
 | 决策项极多（>20） | 决策**全列**是既有语义 ⇒ 由预算尾串兜底（截断可见） |
 | `adLine` 自身已超上限 | **不裁**（纪律面优先），只返回 `adLine`。★ **当前不可达**：`lib/anti-drift.mjs:820` 的 `LINE_MAX_CHARS = 512` 硬顶住了；只有将来放宽它才可能出现（评审 #4） |
-| `maxChars` 由调用方传入（<768） | 沿用调用方值（既有注入缝） |
+| `maxChars` 由调用方传入 | ★ **订正（副轨评审 #4）**：直接调 `renderTaskDigest` 时可传**整数 ≥80**；**<80 回落默认 768**（不是「沿用」）；**生产注入点不传 `maxChars`**（只 spread `resolveLedgerConfig`，见 `lib/index.mjs`）——这是**测试缝**，不是生产注入缝 |
 | 字节 vs 字符 | 本批**只按字符**计量并在注释写明；若消费面按字节限，另开批 |
 
 ---
 
 ## §十 需用户拍板
 
-无（全部由 §二 实测数据支撑；三项决策均已给推荐与代价）。
+无（全部由 §二 实测数据支撑；**四项决策**（D-1…D-4）均已给推荐与代价）。
 
 ---
 
@@ -182,7 +193,7 @@ assembleInjection(adLine, taskLine):
 |---|---|
 | `lib/tasks.mjs` | FR-1 常量 + FR-2 尾串口径（`listable` 改全量） |
 | `lib/index.mjs` | FR-3 注入合计上限 |
-| `test/tasks.test.mjs` | **T-5 的 `<= 512` 改 `<= DIGEST_MAX_CHARS`**（引常量）+ T-4c/T-4d/T-4e 三条断言（并入既有块） |
+| `test/tasks.test.mjs` | **T-5 的 `<= 512` 改 `<= DIGEST_MAX_CHARS`**（引常量）+ T-4c/T-4d/T-4e/**T-4f** 四条断言（并入既有块，**不新增顶层 `test(`**） |
 | `docs/2026-10-16-task-ledger-design.md` | §十一 U-4 写入实测数字（FR-4） |
 | `CHANGELOG.md` / `package.json` / 交接档 / `.thincoder/tasks.json` | 收口（版本 + `t-3` 结项） |
 
