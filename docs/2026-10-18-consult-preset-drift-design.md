@@ -16,8 +16,9 @@ count-marks: 条|处|个|行
    **不检查它里面装的是什么** —— 而它装的东西**是可以被改的**。
 2. **影响谁**：如果预设被改（加回 `tool-bash`、或把 `tool-fs.write` 从 `false` 翻成 `true`），
    会诊会**继续以「只读」的名义运行**，实际上子代理已经能写你的文件了 —— **静默失效**。
-3. **怎么修**：派发会诊前，把预设的**实际内容**读出来，与我们**发货的那份**做三层比对
-   （模块集合 / 禁用能力 / 关键配置）；任一不符 ⇒ **拒绝运行并点名差在哪**。
+3. **怎么修**：派发会诊前，把预设的**实际内容**读出来，与我们**发货的那份**做**两层**比对
+   （模块集合 / 关键配置）；任一不符 ⇒ **拒绝运行并点名差在哪**。
+   （原设计还有第三层「禁用能力词表」—— 评审 #1 证明它与集合等值**重叠、永远不可能单独判红**，已**降级为文案解释器**，见 D-1。）
 
 ---
 
@@ -62,7 +63,7 @@ count-marks: 条|处|个|行
 | API（`ctx.get("agentPresets")` 上） | 返回 | 本批用途 |
 |---|---|---|
 | `compositionInventory()` | 每个预设 `{ id, name?, description?, isDefault, broken?, rows }`；`rows` = **扁平化后的声明行** `{ entryId, moduleName, enabled, condition? }`（`group` 会被展开） | **模块集合**（第①层） |
-| `readDocument(id)` | `{ agentPreset, content, name?, description? }`，`content` = 该预设声明序列化成的 **YAML 文本**（含 `write: false` 这类 config） | **关键配置扫描**（第③层） |
+| `readDocument(id)` | `{ agentPreset, content, name?, description? }`，`content` = 该预设声明序列化成的 **YAML 文本**（含 `write: false` 这类 config） | **关键配置扫描**（第②层） |
 | `list()`（既有） | 显示元数据（见 2.2） | 既有的「注册 + broken」判据，**保留不动** |
 
 ### 2.4 为什么不能只靠 `list()` 或只靠 `compositionInventory`
@@ -77,7 +78,7 @@ count-marks: 条|处|个|行
 
 ### 目标
 
-1. 派发会诊前，**能看见**只读预设的实际内容，并与发货定义做**三层比对**。
+1. 派发会诊前，**能看见**只读预设的实际内容，并与发货定义做**两层比对**（模块集合 + 关键配置）。
 2. 漂移 ⇒ **fail-closed 拒绝运行**，拒绝文案**点名差在哪**（多/少哪些模块、命中哪些禁用项）。
 3. 观测面缺失（服务不暴露 / API 抛错）⇒ **降级放行 + 响亮告警**（不静默、不假装验过）。
 4. `toolFilter` 路线（老宿主）**零变化**；`none`/`url` 等无关路径零变化。
@@ -96,7 +97,7 @@ count-marks: 条|处|个|行
 
 | # | 决策 | 理由 | 被否决的备选 |
 |---|---|---|---|
-| **D-1** | **语义三层**（模块集合 / 禁用能力 / 关键配置），**不是** YAML 全文等值 | 全文等值把「平台 dump 格式变化」误判成「用户漂移」⇒ 误停整条会诊；三层各自对准一类真实攻击面，且不依赖文本格式 | **YAML 全文等值** —— 最严但最脆；**只用模块集合** —— 漏第 2 类（`write:true`） |
+| **D-1** | **语义两层**（① 模块集合精确等值 + ② 关键配置扫描），**不是** YAML 全文等值。**原第三层「禁用能力词表」已删除**（评审 #1） | ★ **为什么删**：① 是**精确等值** ⇒ 任何多出来的模块（含 `tool-pwsh`）已被 ① 拒掉，词表层**只可能看到发货集合本身**，永远 `ok` ⇒ 它是一条**恒真断言 / 假腿**（本仓 `AGENTS.md` §二第 5 条 🟡 起步、评审按 🔴 计）。保留它只会让「删掉它 ⇒ 腿红」变成**导入失败**造成的假红。**降级形态**：词表保留为**文案解释器**（`explainModule(name)`），只在拒绝文案里标注「这个多出来的模块是写/执行类」，**不承担判据** | **YAML 全文等值** —— 最严但最脆（格式一变就误停）；**三层** —— 假腿 |
 | **D-2** | 观测面缺失 ⇒ **降级放行 + 响亮告警**（不静默） | 与既有「本部署无法保证只读」口径一致；fail-closed 会在 API 缺失的宿主上**直接停掉会诊**（把安全强化变成可用性事故） | **fail-closed** —— 保守但可能整条功能停摆；**静默放行** —— 等于没做 |
 | **D-3** | **不给**逃生口（`allowPresetDrift` 之类） | 只读保证的意义就是「配了就必须是我们发的那份」；给开关等于给「静默弱化」留后门（本仓有先例：把 `policy.writer` 降成 `any` 当修复） | 配置开关 —— 用户一开，保证就没了且**看不出来** |
 | **D-4** | 期望模块集 = **代码常量**，另加一条**静态同步锁**腿（文本解析 `cordis.patch.yml` 的 preset 段，与常量逐项比对） | 本仓零依赖（不能引 YAML 解析器）；常量 + 同步锁既零依赖又能防「改了发货定义忘了改常量」 | 运行期解析 YAML —— 破零依赖；只写常量不锁 —— 迟早漂 |
@@ -114,13 +115,15 @@ flowchart TD
   B -- 否 --> R1["拒绝（现状，不改）"]
   B -- 是 --> C{"compositionInventory 可用？"}
   C -- 否 --> G["降级：放行 + 响亮告警<br/>「无法核验预设内容」"]
-  C -- 是 --> D{"模块集合 == 发货集合？"}
-  D -- 否 --> R2["拒绝 + 点名 多出/缺失"]
-  D -- 是 --> E{"命中禁用能力？"}
-  E -- 是 --> R3["拒绝 + 点名命中项"]
-  E -- 否 --> F{"readDocument 的 config 有 write:true / edit:true？"}
-  F -- 是 --> R4["拒绝 + 点名配置项"]
-  F -- 否 --> P["放行（只读保证成立）"]
+  C -- 是 --> C2{"inventory 里有该预设行？"}
+  C2 -- 否 --> R0["拒绝（观测面自相矛盾：list 有、inventory 无）"]
+  C2 -- 是 --> D{"① 模块集合 == 发货集合？"}
+  D -- 否 --> R2["拒绝 + 点名 多出/缺失（写/执行类模块加一句解释）"]
+  D -- 是 --> F{"readDocument 可用？"}
+  F -- 否 --> G2["降级：放行 + 告警「配置层未核验」"]
+  F -- 是 --> F2{"② config 有 write:true / edit:true？"}
+  F2 -- 是 --> R4["拒绝 + 点名配置项"]
+  F2 -- 否 --> P["放行（只读保证成立）"]
 ```
 
 ### FR-1 新模块 `lib/preset-readonly-guard.mjs`（纯函数 + 常量，零副作用）
@@ -128,25 +131,30 @@ flowchart TD
 | 导出 | 作用 |
 |---|---|
 | `CONSULT_READONLY_MODULES` | **发货的 9 个模块名**（常量，单一事实源；见 §11 的来源） |
-| `FORBIDDEN_MODULE_TOKENS` | 禁用能力词表（`bash` / `pwsh` / `str-replace-editor` / `jobs` / `ralph` / `workflow` / `subagent` / `terminal` / `worktree` / `schedule` / `present` / `goal` / `todo` / `ask-user`） |
-| `normalizeModules(rows)` | `rows` → 模块名数组（**去重 + 排序** ⇒ 顺序不同不算漂移）（**纯**） |
-| `checkModuleSet(actual)` | → `{ ok, added: [], missing: [] }`（**纯**） |
-| `checkForbidden(actual)` | → `{ ok, hits: [] }`（**纯**） |
+| `WRITE_CAPABLE_TOKENS` | **文案解释器**用的词表（`bash` / `pwsh` / `str-replace-editor` / `jobs` / `ralph` / `workflow` / `subagent` / `terminal` / `worktree` / `schedule` / `present` / `goal` / `todo` / `ask-user`）—— **不承担判据**（评审 #1），只用来在拒绝文案里加一句「这是写/执行类」 |
+| `explainModule(name)` | → `"（写/执行类）"` 或 `""`（**纯**，仅文案） |
+| `normalizeModules(rows)` | **先按 `enabled !== false` 过滤行**，再取 `moduleName`（**去重 + 排序** ⇒ 顺序不同不算漂移）（**纯**，评审 #9） |
+| `checkModuleSet(actual)` | → `{ ok, added: [], missing: [] }`（**纯**，**唯一**的模块层判据） |
 | `checkDocFlags(yamlText)` | → `{ ok, hits: [] }`：扫 `write:\s*true` / `edit:\s*true`（**纯**） |
-| `evaluatePresetDrift({ rows, docContent })` | 三层合一 → `{ ok, reason }`（**纯**） |
+| `evaluatePresetDrift({ rows, docContent })` | 两层合一 → `{ ok, reason, degraded }`（**纯**；`docContent == null` ⇒ `degraded` 非空，**不静默**，评审 #2） |
 
 ### FR-2 接入 `resolveConsultReadonlyRoute`
 
 在既有 `broken` 检查**之后**、`return { ok:true }` **之前**插入一段（顺序即证据顺序）：
 
 1. 取 `presets.compositionInventory`（函数？）→ 调 → 找到本预设的行。
+   · **inventory 可用但缺该预设行** ⇒ **拒绝**（`list()` 刚说它已注册，两面自相矛盾本身就是可疑信号；评审 #11）。
 2. `evaluatePresetDrift` ⇒ `ok:false` 时返回 `reason`（**必含「无法保证只读」**，沿用 T-29 判据）。
 3. 观测面缺失/抛错 ⇒ 返回 `ok:true` + `degraded` 字段（新字段），由 caller 并入派发文本。
+
+**函数归属**（评审 #4）：`evaluatePresetDrift` 等**纯函数**住 `lib/preset-readonly-guard.mjs`；
+**`verifyReadonlyPresetContent(presets)`**（async、要摸服务对象）住 `lib/consult.mjs` —— 这样「新模块零副作用」的声明才成立。
 
 返回值扩展：`{ ok, mode, preset, reason, degraded?: string|null }`（**加性**，不改既有字段语义）。
 
 ### FR-3 降级告警可见
 
+**两个观测面任一缺失都告警**（评审 #2）：`compositionInventory` 不可用 / `readDocument` 不可用（后者=「配置层未核验」）。
 `startConsultSession` 的派发文本（既有 `warnPrefix` 通道）追加一行：
 
 ```
@@ -155,12 +163,19 @@ flowchart TD
 
 ### FR-4 拒绝文案（必须点名）
 
+**下面四行是「各自单独出现」的示例**（`evaluatePresetDrift` 在**第一个失败层**早返回 ⇒ 一条报文只含一类，评审 #8）：
+
 ```text
-只读预设内容已漂移（"thincoder-consult-ro"）：<具体差异>
-  · 多出模块：@deepseek-ai/dsh-tool-bash
-  · 缺失模块：@deepseek-ai/dsh-tool-web
-  · 命中禁用能力：dsh-tool-pwsh
-  · 关键配置被翻转：write: true
+只读预设内容已漂移（"thincoder-consult-ro"）：模块集合不符
+  · 多出：@deepseek-ai/dsh-tool-pwsh  ← 文案会补「（执行类）」
+⇒ 无法保证只读（拒绝运行）
+
+只读预设内容已漂移（"thincoder-consult-ro"）：模块集合不符
+  · 缺失：@deepseek-ai/dsh-tool-web
+⇒ 无法保证只读（拒绝运行）
+
+只读预设内容已漂移（"thincoder-consult-ro"）：关键配置被翻转
+  · write: true / edit: true
 ⇒ 无法保证只读（拒绝运行）
 ```
 
@@ -174,28 +189,31 @@ flowchart TD
 
 ```text
 evaluatePresetDrift({ rows, docContent }):
-  前置：rows 可为 null（观测面缺失）；docContent 可为 null
-  后置：任意输入都不抛；ok:false 时 reason 非空且含具体差异
-  if rows == null: return { ok:true, degraded:"内容观测面不可用" }   // D-2
-  actual = normalizeModules(rows).filter(enabled !== false)         // 停用的行**不算在用**：
-                                                                     //  ⇒ 发货集合里的行被停用 = 缺失 = 漂移（保守方向，§九）
-  set = checkModuleSet(actual)
-  if !set.ok: return { ok:false, reason: "模块集合不符（多出 … / 缺失 …）" }
-  bad = checkForbidden(actual)
-  if !bad.ok: return { ok:false, reason: "命中禁用能力：" + bad.hits.join(", ") }
-  if docContent != null:
-     flags = checkDocFlags(docContent)
-     if !flags.ok: return { ok:false, reason: "关键配置被翻转：" + flags.hits.join(", ") }
+  前置：rows 可为 null（观测面缺失）；docContent 可为 null（配置层不可用）
+  后置：任意输入都不抛；ok:false 时 reason 非空且含具体差异；
+        rows 齐但 docContent 缺 ⇒ ok:true **且 degraded 非空**（评审 #2：不静默）
+  if rows == null: return { ok:true, degraded:"内容观测面不可用" }            // D-2
+  mods = normalizeModules(rows)                 // ★ 评审 #9：**先滤行**（enabled !== false）再取 moduleName
+                                                //    ⇒ 发货集合里的行被停用 = 缺失 = 漂移（保守方向，§九）
+  set = checkModuleSet(mods)                     // ① 唯一的模块层判据（精确等值）
+  if !set.ok:
+     reason = "模块集合不符（多出 " + set.added.map(explainModule).join(", ")
+            + " / 缺失 " + set.missing.join(", ") + "）"                       // explainModule 只加「（写/执行类）」文案
+     return { ok:false, reason }
+  if docContent == null:
+     return { ok:true, degraded:"配置层未核验（readDocument 不可用）" }        // ★ 评审 #2：here 必须给 degraded
+  flags = checkDocFlags(docContent)              // ② 关键配置
+  if !flags.ok: return { ok:false, reason: "关键配置被翻转：" + flags.hits.join(", ") }
   return { ok:true, degraded:null }
 
-verifyReadonlyPresetContent(presets):
+verifyReadonlyPresetContent(presets):            // 住 lib/consult.mjs（评审 #4：要摸服务对象，不属纯函数模块）
   前置：presets 是 agentPresets 服务对象（可能只暴露 list()）
-  后置：**不抛**；缺任何观测面 ⇒ { ok:true, degraded:"…" }
-  try:
-    inventory = await presets.compositionInventory()      // 可能不存在/抛错
-  catch: inventory = null
-  row = inventory?.find(r => r.id === CONSULT_READONLY_PRESET)
-  if !row: return { ok:true, degraded:"compositionInventory 不可用或缺该预设行" }
+  后置：**不抛**；观测面缺失 ⇒ { ok:true, degraded:"…" }；行不一致 ⇒ { ok:false, reason:"…" }
+  try: inventory = await presets.compositionInventory() catch: inventory = null   // 不存在/抛错
+  if inventory == null: return { ok:true, degraded:"compositionInventory 不可用" }
+  row = inventory.find(r => r.id === CONSULT_READONLY_PRESET)
+  if !row:
+     return { ok:false, reason:"观测面自相矛盾（list() 说已注册，compositionInventory 无此行）⇒ 无法保证只读" }
   try: doc = await presets.readDocument(CONSULT_READONLY_PRESET) catch: doc = null
   return evaluatePresetDrift({ rows: row.rows, docContent: doc?.content ?? null })
 ```
@@ -226,18 +244,19 @@ verifyReadonlyPresetContent(presets):
 
 | 腿 | 判据（每条都必须能红） |
 |---|---|
-| **T-39 模块集合漂移** | ① 集合完全一致（**顺序打乱**） ⇒ 放行；② 多一个 `dsh-tool-bash` ⇒ 拒绝且 reason 点名列它；③ 少一个 `dsh-tool-web` ⇒ 拒绝且 reason 点名它；④ `enabled:false` 的写行 ⇒ **不算在用**（放行） |
-| **T-40 禁用能力与配置翻转** | ① `@deepseek-ai/dsh-tool-pwsh` 在集合里 ⇒ 拒绝；② `readDocument.content` 含 `write: true` ⇒ 拒绝；③ `edit: true` ⇒ 拒绝；④ 正常内容 ⇒ 放行 |
-| **T-41 观测面缺失降级** | ① 服务只有 `list()` ⇒ **放行** + `degraded` 非空；② `compositionInventory` 抛错 ⇒ 放行 + `degraded`；③ `readDocument` 抛错但 inventory 正常 ⇒ 模块层仍生效（集合不符仍拒） |
-| **T-42 发货定义同步锁** | 静态：文本解析 `cordis.patch.yml` 的 `preset-thincoder-consult-ro` 段，取全部 `name:`（展开 group）⇒ **必须逐项等于** `CONSULT_READONLY_MODULES`（多/少/改名都红） |
+| **T-39 模块集合漂移** | ① 集合完全一致（**顺序打乱**） ⇒ 放行；② 多一个 `dsh-tool-pwsh` ⇒ 拒绝，reason 点名它**且**带「（执行类）」文案（评审 #1：拒绝来自集合层，词表只解释）；③ 少一个 `dsh-tool-web` ⇒ 拒绝且点名；④ **发货集合之外**的写能力行若 `enabled:false` ⇒ **不算在用**（放行，评审 #3 澄清）；⑤ **发货集合内**的某行 `enabled:false` ⇒ **拒绝**（= 缺失，§九 钉的方向） |
+| **T-40 配置层翻转** | ① `readDocument.content` 含 `write: true` ⇒ 拒绝；② `edit: true` ⇒ 拒绝；③ 正常内容 ⇒ 放行；④ 无 `write`/`edit` 键（模块没这些开关）⇒ 放行（不误报） |
+| **T-41 观测面缺失与服务面异常** | ① 服务只有 `list()`（无 inventory） ⇒ **放行** + `degraded` 非空；② `compositionInventory` 抛错 ⇒ 放行 + `degraded`；③ `readDocument` 抛错但 inventory 正常 ⇒ **放行 + `degraded` 非空**（评审 #2：不许静默）；④ inventory 可用但**缺该预设行** ⇒ **拒绝**（评审 #11）；⑤ 集合不符 + readDocument 抛错 ⇒ **仍拒绝**（模块层优先） |
+| **T-42 发货定义同步锁** | 静态：**锚定 `id: preset-thincoder-consult-ro`**（不按行号）截取该 YAML 行块，**按缩进递归展开 `group: true`**，取所有 `name:` 值 ⇒ **必须逐项等于** `CONSULT_READONLY_MODULES`（多/少/改名都红；评审 #5：解析规则写死在腿里，不留「怎么解析」的空白） |
 
 **变异自证（交付时必跑并写进报告）**
 
-1. 把 `checkModuleSet` 改成恒 `ok` ⇒ T-39 红。
-2. 把 `checkForbidden` 删掉 ⇒ T-40 ① 红。
-3. 把 `checkDocFlags` 删掉 ⇒ T-40 ②③ 红。
-4. 把「观测面缺失 ⇒ 放行」改成「缺失 ⇒ 拒绝」 ⇒ T-41 红（方向锁）。
+1. 把 `checkModuleSet` 改成恒 `ok` ⇒ T-39②③ 红。
+2. 把 `checkDocFlags` 删掉 ⇒ T-40①② 红。
+3. 把「观测面缺失 ⇒ 放行 + degraded」改成「缺失 ⇒ 静默放行」 ⇒ T-41①③ 红（degraded 为空即红）。
+4. 把「缺行 ⇒ 拒绝」改成「缺行 ⇒ 放行」 ⇒ T-41④ 红。
 5. 从 `CONSULT_READONLY_MODULES` 删一项 ⇒ T-42 红。
+6. 把 `normalizeModules` 的「先滤行」改成「先取名再滤」 ⇒ T-39④⑤ 红（评审 #9 的判据化）。
 
 **负控**：`toolFilter` 路线（老宿主）**不得**被本判据影响（既有 T-30 腿必须仍绿）。
 
@@ -254,6 +273,8 @@ verifyReadonlyPresetContent(presets):
 | 用户把预设整个删掉 | 既有判据（list 找不到）先拒 —— 本批不改变 |
 | 宿主升级导致模块改名（如 `dsh-tool-fs` → 新名） | **本批会拒绝**（集合不符）⇒ 属**预期行为**，需随升级同批改常量（T-42 会先红，提醒改） |
 | 预设里有 `cordis:group` | inventory 已展开；本判据只看**展开后的模块名** |
+| `list()` 说有、`compositionInventory()` 没有该行 | **拒绝**（观测面自相矛盾；评审 #11） |
+| 发货集合内的行被 `enabled:false` 停用 | **拒绝**（= 缺失；与 T-39⑤ 同一判据） |
 | 并发 | 每次派发各读一次，无共享可变状态 |
 
 ---
@@ -263,7 +284,7 @@ verifyReadonlyPresetContent(presets):
 | # | 事项 | 裁定 | 代价 |
 |---|---|---|---|
 | 1 | 观测面缺失时 | **降级放行 + 响亮告警**（D-2） | 缺 API 的宿主上「只读」仍只是弱证，但会**说出来** |
-| 2 | 漂移判定口径 | **语义三层**（D-1） | 极端的 YAML 格式歧义可能漏；换来的是不会误停会诊 |
+| 2 | 漂移判定口径 | **语义两层**（模块集合精确等值 + 关键配置扫描；原第三层词表**降级为文案解释器**，D-1 / 评审 #1） | 极端的 YAML 格式歧义可能漏；换来的是不会误停会诊 |
 | 3 | 逃生口 | **不给**（D-3） | 想定制只能改发货定义并升版本 |
 
 ---
@@ -272,7 +293,7 @@ verifyReadonlyPresetContent(presets):
 
 | 文件 | 改动 | 计数 |
 |---|---|---|
-| `lib/preset-readonly-guard.mjs` | **新增**（常量 + 4 个纯函数 + 1 个组合判据） | — |
+| `lib/preset-readonly-guard.mjs` | **新增**（2 个常量 + 4 个纯函数：`explainModule` / `normalizeModules` / `checkModuleSet` / `checkDocFlags`，外加组合判据 `evaluatePresetDrift`；`verifyReadonlyPresetContent` **不在此档**，见 FR-2） | — |
 | `lib/consult.mjs` | `resolveConsultReadonlyRoute` 加一段内容校验；返回值加 `degraded`；`startConsultSession` 把告警并入派发文本 | — |
 | `test/consult.test.mjs` | +4 条顶层用例 | **7 → 11** |
 | `docs/test-lifecycle.md` | §三 该档单元格 + §七 变更行 | **11** |
@@ -280,6 +301,8 @@ verifyReadonlyPresetContent(presets):
 | `docs/2026-09-17-scope-alignment-design.md` | `b17-全量用例数` / `b17-用例增量`（与改 CHANGELOG **同一次编辑**） | **660 / 4** |
 | `docs/README.md` | 登记本档 | — |
 | `package.json` | 版本号（与 CHANGELOG 顶部**同一次编辑**） | — |
+| `.thincoder/tasks.json` | `t-6` 结项（`task_done` 带凭据）—— 防「交付了但台账还开着」（评审 #7） | — |
+| `docs/2026-10-18-session-handover.md` | §3.1 的 `t-6` 行改为指向本档的**两层**方案（原写「内容指纹比对」，已被 D-1 否决；评审 #6） | — |
 
 **发货常量 `CONSULT_READONLY_MODULES` 的 9 个模块**（来源 = `cordis.patch.yml` 的 `preset-thincoder-consult-ro`，
 group 已展开）：
@@ -309,9 +332,15 @@ node release-check.mjs v0.35.0
 
 ## §十二 已知未验证项（如实登记）
 
-1. **运行时服务面是否暴露 `compositionInventory` / `readDocument`**：本档只读**平台源码**（class 方法存在），
-   **未在运行中的服务对象上实测**。实施第一步必须先探针验证；若只暴露 `list()` ⇒ 本批退化为
-   「降级放行 + 告警」= **功能未生效**（会如实体现在派发文本里）。
+1. **运行时服务面是否暴露 `compositionInventory` / `readDocument`**：本档只读**平台源码**，**未在运行中的服务对象上实测**。
+   **已取得的证据（本档修订后补）**：① `readDocument` 是**官方对外方法** —— 平台 typert 描述里写死
+   `'agentPresets/read' → implementation: 'readDocument'`；② 服务是 cordis `Service` 实例（`super(ctx, "agentPresets")`），
+   本地 `ctx.get("agentPresets")` 拿到的是**实例本身**（旁证：本项目 `list()` 拿到数组，而远端正返回 `{presets}`）。
+   ⇒ `readDocument` 基本可确定可用；`compositionInventory` 是类方法但**不在**对外契约里，风险仍在。
+
+   ★ **实施第一步 = 探针检查点（评审 #10）**：在 `eng_coder` 动任何代码之前，先跑一次只读探针打印
+   `Object.keys(presets)` / `typeof presets.compositionInventory` / `typeof presets.readDocument`。
+   **若两者都没有 ⇒ 停下报告用户、重新裁定范围**，不要交付一个「只会告警、不判任何东西」的空批次。
 2. **`compositionInventory()` 的 `rows` 是否包含 config**：源码里 `flattenRows` 只输出
    `{ entryId, moduleName, enabled, condition? }` ⇒ **不含 config**（已读源码）。若实施时发现含 config，
    可直接用它替代 `readDocument`（更结构化）—— 属**加性**改进，需同批更新本档。
