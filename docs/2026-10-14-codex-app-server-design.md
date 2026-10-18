@@ -8,6 +8,12 @@
 count-marks: 项|处|条|档|值|步|腿
 -->
 
+> ★ **2026-10-18 取代注记（批 37 · DSH 0.2.1 迁移）**：本档 §4 D6 与 §8 对 **ps5** 的描述**已失效** ——
+> 0.2.1 **移除了** `ctx.subagents.start`，原「键集合 ⊆ 平台已知九键并集」判据不再成立（它只验调用形状、
+> 不验服务在运行时是否存在 ⇒ 这个 P0 它没拦住）。ps5 现判据见
+> [dsh017-program-closeout.md](./dsh017-program-closeout.md) 的 ps5 行（**四档零 `subagents.start(...)` 直呼 +
+> 全部经 `lib/subagent-dispatch.mjs` 单一入口 + 入口含 getProvider / startActivation / 老宿主回退 / 可读断层四要素**）。
+> 本档 §4 D6、§8 负向锁、§10 追认、§12 R-33-2 各行**保留原文作为历史记录**，以本注记为准。
 ## §1 背景
 
 **本批之前**，插件的 codex 用法只有一条通道：`lib/codex-adapter.mjs` 直接 spawn `codex exec --json …`（历史口径——本批新增第二条通道后该句不再成立，故加时限）（B6/B7：无 shell、任务文本走 stdin）。2026-10-12 起本机该通道在**需要执行命令**的任务上必挂；2026-10-13 定位到两处 CLI 侧原因（联网子系统 + Windows 执行助手 `[windows] sandbox = "elevated"`），2026-10-14 复测仍挂（详见 §2）。用户裁定走 **B 路线**：改用平台自带的 codex provider。

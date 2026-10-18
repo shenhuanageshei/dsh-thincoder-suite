@@ -40,6 +40,8 @@ import {
 // 读取器复用 consult.mjs 的补导出——设计 §2.6「不得新建模块」）
 import { readChildModelToolSurface, renderModelSurfaceEvidence } from "../lib/eng.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
+// 批 37 / 设计档 §二十（S1）：子代理派发单一入口——T-27…T-30 四条腿的受测对象
+import { dispatchSubagent, subagentDispatchAvailable } from "../lib/subagent-dispatch.mjs"
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -1297,5 +1299,142 @@ test("A29-7 (D-52): 会诊只读白名单对位锁——静态成员集 = 只读
     assert.deepEqual(subB.started[1].req.toolFilter, { allow: ["read", "glob", "grep"] },
       "降级腿 = 核心三件白名单，且仍零 deny：" + JSON.stringify(subB.started[1].req.toolFilter))
   } finally { cleanup(hB.sessionId, hB.state) }
+
+  // ═════ 批 37 / S1（设计档 §二十 20.5）：子代理契约迁移的四条腿（并入本块——零新增顶层 test(）═════
+
+  // —— T-27（源码级）：四个派发档不再直呼已移除的 ctx.subagents.start(，全部经单一入口 ——
+  const dispatchModules = ["consult.mjs", "eng.mjs", "escalate.mjs", "codex-app-server.mjs"]
+  for (const f of dispatchModules) {
+    const srcT27 = readFileSync(new URL("../lib/" + f, import.meta.url), "utf8")
+    assert.equal((srcT27.match(/(?:ctx\.)?subagents\.start\s*\(/g) ?? []).length, 0,
+      "T-27：" + f + " 不得直呼已移除的 subagents.start(...)（回退分支只许住在 lib/subagent-dispatch.mjs）")
+    assert.ok(srcT27.includes("subagent-dispatch.mjs"),
+      "T-27：" + f + " 必须 import 共享派发助手")
+    assert.ok(/dispatchSubagent\s*\(/.test(srcT27),
+      "T-27：" + f + " 必须调用 dispatchSubagent(...)（不是只 import）")
+  }
+  const helperSrc = readFileSync(new URL("../lib/subagent-dispatch.mjs", import.meta.url), "utf8")
+  for (const needle of ["getProvider", "startActivation", "subagents.start", "宿主子代理契约断层"]) {
+    assert.ok(helperSrc.includes(needle),
+      "T-27 反证：老宿主回退/新宿主派发/可读断层必须都在单一入口内：" + needle)
+  }
+
+  // —— T-28：契约断层 ⇒ 抛**可读错误**（含 getProvider 与 subagents.start），不是裸 TypeError ——
+  await assert.rejects(
+    () => dispatchSubagent({ subagents: {} }, "spawn", { prompt: [{ type: "text", text: "x" }], parent: {} }),
+    (e) => {
+      assert.ok(e instanceof Error, "T-28：必须抛 Error")
+      assert.ok(!(e instanceof TypeError), "T-28：不得是裸 TypeError（那是被禁止的错误文案）")
+      assert.match(String(e.message), /getProvider/, "T-28：文案必须点名 getProvider")
+      assert.match(String(e.message), /subagents\.start/, "T-28：文案必须点名 subagents.start")
+      assert.match(String(e.message), /宿主子代理契约断层/, "T-28：文案必须点明契约断层")
+      return true
+    },
+  )
+  await assert.rejects(
+    () => dispatchSubagent({ subagents: { getProvider: () => ({ name: "spawn", start: "not-a-function" }) } }, "spawn", {}),
+    (e) => /getProvider/.test(String(e.message)) && !(e instanceof TypeError),
+    "T-28：provider.start 非函数（且无其它派发面）⇒ 同一可读断层",
+  )
+  assert.equal(subagentDispatchAvailable({ subagents: {} }, "spawn"), false,
+    "T-28 谓词自证：空 ctx.subagents 不可派")
+
+  // —— T-29 ★：consult 在新宿主拿不到只读保证 ⇒ fail-closed（零派发） ——
+  const t29Dispatches = []
+  const t29Provider = {
+    name: "spawn",
+    capabilities: { agentOptions: true, agentPreset: true, outputSchema: true, depthLimit: true },
+    async prepareContinuable() { return {} },
+  }
+  const t29Host = {
+    getProvider: (name) => (name === "spawn" ? t29Provider : undefined),
+    async startActivation(spec) {
+      t29Dispatches.push(spec)
+      return {
+        childId: "t29-child",
+        result: Promise.resolve({ output: [{ type: "text", text: "should-not-run" }], stopReason: "completed" }),
+        dispose: async () => {},
+      }
+    },
+  }
+  const hT29 = makeDeps({ subagents: t29Host })
+  try {
+    const r29 = await startConsultSession(hT29.deps, "problem", undefined)
+    assert.ok(r29 && typeof r29.error === "string",
+      "T-29：新宿主下 consult 必须拒绝运行（返回 error，而不是起一个可写会诊）：" + JSON.stringify(r29))
+    assert.match(r29.error, /无法保证只读/, "T-29：拒绝文案必须点明「无法保证只读」")
+    assert.match(r29.error, /拒绝运行/, "T-29：拒绝文案必须点明「拒绝运行」")
+    assert.equal(t29Dispatches.length, 0,
+      "T-29：拒绝时不得派发任何子代理（startActivation 零调用）；实调 " + t29Dispatches.length + " 次")
+  } finally { cleanup(hT29.sessionId, hT29.state) }
+
+  // —— T-30：老宿主回退（只有 subagents.start）仍能派发，且既有字段原样透传 ——
+  const t30Calls = []
+  const t30Legacy = {
+    async start(kind, request) {
+      t30Calls.push({ kind, request })
+      return {
+        id: "t30-run",
+        result: Promise.resolve({ output: [{ type: "text", text: "legacy-ok" }], stopReason: "completed" }),
+        dispose: async () => {},
+      }
+    },
+  }
+  const t30Run = await dispatchSubagent({ subagents: t30Legacy }, "spawn", {
+    prompt: [{ type: "text", text: "x" }], parent: {}, signal: undefined, label: "legacy",
+    persona: "p", toolFilter: { allow: ["read"] }, agentOptions: { maxTokens: 1 },
+  })
+  assert.equal(t30Calls.length, 1, "T-30：老宿主回退必须真的调用 subagents.start")
+  assert.equal(t30Calls[0].kind, "spawn", "T-30：provider 名原样透传")
+  assert.equal(t30Calls[0].request.persona, "p", "T-30：persona 原样透传（老宿主契约遵守它）")
+  assert.deepEqual(t30Calls[0].request.toolFilter, { allow: ["read"] }, "T-30：toolFilter 原样透传")
+  assert.deepEqual(t30Calls[0].request.agentOptions, { maxTokens: 1 }, "T-30：agentOptions 原样透传")
+  assert.equal((await t30Run.result).stopReason, "completed", "T-30：回退句柄的 result 可读")
+  assert.equal(typeof t30Run.dispose, "function", "T-30：回退句柄带 dispose")
+
+  // —— T-30 附加（新宿主主路线）：只有 getProvider+startActivation 时也派得出去 ——
+  const t30bCalls = []
+  const t30bProvider = {
+    name: "spawn",
+    capabilities: { agentOptions: true, agentPreset: true, outputSchema: true, depthLimit: true },
+    async prepareContinuable() { return {} },
+  }
+  const t30bHost = {
+    getProvider: () => t30bProvider,
+    agents: { get: (id) => ({ id, session: { seq: 1 } }) },
+    async startActivation(spec) {
+      t30bCalls.push(spec)
+      return {
+        childId: "t30b-child",
+        result: Promise.resolve({ output: [{ type: "text", text: "new-ok" }], stopReason: "completed" }),
+        dispose: async () => {},
+      }
+    },
+  }
+  const t30bRun = await dispatchSubagent(
+    { subagents: t30bHost, agents: t30bHost.agents }, "spawn",
+    {
+      prompt: [{ type: "text", text: "x" }], parent: {}, signal: new AbortController().signal,
+      label: "eng-coder", persona: "p", toolFilter: { deny: ["x"] },
+    },
+    { allowUnsupportedComposition: true },
+  )
+  assert.equal(t30bCalls.length, 1, "T-30b：新宿主主路线必须调用 startActivation")
+  assert.equal(t30bCalls[0].delivery, "caller", "T-30b：delivery=caller（结果只回调用方）")
+  assert.equal(t30bCalls[0].label, "eng-coder", "T-30b：label 走 spec 顶层")
+  assert.equal("label" in t30bCalls[0].request, false, "T-30b：request 不得再带 label")
+  assert.equal("signal" in t30bCalls[0].request, false, "T-30b：request 不得再带 signal")
+  assert.equal("persona" in t30bCalls[0].request, false, "T-30b：0.2.1 request 不含 persona（显式降级）")
+  assert.equal("toolFilter" in t30bCalls[0].request, false, "T-30b：0.2.1 request 不含 toolFilter（显式降级）")
+  assert.equal(t30bRun.id, "t30b-child", "T-30b：receipt.childId 映射为旧 run.id")
+  assert.equal(t30bRun.localAgent.id, "t30b-child", "T-30b：ctx.agents 可读时补 localAgent（可读不到不伪造）")
+  assert.equal((await t30bRun.result).stopReason, "completed", "T-30b：新路线 result 可读")
+
+  // —— 组合字段默认 fail-closed：未显式授权时，新宿主路线不得静默丢 persona/toolFilter ——
+  await assert.rejects(
+    () => dispatchSubagent({ subagents: t30bHost }, "spawn", { prompt: [{ type: "text", text: "x" }], parent: {}, persona: "p" }),
+    /拒绝派发/,
+    "新宿主不遵守组合字段 ⇒ 默认拒绝派发（只有显式 allowUnsupportedComposition 才降级）",
+  )
 })
 

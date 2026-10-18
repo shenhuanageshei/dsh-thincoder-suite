@@ -265,12 +265,12 @@ test("A28-5: 十条谓词实现 grep 唯一（lib/contract-baseline.mjs）；测
   const baselineSrc = readFileSync(LIB("contract-baseline.mjs"), "utf8")
   const psSrc = readFileSync(join(PLUGIN_DIR, "test", "platform-surface.test.mjs"), "utf8")
   const indexSrc = readFileSync(LIB("index.mjs"), "utf8")
-  // ① 谓词实现（两个 helper + 九个 lockPsN 定义）只活在基线档，且各恰一份
+  // ① 谓词实现（十个 lockPsN 定义）只活在基线档，且各恰一份
   // ★ 标记**拼装**（"function " + 名字 + "("）——避免本档自身成为命中源（T-CB8 的既有先例同款）
+  // ★ 批 37：ps5 改判为「零 subagents.start 直呼 + 单一入口」，原 objectEnd/collectKeys
+  //   两个配平 helper 随旧谓词一起退役（不再有第二份消费者，留死代码 = 误导）。
   const fnMarker = (name) => "function " + name + "("
   const markers = [
-    fnMarker("objectEnd"),
-    fnMarker("collectKeys"),
     ...LOCK_IDS.map((_v, i) => fnMarker("lockPs" + (i + 1))),
   ]
   for (const m of markers) {

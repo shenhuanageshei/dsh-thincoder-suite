@@ -61,7 +61,7 @@ test("#4 home 兜底探测 (derived, 与 U6d 两处同改): probeProfileRoot 同
   assertLock("ps4-home-probe-dual-name")
 })
 
-test("#5 subagents.start 形状: 全部调用点的参数键集合 ⊆ 平台已知形状（出现集合外键即红）", () => {
+test("#5 子代理派发契约: 四档零 subagents.start(...) 直呼 + 全部经单一入口（getProvider/startActivation + 老宿主回退 + 可读断层）", () => {
   assertLock("ps5-subagents-start-shape")
 })
 

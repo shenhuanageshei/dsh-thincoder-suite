@@ -462,8 +462,13 @@ test("DOC-HYGIENE T4（锚 V6 / V7 / V8）: 失败后缀块挂在每个终态失
     assert.ok(lines.length >= 1, "V7：预检返回点必须可定位：" + JSON.stringify(p))
     for (const l of lines) assert.ok(!l.includes("failStop("), "V7：预检拒绝点不得挂 wrapper：" + JSON.stringify(p))
   }
-  const firstSpawn = Math.min(ENG_SRC.indexOf("runCodexTask(deps, {"), ENG_SRC.indexOf("ctx.subagents.start("))
-  assert.ok(firstSpawn > 0, "V7：首个 spawn 点必须可定位")
+  // 批 37 / 设计档 §二十：0.2.1 移除了 ctx.subagents.start ⇒ dsh 派发点改由单一入口
+  // dispatchSubagent(ctx, "spawn", …) 承担；本锚随实现迁移（判据口径不变：wrapper 首挂点必须在其后）。
+  const firstSpawn = Math.min(
+    ENG_SRC.indexOf("runCodexTask(deps, {") === -1 ? Number.MAX_SAFE_INTEGER : ENG_SRC.indexOf("runCodexTask(deps, {"),
+    ENG_SRC.indexOf('dispatchSubagent(ctx, "spawn", {') === -1 ? Number.MAX_SAFE_INTEGER : ENG_SRC.indexOf('dispatchSubagent(ctx, "spawn", {'),
+  )
+  assert.ok(firstSpawn > 0 && firstSpawn !== Number.MAX_SAFE_INTEGER, "V7：首个 spawn 点（codex 或 dsh 子代理派发）必须可定位")
   assert.ok(ENG_SRC.indexOf("failStop(failureText(env))") > firstSpawn,
     "V7：wrapper 的**首个**挂点必须在 spawn 之后（预检拒绝一律不挂——靠返回点位置区分，禁用内容判据）")
 
