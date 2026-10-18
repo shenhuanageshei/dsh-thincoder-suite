@@ -2,7 +2,8 @@
 //
 // 腿清单（**T-1…T-20，T-4 拆 a/b ⇒ 共 21 条**；本档顶层 `test(` 数 = 21，与下方逐条一一对应。
 // ★ 批36-补3 的 T-21/T-22 **并入既有块**（T-12 ④ 段 / T-4a ⑤ 段），**不新开顶层 `test(`** ⇒ 仍是 21 条；
-//   ★ 批43 的 T-4c/T-4d/T-4e/T-4f 同样**并入既有块**（T-4b / T-5）⇒ 计数与枚举仍为 21 条，不新增顶层 `test(`）
+//   ★ 批43 的 T-4c/T-4d/T-4e/T-4f 同样**并入既有块**（T-4b / T-5）⇒ 计数与枚举仍为 21 条，不新增顶层 `test(`）；
+//   ★ 批44 的 T-9d/T-9e/T-9h/T-9f/T-9g 同样**并入 T-9 块** ⇒ 计数与枚举仍为 21 条，不新增顶层 `test(`）
 //   T-1  无凭据 done ⇒ 拒且零写入（sha256 前后相同）
 //   T-2  blocked 缺 reason / 缺 blockedBy ⇒ 拒且零写入
 //   T-3  非法迁移被拒（**全表 25 组逐对**）＋ 同一道门的另一半：`applyTaskUpdate` 的可改字段**闭集**
@@ -20,6 +21,8 @@
 //        ＋ 文档路径清单上限的**写面**：第 9 条 ⇒ 拒（定点修复 5）
 //        ＋ ④ 的去重/上限三条腿（T-9a/T-9b/T-9c）与修复轮 3 补的两腿（稀疏数组不得绕过上限 ·
 //          无 ToPrimitive 值不得抛）**都在本块**（不在 T-4a：那是看板块）
+//        ＋ 批44（t-8）的六条腿也在本块：T-9d（规则源按去重后判）/ T-9e（读面先去重再截断）/
+//          T-9h（文案 n 与界面「已填 N / 8」都钉去重后数字）/ T-9f·T-9g（源码片段锁，不 eval bundle）
 //   T-10 evidence/reason 命中疑似凭据 ⇒ 拒写（**非打码**）
 //   T-11 rev 冲突 ⇒ 拒且零写入 + fail-loud 文案（＋ 跨会话读回、落点与键控）
 //   T-12 tab 注册不抛（有/无服务两态）＋ 点击载荷三要素（人话说明 / 文档清单 / 核验进度）
@@ -62,6 +65,11 @@
 //   T-4e 注入合计上限（**1150 标定值**；四分支逐条）            ⇒ 并入 T-5 块
 //        ＋ 修复轮 3：④ 贴顶守卫 · 边界三腿 · 空段三腿 · 尾串计入预算腿 · ① 加固（保留 ≥2 行）
 //   T-4f 跨模块契约锁（合法最坏 512 + 768 = 1281 > 1150 仍被裁）⇒ 并入 T-5 块
+//   —— 批44（台账 t-8：docPaths 的「去重」补齐规则源 + 浏览器镜像 + 读面；同样**并入既有块** ⇒ 顶层 `test(` 仍 21）——
+//   T-9d 规则源草稿校验：9 行含 1 重复 ⇒ 不报上限；9 行互异 ⇒ 报            ⇒ 并入 **T-9** 块
+//   T-9e 读面：9 项含 1 重复 ⇒ 先去重再 slice ⇒ 8 条唯一路径                ⇒ 并入 **T-9** 块
+//   T-9h 数字锁：10 行含 1 重复 ⇒「（当前 9 条）」；界面「已填 9 / 8」/「已填 8 / 8」⇒ 并入 **T-9** 块
+//   T-9f/T-9g 静态文本锁：规则源 + 浏览器镜像 + 两处展示都含去重调用（不 eval bundle）⇒ 并入 **T-9** 块
 //
 // ★ 每条腿都带「变异自证」注释：说明**去掉哪一处实现会让该腿变红**（本仓纪律：腿必须咬得住实现）。
 // ★ 每条腿都带**阳性/阴性对照**（防「恒红断言」与「恒真空断言」两种假绿）。
@@ -85,6 +93,8 @@ import {
 import { INJECT_TOTAL_MAX_CHARS, assembleInjection } from "../lib/index.mjs"
 import { buildTaskClaimResult, buildTasksBoardPayload, makeTaskTools, readChecklistDocs, renderBoardText } from "../lib/tool-tasks.mjs"
 import { TASK_COMMAND_DEFINITION_PREFIX, TASK_COMMAND_NAMES, commandArgsOf, registerTaskCommands } from "../lib/task-commands.mjs"
+// 批 44（台账 t-8）：规则源的草稿校验（上限按**去重后**条数）——T-9d/T-9h 直测它。
+import { ledgerDraftErrors as lgDraftErrors } from "../lib/ledger-config-text.mjs"
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -1103,6 +1113,65 @@ function loadClientBundle(opts = {}) {
   return { exports: exportsObj, src, id: captured.id }
 }
 
+
+/**
+ * 渲染设置页的「个人任务台账」卡片（真实客户端组件；批 44 腿 T-9h 的「界面」半边）。
+ *
+ * ★ 手法与 `test/config-api.test.mjs` 的 `loadClientLedgerMirror` 同款：只在内存里于
+ *   `exports.apply = apply;` 之前注入一行导出，**不改 `lib/client.js` 一个字节**。
+ *   `ledgerCard()` 在每次 `ThincoderPage` 渲染时都会被调用（tab 内容先全部构建），把
+ *   `activeTab` 预置为 `"ledger"` 后它的产物才进入返回树 ⇒ 能读到「已填 N / 8」那一行。
+ * ★ 预置槽位（顺序 = `ThincoderPage` 顶部 hook 段，as-of 2026-10-19）：
+ *   `0 = view` · `5 = draft` · `9 = activeTab`；其余槽走各自初值。锁定这个顺序是本腿的前提，
+ *   页面的 hook 段一改就该重核本夹具。
+ * @param {object} effective 全局 effective 层（`{ledger:{mode,docPaths,copyTemplate}}`）
+ * @returns {string} 渲染出的**整页文本**（含台账卡片的「已填 N / 8」行）
+ */
+function renderSettingsLedger(effective) {
+  const src = readFileSync(join(PLUGIN_DIR, "lib", "client.js"), "utf8")
+  const ANCHOR = "exports.apply = apply;"
+  assert.equal(src.split(ANCHOR).length - 1, 1, "工厂尾部导出锚唯一（注入点可定位）")
+  const injected = src.replace(ANCHOR,
+    "exports.__settingsProbe = { ThincoderPage: ThincoderPage, effectiveToDraft: effectiveToDraft };\n"
+    + ANCHOR)
+  let spec = null
+  const sandbox = {
+    window: { __ModuleLoader__: { load: (m) => { spec = m } } },
+    console,
+    navigator: {},
+    setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+    fetch: () => Promise.resolve({ json: () => Promise.resolve({ ok: true }) }),
+  }
+  createContext(sandbox)
+  runInContext(injected, sandbox, { filename: "lib/client.js" })
+  assert.ok(spec && typeof spec.factory === "function", "客户端 bundle 必须经 __ModuleLoader__.load 注册一个 factory")
+  const store = {}
+  let idx = 0
+  const React = {
+    createElement: function (type, props) {
+      return { type, props: props || {}, children: Array.prototype.slice.call(arguments, 2) }
+    },
+    useState: (init) => {
+      const i = idx++
+      if (!(i in store)) store[i] = init
+      return [store[i], (v) => { store[i] = typeof v === "function" ? v(store[i]) : v }]
+    },
+    // 组件挂载时的拉取会真的发起；异步落地不参与本次同步渲染（断言只读首屏）。
+    useEffect: (cb) => { const i = idx++; if (!(i in store)) { store[i] = "ran"; try { cb() } catch { /* 异常由断言捕获 */ } } },
+    useCallback: (fn) => { idx++; return fn },
+    useRef: (init) => { const i = idx++; if (!(i in store)) store[i] = { current: init }; return store[i] },
+  }
+  const mod = spec.factory((name) => (name === "react" ? React : {}))
+  const probe = mod.__settingsProbe
+  assert.ok(probe && typeof probe.ThincoderPage === "function", "设置页探针导出成功（注入点存在）")
+  const layer = effective && typeof effective === "object" ? effective : {}
+  store[0] = { base: {}, user: {}, effective: layer }
+  store[5] = probe.effectiveToDraft(layer)
+  store[9] = "ledger"
+  idx = 0
+  return treeText(probe.ThincoderPage({ api: {}, sessions: null, useSessions: null })).join("\n")
+}
+
 /** 假客户端 ctx（`ctx.get` 是**函数**形态；`ctx.effect` 立即执行回调并交回 disposer）。 */
 function fakeClientCtx(betterSidebar) {
   const calls = { slots: [], registered: null, tab: null, tabDisposed: 0, effectDispose: null, opened: [] }
@@ -1962,6 +2031,83 @@ test("T-9（US-9）: ledger.mode = off ⇒ 个人台账分区消失、**防漂�
     assert.doesNotThrow(() => isValidDocPathList([nullProtoItem]),
       "★ 无 ToPrimitive 的值 ⇒ **绝不抛**（纯函数后置；旧 `String(p)` 在这里抛 TypeError）")
     assert.equal(isValidDocPathList([nullProtoItem]), false, "无原型的对象项 ⇒ false（不抛）")
+    // ————— 批 44（台账 t-8）：docPaths 的「去重」补齐镜像（设计档 docs/2026-10-19-t8-docpaths-mirror-design.md §八） —————
+    // ★ 六条腿全部**并入本 T-9 块**（不新增顶层 test(）。T-9f/T-9g 是**静态文本锁**：
+    //   读 lib/client.js 源码字节断言片段，**绝不 eval 该 bundle**（含 DOM/React，node 下无法加载）。
+    // ★ 夹具（9 项含 1 重复 ⇒ 去重后 8 条唯一；重复项放在第 2 位 —— 「先截后去重」会把 h.md 截掉）：
+    const nineWithDup = ["a.md", "a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md"]
+    const nineDistinct = ["a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md", "i.md"]
+    const tenWithDup = ["a.md", "a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md", "i.md"]
+    assert.equal(nineWithDup.length, 9, "夹具自证：9 行（其中 1 行重复）")
+    assert.equal(new Set(nineWithDup).size, 8, "夹具自证：去重后 8 条唯一")
+    assert.equal(nineDistinct.length, 9, "夹具自证：9 行互异")
+    assert.equal(tenWithDup.length, 10, "夹具自证：10 行（其中 1 行重复）")
+    assert.equal(new Set(tenWithDup).size, 9, "夹具自证：去重后 9 条唯一（> 上限 " + MAX_DOC_PATHS + "）")
+    const draftOf = (lines) => ({ ledger: { mode: "standalone", docPathsText: lines.join("\n"), copyTemplate: "话术" } })
+    const hasCountError = (errs) => errs.some((e) => e.includes("最多 " + MAX_DOC_PATHS + " 条"))
+
+    // T-9d（规则源草稿校验）：9 行含 1 重复 ⇒ 去重后 8 ⇒ **不报**「最多 8 条」；9 行互异 ⇒ **报**。
+    //   变异自证：把 FR-1 的 dedupePaths(paths).length 改回 paths.length ⇒ 第一条断言红。
+    const errsDup9 = lgDraftErrors(draftOf(nineWithDup))
+    assert.ok(!hasCountError(errsDup9),
+      "T-9d：9 行含 1 重复 ⇒ 去重后 8 条 ≤ 上限 ⇒ **不得**报「最多 8 条」（实测 " + JSON.stringify(errsDup9) + "）")
+    const errsDistinct9 = lgDraftErrors(draftOf(nineDistinct))
+    assert.ok(hasCountError(errsDistinct9),
+      "T-9d：9 行互异 ⇒ 去重后 9 条 > 上限 ⇒ 必须报「最多 8 条」（实测 " + JSON.stringify(errsDistinct9) + "）")
+
+    // T-9e（读面）：9 项含 1 重复 ⇒ 读面必须**先去重再截断**，保留 8 条**唯一**路径。
+    //   变异自证：删掉 FR-4 的 Set 去重 ⇒ 实测 ["a.md","a.md","b.md",…]（长度仍是 8，但内容不等）⇒ 红。
+    const resolved9 = resolveLedgerConfig({ ledger: { docPaths: nineWithDup } }).docPaths
+    assert.equal(resolved9.length, MAX_DOC_PATHS, "T-9e：9 项含 1 重复 ⇒ 读面保留 8 条唯一路径")
+    assert.deepEqual(resolved9, nineDistinct.slice(0, MAX_DOC_PATHS),
+      "T-9e：读面必须等于**去重后的前 8 条唯一路径**（重复项不吃配额，也不挤掉第 8 条唯一路径）")
+
+    // T-9h（数字也钉）：错误文案里的 n 与界面「已填 N / 8」都必须是**去重后**的条数。
+    //   10 行含 1 重复 ⇒ 去重后 9 > 8 ⇒ 文案「（当前 9 条）」；旧口径（原始行数）会写 10。
+    const errs10 = lgDraftErrors(draftOf(tenWithDup))
+    assert.ok(errs10.some((e) => e.includes("（当前 9 条）")),
+      "T-9h：10 行含 1 重复 ⇒ 去重后 9 ⇒ 文案必须含「（当前 9 条）」（实测 " + JSON.stringify(errs10) + "）")
+    assert.ok(!errs10.some((e) => e.includes("（当前 10 条）")),
+      "T-9h：不得再出现按**原始行数**的「（当前 10 条）」")
+    assert.ok(errsDistinct9.some((e) => e.includes("（当前 9 条）")),
+      "T-9h：9 行互异 ⇒ 文案同样「（当前 9 条）」（实测 " + JSON.stringify(errsDistinct9) + "）")
+    // 界面半边（真实组件渲染）：9 行互异 ⇒ 已填 9 / 8（已超上限…）；9 行含 1 重复 ⇒ 已填 8 / 8（不劝退）。
+    const uiDistinct9 = renderSettingsLedger({ ledger: { mode: "standalone", docPaths: nineDistinct, copyTemplate: "话术" } })
+    assert.ok(uiDistinct9.includes("已填 9 / 8（已超上限——保存会被后端拒绝）"),
+      "T-9h：9 行互异 ⇒ 界面必须显示「已填 9 / 8（已超上限——保存会被后端拒绝）」（实测尾部：" + uiDistinct9.slice(-400) + "）")
+    const uiDup9 = renderSettingsLedger({ ledger: { mode: "standalone", docPaths: nineWithDup, copyTemplate: "话术" } })
+    assert.ok(uiDup9.includes("已填 8 / 8"),
+      "T-9h：9 行含 1 重复 ⇒ 界面必须按去重后显示「已填 8 / 8」（实测尾部：" + uiDup9.slice(-400) + "）")
+    assert.ok(!uiDup9.includes("已填 8 / 8（已超上限"),
+      "T-9h：重复项不占配额 ⇒ 界面**不得**再劝退（去重后 8 条未超上限）")
+
+    // T-9f（静态文本锁）：浏览器镜像的上限判定必须**含去重调用**，且与规则源**同一口径**。
+    //   变异自证：把 client.js 的 dedupePaths(paths).length 改回 paths.length ⇒ 第一条断言红。
+    const clientSrc = readFileSync(join(PLUGIN_DIR, "lib", "client.js"), "utf8")
+    const ruleSrc = readFileSync(join(PLUGIN_DIR, "lib", "ledger-config-text.mjs"), "utf8")
+    assert.ok(clientSrc.includes("var n = dedupePaths(paths).length;"),
+      "T-9f：浏览器镜像的上限判定必须按**去重后**计数（片段 var n = dedupePaths(paths).length; 不在 ⇒ 红）")
+    assert.ok(/function dedupePaths\(paths\) \{/.test(clientSrc),
+      "T-9f：镜像必须自带一份局部 dedupePaths（client.js 无法 import ESM，不是没实现）")
+    assert.ok(clientSrc.includes("条（当前 \" + n + \" 条）"),
+      "T-9f：镜像的错误文案里 n 必须是去重后的计数（与规则源同一模板）")
+    assert.ok(ruleSrc.includes("const n = dedupePaths(paths).length"),
+      "T-9f：规则源（单一源）同样按**去重后**计数")
+    assert.ok(ruleSrc.includes("条（当前 \" + n + \" 条）"),
+      "T-9f：规则源与浏览器镜像的错误模板必须逐字相同（C-L4 之外不再留一处漂移面）")
+    assert.ok(clientSrc.includes("if (n > LEDGER_MAX_DOC_PATHS) {"),
+      "T-9f：计数级判定读的必须是那个 n（改回 LEDGER_MAX_DOC_PATHS < paths.length 之类 ⇒ 红）")
+    assert.ok(ruleSrc.includes("if (n > MAX_DOC_PATHS) {"),
+      "T-9f：规则源的计数级判定同样读 n（与镜像同形）")
+
+    // T-9g（静态文本锁）：pathsOver 与「已填 N / 8」必须都用**去重后**长度。
+    //   变异自证：把 pathsOver 那行改回 pathsArr.length ⇒ 第一条断言红；把「已填」那行改回 ⇒ 第二条红。
+    assert.ok(clientSrc.includes("var pathsOver = dedupePaths(pathsArr).length > LEDGER_MAX_DOC_PATHS;"),
+      "T-9g：pathsOver 必须按去重后计数（改回 pathsArr.length ⇒ 红）")
+    assert.ok(clientSrc.includes("\"已填 \" + dedupePaths(pathsArr).length + \" / \" + LEDGER_MAX_DOC_PATHS"),
+      "T-9g：「已填 N / 8」必须用去重后计数（改回 pathsArr.length ⇒ 红）")
+    assert.ok(clientSrc.includes("var tplOver = tpl.length > LEDGER_COPY_MAX_CHARS;"),
+      "T-9g：话术模板超限（tplOver，原 :1841）属另一主题，必须保持原样（被误改 ⇒ 红）")
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
@@ -2414,4 +2560,4 @@ test("T-20（§16.3 · 铁律 4）: /task_done 无凭据 ⇒ 写门拒且零写�
 // `evidence-required` 断言红（拒绝码变成命令层自造的，写门的凭据门被绕过）；让命令层直接写盘
 // （绕过 applyTaskTransition）⇒ ① 的 sha256 与状态两条同时红。
 
-// ═══════════════ 腿部收口（21 条 = T-1…T-20 整 20 条 + T-4 拆 a/b 多出 1 条 = 21；**T-19 未拆**；批 43 的 T-4c/T-4d/T-4e/T-4f 并入 T-4b/T-5，不新增顶层 `test(`） ═══════════════
+// ═══════════════ 腿部收口（21 条 = T-1…T-20 整 20 条 + T-4 拆 a/b 多出 1 条 = 21；**T-19 未拆**；批 43 的 T-4c/T-4d/T-4e/T-4f 并入 T-4b/T-5，批 44 的 T-9d/T-9e/T-9h/T-9f/T-9g 并入 T-9，均不新增顶层 `test(`） ═══════════════
