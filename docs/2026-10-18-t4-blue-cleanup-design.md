@@ -42,8 +42,8 @@ count-marks: 条|处|个
 
 ### 目标
 
-1. 七条**全部有归宿**：改代码 4 条（④⑥⑦⑨）、改测试脚手架 1 条（⑦）、改测试韧性 1 条（⑧）、加注释 1 条（⑩）、结项注明 1 条（⑤）。
-2. **行为零变化**：④⑨ 是边界收紧（去重/谓词），⑥⑩ 是文本，⑦⑧ 是测试。
+1. 七条**全部有归宿**（**互斥划分，计数与枚举同改**）：代码行为 3 条（④⑥⑨）· 测试脚手架 1 条（⑦）· 测试韧性 1 条（⑧）· 注释 1 条（⑩）· 结项注明 1 条（⑤）。
+2. **行为变化如实声明（评审 #1 修）**：**④ 放宽**一处校验边界（含重复项的清单以前**报错**，现在**通过**——用户可见）；**⑨ 收窄**一处误匹配（`/task_add x` 交给 `task_done` 时以前会把 `x` 当参数）；**其余零行为变化**（⑥⑩ 是文本，⑦⑧ 是测试）。⇒ **CHANGELOG 与结项必须逐字采用这句**，不得写「零变化」。
 3. 改完四个闸门全绿（含**腿仍能红**）。
 
 ### 非目标
@@ -67,8 +67,8 @@ count-marks: 条|处|个
 
 ## §五 方案（FR-x）
 
-- **FR-1**（④）`isValidDocPathList`：`const uniq = [...new Set(v.map(p => p.trim()))]` ⇒ `uniq.length > MAX_DOC_PATHS` 拒；全为非空字符串才通过。
-- **FR-2**（⑥）`task_update` 描述与 schema 各加一句只读字段声明。
+- **FR-1**（④）`isValidDocPathList`：`const uniq = [...new Set(v.map((p) => String(p).trim()))]`（**`String()` 强转**，与 §六 伪代码一致，评审 #5：`v.map(p => p.trim())` 会对非字符串元素**抛错**，破坏「纯函数不抛」的后置）⇒ `uniq.length > MAX_DOC_PATHS` 拒；且每项必须是**非空字符串**。
+- **FR-2**（⑥）`task_update` 描述与 schema 各加一句只读字段声明；★ **必须配一条 grep 级断言**（评审 #2：交付单元不能没有验收面）：契约描述里必须同时出现「只读」与 `createdBy`/`owner`/`claimedFrom`。
 - **FR-3**（⑦）`withZeroWrite(ws, fn)`：取 sha → `fn()` → 断言 sha 不变 → 返回结果；**21 个调用点**逐点改成「包装 + 独立断言拒绝码」（拒绝码断言保留原语义，只是不再依赖「已经算好的 result」）。
 - **FR-4**（⑧）T-7③ 改条件断言 + diagnostic 留痕。
 - **FR-5**（⑨）`commandArgsOf` 谓词改 `m[1] === name`。
@@ -79,13 +79,23 @@ count-marks: 条|处|个
 ## §六 机制伪代码
 
 ```text
-withZeroWrite(ws, fn):
-  前置：ws 是会话工作区；fn 是**会尝试写**的同步函数
-  后置：返回 fn() 的返回值；若期间文件字节变了 ⇒ 抛断言错误（腿红）
+async withZeroWrite(ws, fn):
+  前置：ws 是会话工作区；fn 是**会尝试写**的函数（**同步或异步都支持**）
+  后置：返回 fn() 的结果（Promise 则 await 后的值）；若期间文件字节变了 ⇒ 抛断言错误（腿红）；
+        **fn 抛错时也必须先断言零写入再把错误抛出去**（评审 #4：否则 sha 断言被跳过 ⇒ 腿假绿）
   before = tasksFileSha256(ws)
-  r = fn()
-  assert.equal(tasksFileSha256(ws), before, "拒绝路径必须零写入")
-  return r
+  try {
+    r = fn()
+    if (r 是 thenable) r = await r            // 评审 #3：21 个调用点里有异步 handler ⇒ 必须 await 后再比 sha
+    assert.equal(tasksFileSha256(ws), before, "拒绝路径必须零写入")
+    return r
+  } catch (e) {
+    assert.equal(tasksFileSha256(ws), before, "拒绝路径（抛错分支）同样必须零写入")
+    throw e
+  }
+
+前置/后置补充：**实施第一步必须先核这 21 个调用点里哪些是 async**（工具 handler 多为 async）；
+若全部同步，保留 await 语义也无害（`await` 一个非 thenable 是恒等）。
 
 isValidDocPathList(v):
   前置：v 任意
@@ -106,19 +116,25 @@ isValidDocPathList(v):
 
 ## §八 防偏离（验收腿）
 
-本批**不新增顶层 `test(`**（`test/tasks.test.mjs` 仍 **21**；全量仍 **660**）。改动集中在既有腿与模块：
+本批**不新增顶层 `test(`**（`test/tasks.test.mjs` 顶层用例数 **21**、全量 **660** —— **as-of 2026-10-18 实测**；**交付前必须复核**，见评审 #7）。改动集中在既有腿与模块：
 
 ★ **先核过既有腿**（避免实施时撞红）：④ 的既有断言在 `test/tasks.test.mjs:1594/1596`（`MAX` 个 ⇒ true、`MAX+1` 个 ⇒ false）—— 去重后**8 个互异仍 true、9 个互异仍 false** ⇒ **不冲突**；⑨ 的 `commandArgsOf` 在测试里**零直接命中**，但 `T-20`（`:1936`）通过 `registerTaskCommands` 以 `rawInput: "/task_done t-1"` 端到端跑命令 ⇒ **⑨ 的断言并入 T-20**（不新增顶层 `test(`）；⑥ 改的是 schema `description`，现有腿**没有逐字钉它**。
 
 | 腿/闸门 | 判据 |
 |---|---|
-| **T-4a**（并入既有 T-4 块） | ④：`docPaths` 传 **9 个但含重复** ⇒ 去重后 ≤8 ⇒ **通过**（旧实现会拒） |
+| **T-4a**（并入既有 T-4 块） | ④：`docPaths` 传 **9 个但含重复** ⇒ 去重后 ≤8 ⇒ **通过**（旧实现会拒；**这是本批唯一的用户可见放宽**，评审 #1） |
+| **T-4a′**（同上） | ④：数组里含**非字符串**（`42` / `null`）⇒ 返回 `false`，**不抛**（评审 #5 的边界） |
 | **T-4b**（同上） | ④：9 个**互不相同** ⇒ 仍拒（上限没被放宽） |
 | **T-1/T-3 等既有腿** | ⑦ 换成 `withZeroWrite` 后**必须仍绿**；变异：把某条拒绝路径改成真写一次 ⇒ 该腿红 |
-| **T-7** | ⑧ 改条件断言后：真实档可解析 ⇒ 条数断言仍生效；把真实档改名 ⇒ 腿**不红**但 diagnostic 出现（新增一条断言：`diagnostic !== null`） |
+| **T-7** | ⑧ 改条件断言后：真实档可解析 ⇒ 条数断言仍生效；★ **评审 #10**：把「读哪个档」**做成可注入路径**（临时目录里放一份**不可解析**的档）⇒ 让 diagnostic 分支在**套件内**被真正跑到并断言 `diagnostic !== null`，而不是靠人工改名实验 |
 | **T-20（并入既有命令块）** | ⑨：① `/task_done t-1` 仍正确剥出 `t-1`（回归）；② **名字不匹配**时不得剥（如 `rawInput: "/task_add x"` 交给 `task_done` 的 handler ⇒ 参数保持原文，不把 `x` 当参数） |
 
-**变异自证**：① ④ 去掉去重 ⇒ T-4a 红；② ⑦ 把零写入断言删掉 ⇒ 对应拒绝腿红；③ ⑨ 谓词改回包含匹配 ⇒ 命令腿红。
+| **⑥ 的契约文本锁**（评审 #2） | `task_update` 的 schema 描述**必须**含「只读」且含 `createdBy` / `owner` / `claimedFrom` 三个词 —— 用 `grep` 级断言钉在既有工具契约块内（不新增顶层 `test(`）；**变异：删掉那句 ⇒ 腿红** |
+| **⑦ 的抛错分支**（评审 #4） | `withZeroWrite` 的 `fn` **先写再抛** ⇒ 该腿红（证明 try/catch 也做了零写入断言） |
+| **⑩ 的落点**（评审 #11） | 只允许改 `lib/index.mjs` 的**注释行**：交付时用 `git diff -U0 lib/index.mjs` 证明变更行全为 `//` 开头 |
+| **⑤ 的复核**（评审 #9） | 收口时 `grep -n 'propsScope\|scopeKey' lib/client.js` 必须命中 —— 作为**人工核对**项写进交付记录 |
+
+**变异自证**：① ④ 去掉去重 ⇒ T-4a 红；② ⑦ 把零写入断言删掉 ⇒ 对应拒绝腿红；③ ⑨ 谓词改回包含匹配 ⇒ 命令腿红；④ ⑥ 删掉「只读」那句 ⇒ 契约文本锁红。
 
 ---
 
@@ -149,14 +165,15 @@ isValidDocPathList(v):
 | `lib/task-commands.mjs` | ⑨ 谓词收窄 |
 | `lib/index.mjs` | ⑩ 成本注释 |
 | `test/tasks.test.mjs` | ⑦ 脚手架、⑧ 条件断言、T-4 补两条正反断言 |
-| `.thincoder/tasks.json` | `t-4` 结项（含「⑤ 已修」的注明） |
+| `.thincoder/tasks.json` | ★ **不由实施方改**（评审 #8）：台账唯一写门是 `task_done`，**`t-4` 结项由父会话用 `task_done` 带凭据完成**（含「⑤ 已修」的注明） |
 | `CHANGELOG.md` / `package.json` / `docs/README.md` / 交接档 | 收口（版本与计数同批） |
 
-**计数**：`test/tasks.test.mjs` **21 不变**；全量 **660 不变**（本批不新增顶层用例）。
+**计数（as-of 2026-10-18 实测，交付前复核）**：`test/tasks.test.mjs` 顶层用例 **21 不变**；全量 **660 不变**（本批不新增顶层用例）。★ 注意与「`assertRejectNoWrite(` **21 个调用点**」区分（评审 #7：同一个数字指的是两件不同的事）。
 
 ---
 
 ## §十二 已知未验证项
 
-1. ⑩ 的「双盘读」原意（评审原文未留存）：本档按**注入点每次 turn 读一次盘**理解并只加注释；若原意另有所指，实施时以注释说明实际成本为准。
+1. ⑩ 的成本口径（评审 #11 要求先读再写）：**已读注入点** `lib/index.mjs:1533` —— 每回合 `renderTaskDigest(readTasksView(cwd))` **一次**；`readTasksView` = `loadLedger`（**一次 fs 读 + JSON 解析**）+ 分桶，**不做文档解析**。⇒ 成本注释按这个事实写（「每回合一次读盘」），**不写**「双盘读」。
+1b. ⑤ 的「已修」以**交付日 `grep` 复核**为准（评审 #9）；复核不过 ⇒ 本批必须真改它。
 2. ⑧ 的「真实档」在别的机器上可能不存在（导出环境）⇒ 该腿届时走 diagnostic 分支（不红）。
