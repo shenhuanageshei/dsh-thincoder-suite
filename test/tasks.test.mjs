@@ -31,12 +31,17 @@
 //   T-19 命令面：缺 `commands` 服务 ⇒ 不抛/不注册/只 warn（工具与看板照常）；有则四条全注册
 //   T-20 命令走**同一道写门**：`/task_done` 无凭据 ⇒ 拒且零写入（拒绝码由写门产出）
 //   —— 批 36-补3（§18.4 / §19.9；**并入既有块，不新开顶层 test(**）——
-//   T-21a P 徽标渲染（0 与负数不渲染 · 原始数字 · 三档类名）        ⇒ 并入 T-12 块（④-a）
-//   T-21b P 徽标源码面（三档类名↔色值映射 · 渲染判据 priority>=1）  ⇒ 并入 T-4a 块（⑤）
+//   T-21a 优先级徽标渲染（0 与负数不渲染）                          ⇒ 并入 T-12 块（④-a；文案面由批38 T-32 接管）
+//   T-21b 优先级徽标源码面（渲染判据 priority>=1）                  ⇒ 并入 T-4a 块（⑤；档位映射由批38 T-32 接管）
 //   环图腿 五态环图（从 ledger 行自己数 · 中心总数 · 图例 · 五段配色；总数 0 不渲染） ⇒ 并入 T-12 块（④-b）
-//   默认展开腿 默认展开 · 折叠分支保留且可切换                      ⇒ 并入 T-12 块（③）
+//   默认展开腿 面板默认展开 · 折叠分支保留且可切换                  ⇒ 并入 T-12 块（③）
 //   T-22 毛玻璃：变量必须 color-mix 派生 · 卡片级 backdrop-filter · 行/嵌套详情不模糊 · `.tc-` 内无硬编码白/黑底
 //        ⇒ 并入 T-4a 块（⑤）
+//   —— 批38（§21.2 / §21.4；同样**并入既有块** ⇒ 本档顶层 `test(` 数仍为 21）——
+//   T-31 可滚动：内容区 overflow-y:auto + min-height:0 + 常显细滚动条 ⇒ 并入 T-4a 块（⑥）
+//   T-32 优先级语义化：档位词（紧急/高/中/低）· 0/负数不渲染 · 台账仍存数字 ⇒ 并入 T-4a（源码）/ T-12（④-a）
+//   T-33 全部展开/全部收起：两控件 · 收起态不渲染 meta 与按钮 · 默认展开 ⇒ 并入 T-12 块（④-c）
+//   T-34 五态显眼：行色条 · 实心 pill · 分区色条 · 五态图例          ⇒ 并入 T-12 块（④-d）
 //
 // ★ 每条腿都带「变异自证」注释：说明**去掉哪一处实现会让该腿变红**（本仓纪律：腿必须咬得住实现）。
 // ★ 每条腿都带**阳性/阴性对照**（防「恒红断言」与「恒真空断言」两种假绿）。
@@ -753,8 +758,12 @@ test("T-4a（US-5 ① · N-1）: 看板 ≡ 工具读（同一 ws 逐条相等�
     assert.ok(hardcodedBg("background:#ffffff"), "自证①：硬编码白底必须被同一谓词判红")
     assert.ok(hardcodedBg("border-radius:8px;background:#000"), "自证②：硬编码黑底必须被判红")
     assert.ok(!hardcodedBg(glassVars), "自证③：color-mix 里的 #ffffff 是回退值，不是硬编码底色 —— 不得误报")
-    // P 徽标（§18.4 T-21b：**源码面**——`client.js` 无法被单测 import，只能源码级断言；渲染半在 T-12 ④-a）：
-    //   ① 三档「类名 ↔ 色值」映射逐条在场；② 渲染判据必须是 `priority >= 1`（0 与负数同待遇）。
+    // P 徽标（§21.2 FR-2 · **T-32 的源码半**；`client.js` 无法被单测 import ⇒ 只能源码级断言；
+    //   渲染半在 T-12 ④-a）：
+    //   ① 四档「类名 ↔ 色值」映射逐条在场；② 档位词（紧急/高/中/低）代替裸数字；
+    //   ③ 渲染判据仍是 `priority >= 1`（0 与负数同待遇 —— T-21a 继续生效）。
+    //   变异自证：把 `"紧急"` 改回 `"P" + p` ⇒ T-12 ④-a 的「不含 P10」与档位词断言同时红；
+    //   把 `>=9` 改成 `>=8` ⇒ T-12 ④-a 的边界夹具（9 与 8）档位断言红。
     const prioRule = (sel) => {
       const body = styleBodyOf(clientSrc, sel)
       assert.ok(body, "必须能定位 " + sel + " 的规则")
@@ -763,17 +772,55 @@ test("T-4a（US-5 ① · N-1）: 看板 ≡ 工具读（同一 ws 逐条相等�
     const prioBase = prioRule(".tc-tasks-prio")
     assert.ok(prioBase.includes("font-size:11px") && prioBase.includes("padding:1px 6px")
       && prioBase.includes("border-radius:999px") && prioBase.includes("font-weight:600"),
-      "徽标尺寸/字形必须逐条 = §18.3 ①：" + prioBase)
-    assert.ok(prioRule(".tc-prio-high").includes("background:#DC2626"), "高档色值 = #DC2626")
-    assert.ok(prioRule(".tc-prio-mid").includes("background:#D97706"), "中档色值 = #D97706")
-    assert.ok(prioRule(".tc-prio-low").includes("background:#64748B"), "低档色值 = #64748B")
-    // ① 类名 ↔ 阈值映射（改错任一档阈值 ⇒ 红；T-12 ④-a 的渲染类名会同时红）
-    assert.ok(/if \(p >= 8\) return "tc-prio-high";/.test(clientSrc), "高档阈值必须是 >=8 ⇒ tc-prio-high")
-    assert.ok(/if \(p >= 3\) return "tc-prio-mid";/.test(clientSrc), "中档阈值必须是 >=3 ⇒ tc-prio-mid")
-    assert.ok(/return "tc-prio-low";/.test(clientSrc), "低档回落（1..2）必须存在")
-    // ② 渲染判据 = `priority >= 1`（删掉 `p < 1` ⇒ P0 / P-3 都会渲染 ⇒ T-21a 与本条同时红）
+      "徽标尺寸/字形必须 = §18.3 ①：" + prioBase)
+    // §21.3：优先级 = **软底 + 同色描边 + 同色字**（轻），与实心状态 pill 分工
+    assert.ok(prioBase.includes("border:1px solid currentColor"), "优先级徽标必须同色描边：" + prioBase)
+    for (const [sel, color] of [[".tc-prio-urgent", "#DC2626"], [".tc-prio-high", "#EA580C"], [".tc-prio-mid", "#D97706"], [".tc-prio-low", "#64748B"]]) {
+      const body = prioRule(sel)
+      assert.ok(body.includes("color:" + color), sel + " 的档位字色必须 = " + color + "：" + body)
+      assert.ok(body.includes("background:color-mix(in srgb," + color + " 12%,transparent)"),
+        sel + " 的软底必须由同色 color-mix 派生：" + body)
+    }
+    // ② 类名 ↔ 阈值映射（改错任一档阈值 ⇒ 红；T-12 ④-a 的边界夹具会同时红）
+    assert.ok(/if \(p >= 9\) return \{ cls: "tc-prio-urgent", label: "紧急" \};/.test(clientSrc),
+      ">=9 ⇒ 紧急（tc-prio-urgent）")
+    assert.ok(/if \(p >= 6\) return \{ cls: "tc-prio-high", label: "高" \};/.test(clientSrc),
+      "6..8 ⇒ 高（tc-prio-high）")
+    assert.ok(/if \(p >= 3\) return \{ cls: "tc-prio-mid", label: "中" \};/.test(clientSrc),
+      "3..5 ⇒ 中（tc-prio-mid）")
+    assert.ok(/return \{ cls: "tc-prio-low", label: "低" \};/.test(clientSrc), "1..2 回落低档")
+    // ③ 渲染判据 = `priority >= 1`（删掉 `p < 1` ⇒ P0 / P-3 都会渲染 ⇒ T-12 ④-a 与本条同时红）
     assert.ok(/if \(!isFinite\(p\) \|\| p < 1\) return null;/.test(clientSrc),
       "渲染判据必须是 priority>=1（0 与负数同待遇）")
+    // ★ 反证：源码里不得再出现「裸数字徽标」的拼法（P10/P15 是用户点名的看不懂来源）
+    assert.ok(!/"P" \+ p/.test(clientSrc), "徽标不得再拼裸数字（用户实测：P10/P15 看不懂）")
+
+    // ⑥ 批38（§21.2 FR-1 · **T-31**）：看板**内容区**必须可滚动 + 常显细滚动条。
+    //   ★ 两级断言：① 内容区自身 `overflow-y:auto` + `min-height:0`（弹性容器里没它滚不动）；
+    //   ② 同一条链路里必须有 `scrollbar-width:thin`、`::-webkit-scrollbar` 9px、
+    //      thumb `border:2px solid transparent` + `background-clip:padding-box`，且颜色走 light-dark（不硬编码）。
+    //   变异自证：删掉内容区的 `overflow-y:auto` ⇒ 第一条红；去掉 `min-height:0` ⇒ 第二条红；
+    //   把滚动条宽改成 0 / 去掉 thumb 的 padding-box ⇒ 对应断言红（实测报文见交付报告）。
+    const scrollBody = styleBodyOf(clientSrc, ".tc-tasks-scroll")
+    assert.ok(scrollBody, "必须能定位看板内容区 .tc-tasks-scroll（定位不到 ⇒ 本段恒真空，必须红）")
+    assert.ok(scrollBody.includes("overflow-y:auto"),
+      "内容区必须可纵向滚动（用户实测「任务超过 4 个就看不到」）：" + scrollBody)
+    assert.ok(scrollBody.includes("min-height:0"),
+      "★ 弹性子项必须有 min-height:0，否则内容撑高后滚不动：" + scrollBody)
+    assert.ok(scrollBody.includes("scrollbar-width:thin"), "常显细滚动条（Firefox 面）：" + scrollBody)
+    assert.ok(scrollBody.includes("scrollbar-color:light-dark("),
+      "滚动条颜色必须走 light-dark()（深色主题随动，不许硬编码）：" + scrollBody)
+    assert.ok(clientSrc.includes(".tc-tasks-scroll::-webkit-scrollbar{width:9px}"),
+      "Chromium 侧滚动条宽必须 = 9px（§21.3）")
+    assert.ok(/\.tc-tasks-scroll::-webkit-scrollbar-thumb\{[^}]*border:2px solid transparent/.test(clientSrc),
+      "thumb 必须 border:2px solid transparent（视觉 5px 圆角条，§21.3）")
+    assert.ok(/\.tc-tasks-scroll::-webkit-scrollbar-thumb\{[^}]*background-clip:padding-box/.test(clientSrc),
+      "thumb 必须 background-clip:padding-box（§21.3）")
+    // 根容器：撑满面板且**自己不滚**（滚动交给内容区）
+    const tasksRoot = /"\.tc-tasks\{([^}]*)\}"/.exec(clientSrc)
+    assert.ok(tasksRoot, "必须能定位 .tc-tasks 根规则（定位不到 ⇒ 本段恒真空，必须红）")
+    assert.ok(tasksRoot[1].includes("flex:1 1 auto") && tasksRoot[1].includes("min-height:0"),
+      "根容器必须 flex:1 1 auto + min-height:0（面板高度约束才能传到内容区）：" + tasksRoot[1])
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
@@ -1017,12 +1064,12 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
       "US-6 的侧边会话入口必须渲染（U-1 已实测：能开、不能预填）—— 删掉它等于把这一点退回成「什么都不发生」")
     assert.ok(r.text.includes("确认 OCR 方案"), "看板必须列出该条目")
 
-    // ④ 批36-补3（设计档 §18.4 T-21a / §19.9「环图腿」）—— **真实客户端组件**渲染面
+    // ④ 批38（§21.2 FR-2/FR-3/FR-4 · T-32/T-33/T-34）—— **真实客户端组件**渲染面
     //
-    // ④-a T-21a · P 徽标（§18.3 ①）：priority>=1 才渲染（**0 与负数同待遇：一律不渲染**）；
-    //      文案取**原始数字**；三档类名与 §18.3 表一一对应。
+    // ④-a T-32 · 优先级语义化（§21.2 FR-2）：priority>=1 才渲染（**0 与负数同待遇：一律不渲染**）；
+    //      文案 = **档位词**（不是裸数字）；四档边界逐条验（10/9 紧急 · 8/6 高 · 5/3 中 · 2/1 低）。
     //   变异自证：删掉 PriorityBadge 里 `if (!isFinite(p) || p < 1) return null;` ⇒ 出现 P0 / P-3、
-    //      徽标变 5 枚 ⇒ 红。
+    //      徽标变 10 枚 ⇒ 红；把档位词改回 `"P" + p` ⇒ 档位词与「不含 P10」两条同时红。
     const wsPri = freshWs()
     try {
       seedLedger(wsPri, [
@@ -1032,26 +1079,81 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
         task("t-4", { priority: 2, owner: "s-1", createdBy: "s-1", title: "低档权重的活" }),
         // ★ 设计档 §18.4 T-21a（评审 #5）：负数一律不渲染，与 0 同待遇。
         task("t-5", { priority: -3, owner: "s-1", createdBy: "s-1", title: "负权重的活" }),
+        // 档位边界（§21.2 FR-2）：≥9 紧急 / 6–8 高 / 3–5 中 / 1–2 低
+        task("t-6", { priority: 9, owner: "s-1", createdBy: "s-1", title: "紧急下界" }),
+        task("t-7", { priority: 8, owner: "s-1", createdBy: "s-1", title: "高档上界" }),
+        task("t-8", { priority: 6, owner: "s-1", createdBy: "s-1", title: "高档下界" }),
+        task("t-9", { priority: 3, owner: "s-1", createdBy: "s-1", title: "中档下界" }),
+        task("t-10", { priority: 1, owner: "s-1", createdBy: "s-1", title: "低档下界" }),
       ], 1)
       const pPri = buildTasksBoardPayload({ ws: wsPri, sessionId: "s-1", config: {}, drift: null })
       const rPri = await renderClientBoard(pPri)
       const badges = collectByClass(rPri.tree, "tc-tasks-prio")
       const badgeTexts = badges.map((b) => treeText(b).join(""))
-      assert.equal(badges.length, 3,
-        "★ priority=0 与 priority=-3 的条目**都不渲染徽标元素**（只该有 10/5/2 三枚；实测 " + JSON.stringify(badgeTexts) + "）")
-      assert.deepEqual([...badgeTexts].sort(), ["P10", "P2", "P5"],
-        "徽标文案必须取**原始数字**（不是映射后的档位值）：" + JSON.stringify(badgeTexts))
-      assert.ok(!rPri.text.includes("P0"), "priority=0 ⇒ 文本里**不得**出现 P0")
-      assert.ok(!rPri.text.includes("P-3"), "priority=-3 ⇒ 文本里**不得**出现 P-3（负数与 0 同待遇）")
+      assert.equal(badges.length, 8,
+        "★ priority=0 与 priority=-3 的条目**都不渲染徽标元素**（只该有其余 8 枚；实测 " + JSON.stringify(badgeTexts) + "）")
+      // 文案 = 档位词：每条各两枚（10/9 紧急 · 8/6 高 · 5/3 中 · 2/1 低）
+      const labelCount = badgeTexts.reduce((m, x) => { m[x] = (m[x] || 0) + 1; return m }, {})
+      assert.deepEqual(labelCount, { "紧急": 2, "高": 2, "中": 2, "低": 2 },
+        "徽标文案必须是**档位词**（不是裸数字）：" + JSON.stringify(badgeTexts))
+      for (const raw of ["P10", "P5", "P2", "P0", "P-3"]) {
+        assert.ok(!rPri.text.includes(raw), "★ 看板文本里**不得**再出现裸数字徽标「" + raw + "」")
+      }
       const classNameOf = (label) => {
         const b = badges.find((x) => treeText(x).join("") === label)
-        assert.ok(b, "必须有徽标 " + label + "（实测 " + JSON.stringify(badgeTexts) + "）")
+        assert.ok(b, "必须有徽标「" + label + "」（实测 " + JSON.stringify(badgeTexts) + "）")
         return String(b.props.className)
       }
-      assert.ok(classNameOf("P10").includes("tc-prio-high"), "priority=10 ⇒ 高档类名（红）：" + classNameOf("P10"))
-      assert.ok(classNameOf("P5").includes("tc-prio-mid"), "priority=5 ⇒ 中档类名（琥珀）：" + classNameOf("P5"))
-      assert.ok(classNameOf("P2").includes("tc-prio-low"), "priority=2 ⇒ 低档类名（灰）：" + classNameOf("P2"))
+      assert.ok(classNameOf("紧急").includes("tc-prio-urgent"), "≥9 ⇒ 紧急（tc-prio-urgent）：" + classNameOf("紧急"))
+      assert.ok(classNameOf("高").includes("tc-prio-high"), "6–8 ⇒ 高（tc-prio-high）：" + classNameOf("高"))
+      assert.ok(classNameOf("中").includes("tc-prio-mid"), "3–5 ⇒ 中（tc-prio-mid）：" + classNameOf("中"))
+      assert.ok(classNameOf("低").includes("tc-prio-low"), "1–2 ⇒ 低（tc-prio-low）：" + classNameOf("低"))
+      // 0 / 负数**行上**不得有徽标元素（不是「文本里没有 P0」那么弱）
+      const rowsPri = collectByClass(rPri.tree, "tc-tasks-row")
+      const rowOfPri = (id) => {
+        const r = rowsPri.find((x) => collectByClass(x, "tc-tasks-id").some((e) => treeText(e).join("") === id))
+        assert.ok(r, "必须能定位 " + id + " 的行")
+        return r
+      }
+      assert.equal(collectByClass(rowOfPri("t-1"), "tc-tasks-prio").length, 0, "priority=0 的行**不得有**徽标元素")
+      assert.equal(collectByClass(rowOfPri("t-5"), "tc-tasks-prio").length, 0, "priority=-3 的行**不得有**徽标元素（负数与 0 同待遇）")
     } finally { rmSync(wsPri, { recursive: true, force: true }) }
+
+    // ④-c T-33 · 全部展开 / 全部收起（§21.2 FR-3）：顶栏两个控件；**默认展开**；
+    //   收起态每行只留「状态色条 · 编号 · 标题 · 优先级徽标 · 状态 pill」——meta 与动作按钮**不渲染**。
+    //   变异自证：把 rowsCollapsed 初值改成 `useState(true)` ⇒ 「默认展开」断言红；
+    //   收起态不判 `collapsed`（照渲染 meta / actions）⇒ 收起态两条「不得出现」断言红。
+    const wsFold = freshWs()
+    try {
+      seedLedger(wsFold, [
+        task("t-1", { status: "在做", priority: 10, owner: "s-1", createdBy: "s-1", title: "可折叠的一条", check: "跑 X 看到 Y" }),
+      ], 1)
+      const pFold = buildTasksBoardPayload({ ws: wsFold, sessionId: "s-1", config: {}, drift: null })
+      const rFold = await renderClientBoard(pFold)
+      assert.ok(findButton(rFold.tree, "全部展开"), "顶栏必须有「全部展开」控件")
+      assert.ok(findButton(rFold.tree, "全部收起"), "顶栏必须有「全部收起」控件")
+      // 默认展开：不点任何按钮，meta 与动作按钮就在（§18.3 ⑤ 的默认展开继续生效）
+      assert.ok(rFold.defaultText.includes("怎么算完成："),
+        "★ 默认必须是**展开**（不用点就看得见 meta）：\n" + rFold.defaultText)
+      assert.ok(rFold.defaultText.includes("看详情"), "默认展开时动作按钮必须在")
+      // 点「全部收起」⇒ 只留色条 / 编号 / 标题 / 优先级徽标 / 状态 pill
+      const rCollapsed = await renderClientBoard(pFold, { clicks: ["全部收起"] })
+      assert.ok(rCollapsed.text.includes("可折叠的一条"), "收起态**标题**必须留着：" + rCollapsed.text)
+      assert.ok(rCollapsed.text.includes("t-1"), "收起态**编号**必须留着")
+      assert.ok(rCollapsed.text.includes("在做"), "收起态**状态 pill**必须留着")
+      assert.equal(collectByClass(rCollapsed.tree, "tc-tasks-prio").length, 1, "收起态**优先级徽标**必须留着")
+      assert.equal(collectByClass(rCollapsed.tree, "tc-tasks-stripe").length, 1, "收起态**状态色条**必须留着")
+      assert.ok(!rCollapsed.text.includes("怎么算完成："),
+        "★ 收起态**不渲染** meta（怎么算完成）：\n" + rCollapsed.text)
+      assert.ok(!rCollapsed.text.includes("归属："), "★ 收起态**不渲染**归属行")
+      for (const act of ["看详情", "问这一项", "在侧边聊"]) {
+        assert.equal(findButton(rCollapsed.tree, act), null, "★ 收起态**不渲染**动作按钮「" + act + "」")
+      }
+      // 点「全部展开」⇒ 回来（按钮可切换，不是单向）
+      const rExpanded = await renderClientBoard(pFold, { clicks: ["全部收起", "全部展开"] })
+      assert.ok(rExpanded.text.includes("怎么算完成：") && rExpanded.text.includes("看详情"),
+        "「全部展开」必须把 meta 与动作按钮带回来")
+    } finally { rmSync(wsFold, { recursive: true, force: true }) }
 
     // ④-b 环图腿 · 五态环图（设计档 §19.9「环图腿」）：五段 / 中心总数 / 图例（名 · 计数 · 百分比）/ 五条配色。
     //   ★★ 计数必须**从 `payload.ledger` 的行自己数**：本夹具刻意让 `counts.doing`（在做+已接手合并）
@@ -1098,6 +1200,69 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
         assert.ok(!rEmpty.text.includes("总数"), "空账本不得出现环图的中心文案")
       } finally { rmSync(wsEmptyRing, { recursive: true, force: true }) }
     } finally { rmSync(wsRing, { recursive: true, force: true }) }
+
+    // ④-d T-34 · 五态更显眼（§21.2 FR-4）：① 每行左侧 4px 状态色条 ② 状态 pill 实心彩色（白字）
+    //   ③ 分区标题带状态色条 ④ 顶栏（看板正文顶部）五态图例行。
+    //   变异自证：删掉 TaskRow 的 `.tc-tasks-stripe` 元素 ⇒ 色条断言红；把状态 pill 的 `tc-st-*` 类去掉
+    //   ⇒ 实心类断言红；删掉分区色条 / 图例 ⇒ 对应断言红。
+    const wsVis = freshWs()
+    try {
+      seedLedger(wsVis, [
+        task("t-1", { kind: "decision", status: "待办", owner: "s-1", createdBy: "s-1" }),
+        task("t-2", { status: "待办", owner: "s-1", createdBy: "s-1" }),
+        task("t-3", { status: "已接手", owner: "s-1", createdBy: "s-1" }),
+        task("t-4", { status: "在做", owner: "s-1", createdBy: "s-1" }),
+        task("t-5", { status: "卡住", blockedBy: "self", blockedReason: "等自己动手", owner: "s-1", createdBy: "s-1" }),
+        task("t-6", { status: "完成", evidence: "跑了 12/12 绿", owner: "s-1", createdBy: "s-1" }),
+      ], 2)
+      const pVis = buildTasksBoardPayload({ ws: wsVis, sessionId: "s-1", config: {}, drift: null })
+      const rVis = await renderClientBoard(pVis)
+      const VIS_COLORS = { "待办": "#94A3B8", "已接手": "#6366F1", "在做": "#0EA5E9", "卡住": "#EF4444", "完成": "#22C55E" }
+      const VIS_CLASSES = { "待办": "tc-st-todo", "已接手": "tc-st-claim", "在做": "tc-st-doing", "卡住": "tc-st-block", "完成": "tc-st-done" }
+      const STATUS_BY_ID = { "t-1": "待办", "t-2": "待办", "t-3": "已接手", "t-4": "在做", "t-5": "卡住", "t-6": "完成" }
+      // ① 每行一条状态色条，颜色 = 该行状态色；② 状态 pill 带实心色类且文案仍是状态词
+      const rowsVis = collectByClass(rVis.tree, "tc-tasks-row")
+      assert.equal(rowsVis.length, 6, "六条各一行（实测 " + rowsVis.length + "）")
+      for (const row of rowsVis) {
+        const idEl = collectByClass(row, "tc-tasks-id")[0]
+        assert.ok(idEl, "每行必须有编号元素")
+        const id = treeText(idEl).join("")
+        assert.ok(STATUS_BY_ID[id], "夹具外的行：" + id)
+        const stripes = collectByClass(row, "tc-tasks-stripe")
+        assert.equal(stripes.length, 1, id + " 必须恰有一条状态色条（FR-4 ①）")
+        assert.equal(stripes[0].props.style.background, VIS_COLORS[STATUS_BY_ID[id]],
+          id + " 的色条颜色必须 = 状态色（实测 " + JSON.stringify(stripes[0].props.style) + "）")
+        const pills = collectByClass(row, "tc-tasks-status")
+        assert.equal(pills.length, 1, id + " 必须恰有一个状态 pill")
+        const cls = String(pills[0].props.className)
+        assert.ok(cls.includes(VIS_CLASSES[STATUS_BY_ID[id]]),
+          id + " 的状态 pill 必须带实心色类 " + VIS_CLASSES[STATUS_BY_ID[id]] + "（实测 " + cls + "）")
+        assert.ok(treeText(pills[0]).join("").startsWith(STATUS_BY_ID[id]),
+          id + " 的 pill 文案必须仍是状态词（T-4a/T-17 依赖，不改文案；实测 " + JSON.stringify(treeText(pills[0])) + "）")
+      }
+      // 实心 pill 的样式面：类 ↔ 色值逐条在场 + 白字
+      const cSrcVis = readFileSync(join(PLUGIN_DIR, "lib", "client.js"), "utf8")
+      for (const [st, cls] of Object.entries(VIS_CLASSES)) {
+        const body = styleBodyOf(cSrcVis, "." + cls)
+        assert.ok(body && body.includes("background:" + VIS_COLORS[st]),
+          "." + cls + " 必须是实心底色 " + VIS_COLORS[st] + "（实测 " + body + "）")
+      }
+      assert.ok(styleBodyOf(cSrcVis, ".tc-tasks-status").includes("color:#FFFFFF"),
+        "状态 pill 必须白字（实心底色上可读，FR-4 ②）")
+      // ③ 分区标题色条：四个分区（待你决策/卡住/任务/已完成）各一条
+      const secbars = collectByClass(rVis.tree, "tc-tasks-secbar")
+      assert.equal(secbars.length, 4, "四个分区标题都必须带状态色条（实测 " + secbars.length + "）")
+      assert.deepEqual(secbars.map((b) => b.props.style.background).sort(),
+        ["#0EA5E9", "#22C55E", "#94A3B8", "#EF4444"], "分区色条 = 分区语义对应的五态色（FR-4 ③）")
+      // ④ 五态图例行（FR-4 ④）
+      const legendEls = collectByClass(rVis.tree, "tc-tasks-legend5")
+      assert.equal(legendEls.length, 1, "看板顶部必须有五态图例行")
+      const legendItems = collectByClass(legendEls[0], "tc-tasks-legend5-item")
+      assert.deepEqual(legendItems.map((x) => treeText(x).join("")), ["待办", "已接手", "在做", "卡住", "完成"],
+        "图例必须逐条列出五态（顺序 = 环图/色板顺序）")
+      assert.deepEqual(legendItems.map((x) => collectByClass(x, "tc-tasks-legend5-dot")[0].props.style.background),
+        ["#94A3B8", "#6366F1", "#0EA5E9", "#EF4444", "#22C55E"], "图例色点 = 五态色板")
+    } finally { rmSync(wsVis, { recursive: true, force: true }) }
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }
@@ -1105,7 +1270,8 @@ test("T-12（US-6）: tab 注册不抛（有/无服务两态）+ 点击载荷含
 // 变异自证：去掉 buildTaskClickPayload 里的任一要素（如 docs 恒空数组）⇒ ② 红；组件不渲染某一段 ⇒ ③ 红；
 // 把默认态改回折叠（`useState(false)`）⇒ ③ 的 `defaultText`（不点按钮）断言红；把「收起/展开」的切换删掉 ⇒
 // 助手拿不到 collapsedText / 文本回不来 ⇒ 红。
-// ④（T-21 + 环图）的变异自证见 ④-a / ④-b 两段的内联注（0 不显示 / 计数读 counts / 配色改动 都要能红）。
+// ④（T-32 优先级 / 环图 / T-33 收展 / T-34 五态）的变异自证见 ④-a / ④-b / ④-c / ④-d 四段的内联注
+// （0 不显示 / 计数读 counts / 配色改动 / 默认改收起 / 删色条 都要能红）。
 
 /**
  * 用**真实客户端组件**渲染看板：首渲染 → 放行 fetch 的微任务 → 记下**默认态** →
