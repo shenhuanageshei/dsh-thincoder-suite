@@ -2,7 +2,7 @@
 //
 // 腿清单（**T-1…T-20，T-4 拆 a/b ⇒ 共 21 条**；本档顶层 `test(` 数 = 21，与下方逐条一一对应。
 // ★ 批36-补3 的 T-21/T-22 **并入既有块**（T-12 ④ 段 / T-4a ⑤ 段），**不新开顶层 `test(`** ⇒ 仍是 21 条；
-//   ★ 批43 的 T-4c/T-4d/T-4e 同样**并入既有块**（T-4b / T-5）⇒ 计数与枚举仍为 21 条，不新增顶层 `test(`）
+//   ★ 批43 的 T-4c/T-4d/T-4e/T-4f 同样**并入既有块**（T-4b / T-5）⇒ 计数与枚举仍为 21 条，不新增顶层 `test(`）
 //   T-1  无凭据 done ⇒ 拒且零写入（sha256 前后相同）
 //   T-2  blocked 缺 reason / 缺 blockedBy ⇒ 拒且零写入
 //   T-3  非法迁移被拒（**全表 25 组逐对**）＋ 同一道门的另一半：`applyTaskUpdate` 的可改字段**闭集**
@@ -59,7 +59,8 @@
 //   —— 批43（台账 t-3：摘要预算标定；同样**并入既有块** ⇒ 本档顶层 `test(` 数仍为 21）——
 //   T-4c Top-N 截断可见（30 条活任务 ⇒ 「…还有 25 项」）        ⇒ 并入 T-4b 块
 //   T-4d 预算边界（**768 标定锁**：≤768 全列 / >768 出尾串）    ⇒ 并入 T-5 块
-//   T-4e 注入合计上限（1281 派生量；四分支逐条）                ⇒ 并入 T-5 块
+//   T-4e 注入合计上限（**1150 标定值**；四分支逐条）            ⇒ 并入 T-5 块
+//   T-4f 跨模块契约锁（合法最坏 512 + 768 = 1281 > 1150 仍被裁）⇒ 并入 T-5 块
 //
 // ★ 每条腿都带「变异自证」注释：说明**去掉哪一处实现会让该腿变红**（本仓纪律：腿必须咬得住实现）。
 // ★ 每条腿都带**阳性/阴性对照**（防「恒红断言」与「恒真空断言」两种假绿）。
@@ -609,22 +610,47 @@ test("T-5（N-5）: renderTaskDigest 逐字节确定性、无时间戳/百分比
     const overCap = digestOfLength(769)
     assert.ok(/…还有 \d+ 项$/.test(overCap), ">768 必须以尾串收尾（768 是标定锁）：" + overCap.slice(-40))
 
-    // ——— T-4e（批 43 · FR-3）：注入行合计上限 = DIGEST_MAX_CHARS + 512 + 1 = **1281**（派生量）———
-    assert.equal(INJECT_TOTAL_MAX_CHARS, 1281, "合计上限必须是派生量 768 + 512 + 1，不得写死别的数")
-    // ① 超限 ⇒ 按行裁剪摘要（首行必留 · 不切半行 · 不跳行）+ 单行尾串；adLine 整行保留。
-    //   ★ 设计档 §八 T-4e① 原文写「adLine 500 + taskLine 700」，但 500 + 1 + 700 = 1201 < 1281
-    //     ⇒ 按 §六 伪代码**不触发**裁剪（D-4 从 1024 改 1281 后遗留的陈旧夹具数字；见交付报告「偏离说明」）。
-    //     故这里用 500 + 896 真正越过 1281；「575 + 400 未超限」由 ② 反向腿覆盖。
+    // ——— T-4f（批 43 · 副轨评审 #2）：**跨模块契约锁** —— 合法最坏组合 1281 > 1150 仍被裁剪 ———
+    // 两侧硬顶：anti-drift `LINE_MAX_CHARS = 512`（`lib/anti-drift.mjs:820`，**未导出**）与摘要
+    // `DIGEST_MAX_CHARS = 768`（本档已 import）。**两段都合法**时和 = 512 + 1 + 768 = 1281 > 1150
+    // ⇒ 合计上限必须咬得住这个组合（512 只能在此复述字面量：对侧常量未导出）。
+    // 变异自证：把 `INJECT_TOTAL_MAX_CHARS` 改回 1281 ⇒ 1281 不再超限、裁剪分支消失 ⇒ 本段红
+    //   （夹具前提 1281 > 上限先报，其后的「长度 ≤ 1150」与「带尾串」两条也会各自红）。
+    //   ★ 本段**排在最前**：变异①（1281）时它先报红，定位直接指向「合计上限没咬住两侧硬顶」。
+    const adF = "F".repeat(512)
+    const taskF = digestOfLength(768)
+    assert.equal(adF.length, 512, "夹具锁：anti-drift 行硬顶 512（与 lib/anti-drift.mjs:820 同步）")
+    assert.equal(taskF.length, 768, "夹具锁：摘要硬顶 768（与 DIGEST_MAX_CHARS 同步）")
+    assert.ok(adF.length + 1 + taskF.length > INJECT_TOTAL_MAX_CHARS,
+      "夹具前提：合法最坏组合必须超过合计上限（" + (adF.length + 1 + taskF.length) + " > " + INJECT_TOTAL_MAX_CHARS + "）")
+    const rF = assembleInjection(adF, taskF)
+    assert.ok(rF.length <= 1150, "合法最坏组合也必须被裁到 1150 内（实测 " + rF.length + " ≤ 1150）")
+    assert.ok(rF.includes("（摘要已截断）"), "合法最坏组合必须触发裁剪并带尾串：" + JSON.stringify(rF.slice(-30)))
+
+    // ——— T-4e（批 43 · FR-3 / D-4）：注入行合计上限 = **1150（标定值，非派生量）** ———
+    // 为什么不是 768 + 512 + 1 = 1281：两段各有硬顶（adLine ≤ 512、摘要 ≤ 768）⇒ 合法和恒 ≤ 1281
+    // ⇒ 以 1281 为上限时裁剪分支**生产永远不可达 = 假保护**（旧夹具只能用 896〔> 摘要硬顶〕才触发）。
+    // 1150 才咬得住：adLine 512 时摘要可用 628；adLine 典型 245 时摘要仍可拿满 768；500 + 700 = 1201 > 1150。
+    // ① 合法两段 500 + 700 = 1201 > 1150 ⇒ **真触发裁剪**（首行必留 · 不切半行 · 不跳行）+ 单行尾串；
+    //   adLine 整行保留。★ 两段都合法（500 ≤ 512、700 ≤ 768）—— 副轨评审 #1 明令不得再用 896：
+    //   896 > 摘要硬顶 768 是**非法输入**，那种腿只证明函数对非法输入可用。
+    //   变异自证：把上限改回 1281 ⇒ 1201 不再超限 ⇒ 本段红（夹具前提先报，尾串断言其后也会红）。
     const adA = "A".repeat(500)
-    const taskA = ["[摘要头]", ...Array.from({ length: 9 }, () => "y".repeat(98))].join("\n")
+    const taskA = ["[摘要头]", ...Array.from({ length: 5 }, () => "y".repeat(138))].join("\n")
+    assert.equal(taskA.length, 700, "夹具锁：摘要侧必须恰好 700 字符（实测 " + taskA.length + "）")
+    assert.ok(adA.length + 1 + taskA.length > INJECT_TOTAL_MAX_CHARS,
+      "夹具前提：500 + 1 + 700 = 1201 必须真的超过合计上限（实测 " + (adA.length + 1 + taskA.length) + "）")
     const rA = assembleInjection(adA, taskA)
-    assert.ok(rA.length <= INJECT_TOTAL_MAX_CHARS, "合计必须 ≤1281（实测 " + rA.length + "）")
+    assert.ok(rA.length <= INJECT_TOTAL_MAX_CHARS, "合计必须 ≤" + INJECT_TOTAL_MAX_CHARS + "（实测 " + rA.length + "）")
     assert.ok(rA.startsWith(adA + "\n"), "adLine 必须**逐字完整**且排在最前（不砍 anti-drift 行）")
     assert.ok(rA.endsWith("\n…（摘要已截断）"), "裁剪后的摘要必须带单行尾串「（摘要已截断）」：" + JSON.stringify(rA.slice(-30)))
     const keptLines = rA.slice(adA.length + 1).replace(/\n…（摘要已截断）$/, "").split("\n")
     assert.equal(keptLines[0], "[摘要头]", "首行必须保留（rev/计数那行）")
-    for (const line of keptLines.slice(1)) assert.equal(line.length, 98, "不得切半行（每行都必须是完整的 98 字符）：" + line.length)
-    // ② 反向腿（评审 #5）：575 + 400 **未超限** ⇒ 摘要部分与 renderTaskDigest 输出**逐字相同**（防裁剪器误伤正常路径）
+    assert.ok(keptLines.length < 6, "必须真的裁掉至少一行（否则尾串就是假裁剪）：保留 " + keptLines.length + " / 6 行")
+    for (const line of keptLines.slice(1)) assert.equal(line.length, 138, "不得切半行（每行都必须是完整的 138 字符）：" + line.length)
+    // ② 反向腿（评审 #5）：575 + 400 ⇒ 976 ≤ 1150 **未超限** ⇒ 摘要部分与 renderTaskDigest 输出**逐字相同**
+    //   （防裁剪器误伤正常路径）。变异自证：把上限改成 900 ⇒ 976 被误裁 ⇒ 本段红
+    //   （上限 900 时 T-4f 与 ① 仍绿 ⇒ 红点正落在反向腿上，定位直接）。
     const adB = "B".repeat(575)
     const taskB = digestOfLength(400)
     assert.equal(taskB.length, 400, "反向腿夹具必须是 400 字符的真实摘要（实测 " + taskB.length + "）")
@@ -632,12 +658,16 @@ test("T-5（N-5）: renderTaskDigest 逐字节确定性、无时间戳/百分比
     assert.equal(rB, adB + "\n" + taskB, "未超限 ⇒ 必须**原样拼接**（逐字），裁剪器不得碰正常路径")
     assert.equal(rB.slice(adB.length + 1), taskB, "摘要部分必须与 renderTaskDigest 输出**逐字相同**")
     // ③ adLine 自身 ≥ 上限 ⇒ 输出**恰为 adLine**（不拼半行、不留残句）
-    const adC = "C".repeat(INJECT_TOTAL_MAX_CHARS)
+    const adC = "C".repeat(INJECT_TOTAL_MAX_CHARS + 1) // 构造在上限之上（1150 时 = 1151 ≥ 1150）
+    assert.ok(adC.length >= 1150, "夹具锁：adLine 长度必须 ≥ 1150（实测 " + adC.length + "）")
     assert.equal(assembleInjection(adC, digestOfLength(200)), adC, "adLine 自身超限 ⇒ 只返回 adLine")
     // ④ taskLine 首行就放不下 ⇒ 输出 = adLine + 单行「（摘要已截断）」（不带残行）
     const adD = "D".repeat(500)
     const taskD = "z".repeat(800) + "\n次行"
     assert.equal(assembleInjection(adD, taskD), adD + "\n…（摘要已截断）", "首行放不下 ⇒ adLine + 单行尾串")
+    // ★ 标定锁放最后：上面每条腿先按自己的机制报红（变异定位更准），本行再把数值钉死
+    //   （只改数值不动机制 ⇒ 前面的腿可能全绿，例如 1100；本行必红 ⇒ 标定值不可漂移）。
+    assert.equal(INJECT_TOTAL_MAX_CHARS, 1150, "合计上限必须是**标定值** 1150（派生量 1281 恒不可触发 = 假保护，见 D-4）")
 
     // 空集 / 关闭态 ⇒ 空串（该段**不出现**）
     assert.equal(renderTaskDigest({ tasks: [], decisions: [], active: [], blocked: [], done: [], rev: 0 }), "", "空集 ⇒ 空串")
@@ -2328,4 +2358,4 @@ test("T-20（§16.3 · 铁律 4）: /task_done 无凭据 ⇒ 写门拒且零写�
 // `evidence-required` 断言红（拒绝码变成命令层自造的，写门的凭据门被绕过）；让命令层直接写盘
 // （绕过 applyTaskTransition）⇒ ① 的 sha256 与状态两条同时红。
 
-// ═══════════════ 腿部收口（21 条 = T-1…T-20 整 20 条 + T-4 拆 a/b 多出 1 条 = 21；**T-19 未拆**；批 43 的 T-4c/T-4d/T-4e 并入 T-4b/T-5，不新增顶层 `test(`） ═══════════════
+// ═══════════════ 腿部收口（21 条 = T-1…T-20 整 20 条 + T-4 拆 a/b 多出 1 条 = 21；**T-19 未拆**；批 43 的 T-4c/T-4d/T-4e/T-4f 并入 T-4b/T-5，不新增顶层 `test(`） ═══════════════
