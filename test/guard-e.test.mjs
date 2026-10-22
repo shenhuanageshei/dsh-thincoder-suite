@@ -864,6 +864,22 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
     //      **零外部命令**（纯进程内：文件系统 + 纯函数 + node:vm 空载真实客户端 bundle 渲染）。
     //      裁定引用：用户 2026-10-16 逐条拍板（需求档 §四）+ 设计令牌（有效至 2026-10-23）。
     "tasks.test.mjs",
+    // 批 42（看门狗硬结算 · docs/2026-10-22-forced-settle-design.md，需求档同名）新增两档——
+    // **在其落地的同一交付内登记**（批 9 §七 纪律：T-E19 的「fs ↔ 本表」等值腿会在
+    // 「fs 已 +1 而本表未登记」时先红）。理由与设计档引用：
+    //   · settle-deadline.test.mjs —— §五 FR-1 / §六 6.1 的**叶子模块**机验腿（未武装 ⇒ promise
+    //     永不决议 · armAfterAbort 幂等 · 到期 resolve 哨兵 · disarm 幂等并清计时器 · 计时器 unref ·
+    //     非法 graceMs 回落 60000 · raceForced 的「先到者赢」/ 非 thenable fail-safe / 拒绝透传）。
+    //     该模块之所以独立成档：它的计时器**必须**住叶子模块（T-AP7(c) 冻结了 eng/escalate/consult
+    //     三个文件的 setTimeout 字面），故它的契约需要自己的真值表。
+    //   · escalate.test.mjs —— §十 点名的**新增测试档**：AC-10（escalate 后台假子代理永不 settle ⇒
+    //     backstop + grace 内 failed 且文案含「未响应 abort」）+ 同步腿 + 正常路径零变化
+    //     （AC-2 的 escalate 面）。此前 escalate 的 dsh 腿只散在 codex-runner.test.mjs 里，
+    //     强制结算的注入缝（deps.forcedSettleOpts）需要独立夹具。
+    // 授权面 = **只改本清单数组与本注释**，不动本档其它任何断言（先例 = 批 27/28/29/34/36 同款登记行）。
+    // 台账行 docs/test-lifecycle.md 由同一交付登记（批 42 的 Stage 4）。
+    "settle-deadline.test.mjs",
+    "escalate.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」

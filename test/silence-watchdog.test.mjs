@@ -246,15 +246,22 @@ function makeFrame(opts = {}) {
         : null),
     },
     agent: { session: { id: sid, header: { cwd: PLUGIN_DIR } }, options: { provider: "p", model: "m" } },
-    config: { dshBackgroundTimeoutMs: opts.backstopMs ?? 3600000, engSilenceAbortMs: opts.abortMs ?? 60000 },
+    config: {
+      dshBackgroundTimeoutMs: opts.backstopMs ?? 3600000,
+      engSilenceAbortMs: opts.abortMs ?? 60000,
+      ...(opts.config ?? {}),
+    },
     signal: undefined,
     configDefaultEngineering: false,
-    // eng.mjs 侧唯一注入缝：假时钟 + 假定时器（生产路径不传）
+    // eng.mjs 侧注入缝 ①：假时钟 + 假定时器（生产路径不传）
     silenceWatchdogOpts: {
       now: () => clock.t,
       setIntervalImpl: (fn) => { ticks.push(fn); return { unref() { /* 假定时器 */ } } },
       clearIntervalImpl: (h) => { cleared.push(h) },
     },
+    // eng.mjs 侧注入缝 ②（批 42）：宽限截止的假定时器（`deps.forcedSettleOpts`；生产路径不传
+    // ⇒ 全局 setTimeout + 60s）。两处缝都**只服务测试**，缺省时行为与注入前逐字一致。
+    ...(opts.forcedSettleOpts ? { forcedSettleOpts: opts.forcedSettleOpts } : {}),
   }
   return {
     sid, st, deps, clock, ticks, beats, otherBeats, events, heartbeatRegs, cleared, specs, requests, runs, handle, childId, seqState,
@@ -1498,6 +1505,199 @@ test("§2.8 审计 🔵D3（AC-11 · D48-2 接线点 1/4…4/4）: 四个**回�
   // 「为何决定性」钉在断言旁以免被后人「顺手清理」：窗口谓词对**没有**搬运调用的返回语句必须为假。
   assert.equal(lines.slice(0, 3).join("\n").includes(CALL), false,
     "窗口谓词自证：同样宽度的窗口若落在无关行上必须**判否**（否则本腿退化成恒真断言）")
+})
+
+// ═══════════════ 批 42（看门狗硬结算 · docs/2026-10-22-forced-settle-design.md §五 FR-3）═══════════════
+//
+// AC-7（后台在兜底/静默到点 + 宽限内以 failed 结算、partial 段保留）·
+// AC-11（同步路径在内部截止 + 宽限内以失败结算）· AC-6 的文案口径（含「未响应 abort」）。
+//
+// ★ 零真实等待：宽限计时器走 `deps.forcedSettleOpts` 注入的**假定时器**（手动点火）；
+//   后台兜底/同步内部截止的**既有** `setTimeout` 由本段**捕获后手动点火**（不等 backstopMs / budgetCap）；
+//   静默看门狗腿走既有的假时钟 + 假 setInterval（本档一贯口径）。
+
+/** 假宽限计时器（注入 `deps.forcedSettleOpts`）：不注册真实定时器，到点由测试点火。 */
+function makeGraceTimer() {
+  const pending = new Map()
+  const created = []
+  const cleared = []
+  const msSeen = []
+  let nextId = 0
+  return {
+    opts: {
+      setTimeout: (fn, ms) => {
+        nextId += 1
+        msSeen.push(ms)
+        const hd = { id: nextId, unrefCalls: 0, unref() { this.unrefCalls += 1 } }
+        pending.set(hd, fn)
+        created.push(hd)
+        return hd
+      },
+      clearTimeout: (hd) => { cleared.push(hd); pending.delete(hd) },
+    },
+    created,
+    cleared,
+    msSeen,
+    pendingCount: () => pending.size,
+    fire() {
+      const fns = [...pending.values()]
+      pending.clear()
+      for (const fn of fns) fn()
+    },
+  }
+}
+
+/**
+ * 捕获此后注册的**真实** `setTimeout`（保留回调 + 句柄）——用来手动点火 eng 的既有截止定时器。
+ * 只按「延迟 == delay」取用（其余定时器照常透传，本档的 flush 不用定时器）。
+ */
+function captureOneTimer(delay) {
+  const captured = []
+  const orig = globalThis.setTimeout
+  globalThis.setTimeout = function (fn, ms, ...rest) {
+    const hd = orig(fn, ms, ...rest)
+    if (ms === delay) captured.push({ fn, hd })
+    return hd
+  }
+  return {
+    hits: () => captured.slice(),
+    restore: () => { globalThis.setTimeout = orig },
+  }
+}
+
+/**
+ * 有上界的等待（批 42 修复轮 · 审计 D）：把「等实现落账」变成**有界**的等待 ——
+ * 等待点若退化回裸 `await`（race 被去掉），本函数在 `ms` 后**抛错** ⇒ 该腿变红；
+ * 没有它时整档会**挂死**（`node --test` 单文件挂死 = 同档其余腿全部连坐，且拿不到失败项名）。
+ * 到期定时器 `unref()` 且结算后清理（不吊住进程）。
+ * @param {Promise<unknown>} p 被测等待
+ * @param {number} ms 上界
+ * @param {string} label 失败文案前缀
+ */
+function withDeadline(p, ms, label) {
+  let timer = null
+  const guard = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(label + "：超过 " + ms + "ms 仍未落账 —— "
+      + "等待点很可能退化回裸 await（本应是 race + 强制结算）")), ms)
+    timer.unref?.()
+  })
+  return Promise.race([p, guard]).finally(() => { if (timer !== null) clearTimeout(timer) })
+}
+
+test("A42-1 (AC-7 / AC-6): eng 后台强制结算——静默看门狗到点 + 宽限到期 ⇒ 假子代理永不 settle 仍以 failed 落账（partial 段保留、文案含「未响应 abort」）", async () => {
+  const f = makeFrame({ form: "hang" })
+  const grace = makeGraceTimer()
+  f.deps.forcedSettleOpts = grace.opts
+  try {
+    const _cap = await captureWarn(async () => {
+      await runEngCoder(f.deps, { task: "forced settle via silence watchdog", designToken: f.st.designToken, docs: [] })
+      await flush(() => f.specs.length === 1 && f.beats.length === 2 && f.ticks.length === 1,
+        "A42-1：jobs.start → subagents.start → 看门狗装配（specs/beats/ticks）")
+      assert.equal(grace.created.length, 0, "前置：预算/静默阈值未到点 ⇒ 宽限计时器尚未武装")
+      // 真实事件在前（D9：未武装的看门狗不判定）⇒ 再推进假时钟到静默阈值
+      f.beats[0]()
+      f.clock.t = 60000
+      f.ticks[0]()
+      assert.equal(f.isAborted(), true, "前置：静默看门狗经**既有取消写点** abort 了子代理")
+      assert.equal(grace.created.length, 1, "★ AC-7 前置：宽限计时器在**既有中止回调**里武装（删掉 armAfterAbort ⇒ 本行必红）")
+      // ★ 审计 C：武装后假定时器里**真的挂着一个宽限回调**（pending 非空）——这是下方「结算后不再新增」
+      //   那条断言的前置；没有它，两侧都可能因为夹具空转而恒真。
+      assert.equal(grace.pendingCount(), 1, "★ 前置：武装后宽限回调真的注册在假定时器里（pending 非空）")
+      grace.fire() // 宽限到期 ⇒ 强制结算（子代理永不作答，本段仍必须落账）
+      const outcome = await f.specs[0].hooks.done
+      assert.equal(outcome.status, "failed", "★ AC-7：强制结算以 failed 落账（不伪造成 completed）")
+      assert.equal(outcome.detail, "silence watchdog (engSilenceAbortMs)", "detail 逐字不变（既有静默分支的机器标签）")
+      assert.ok(outcome.output.includes("未响应 abort"),
+        "★ AC-6：强制结算文案含「未响应 abort」：" + outcome.output.slice(0, 240))
+      assert.equal(outcome.output.includes("已终止"), false, "★ AC-6 反向：不得声称已终止")
+      assert.equal(outcome.output.includes("被终止"), false,
+        "★ AC-6 反向（审计 F1 的绕过形态）：也不得写「被终止」——同机制的同步强制分支旧文案即此形态")
+      assert.ok(outcome.output.includes("疑似挂死"), "既有静默文案逐字保留（只追加来源说明）")
+      assert.ok(outcome.output.includes("Partial output:"), "★ AC-7：partial 段保留（信封形状不变）")
+      assert.ok(outcome.output.includes("--- eng_coder 执行已停止 —— **不自动重派**，由用户裁决。---"),
+        "失败后缀块照旧（强制分支复用既有信封，不新造 wrapper）")
+      // AC-12：三条路径都清宽限计时器。
+      // ★ 审计 C（恒真断言拆除）：原来这一行断言 `grace.pendingCount() === 0`，而假 `fire()` 自己
+      //   `pending.clear()` ⇒ 该断言**与实现无关**（把 disarm 删掉也照样绿）。改成观察真实事实：
+      //   **结算后不再新增宽限计时器**（armAfterAbort 幂等；结算路径若再武装一次，created 会变 2）。
+      assert.equal(grace.created.length, 1, "★ AC-12：结算后**不再新增**宽限计时器（多武装一次本行即红）")
+    })
+  } finally { f.drop() }
+})
+
+test("A42-2 (AC-7 / AC-11 / AC-6): eng 兜底与**同步**两条腿——既有截止定时器（backstop / budgetCap）到点后手动点火宽限 ⇒ 均在预算+宽限内以 failed 落账", async () => {
+  // —— ① 后台兜底腿（backstopMs）：既有 setTimeout 捕获后手动点火 ——
+  {
+    const BACKSTOP = 4321 // 可辨识的兜底延迟（不真的等它）
+    const f = makeFrame({ form: "hang", backstopMs: BACKSTOP })
+    const grace = makeGraceTimer()
+    f.deps.forcedSettleOpts = grace.opts
+    const cap = captureOneTimer(BACKSTOP)
+    try {
+      const _cap = await captureWarn(async () => {
+        await runEngCoder(f.deps, { task: "forced settle via backstop", designToken: f.st.designToken, docs: [] })
+        await flush(() => f.specs.length === 1 && f.requests.length === 1 && cap.hits().length === 1,
+          "A42-2①：jobs.start → 兜底 setTimeout 注册 → ctx.subagents.start（就绪信号 = specs / 捕获 / requests 各一）")
+        const t = cap.hits()[0]
+        clearTimeout(t.hd) // 真实兜底定时器不再自己跑（手动点火 ⇒ 零真实等待）
+        t.fn()
+        assert.equal(f.isAborted(), true, "前置：兜底到点经既有 ctrl.abort 中止子代理")
+        assert.equal(grace.created.length, 1, "★ 宽限在**兜底回调**里武装（第二个既有中止回调）")
+        assert.equal(grace.pendingCount(), 1, "★ 前置：武装后宽限回调真的注册在假定时器里（pending 非空）")
+        grace.fire()
+        const outcome = await f.specs[0].hooks.done
+        assert.equal(outcome.status, "failed", "★ AC-7：兜底 + 宽限 ⇒ failed 落账")
+        assert.equal(outcome.detail, "dshBackgroundTimeoutMs backstop", "detail 逐字不变（既有兜底机器标签）")
+        assert.ok(outcome.output.includes("未响应 abort"), "★ AC-6：文案含「未响应 abort」：" + outcome.output.slice(0, 240))
+        assert.ok(outcome.output.includes("Partial output:"), "★ AC-7：partial 段保留")
+      })
+    } finally {
+      cap.restore()
+      f.drop()
+    }
+  }
+
+  // —— ② 同步路径腿（explicit background=false）：内部截止 budgetCap 到点 + 宽限到期 ——
+  {
+    const CAP = 4322 // 可辨识的内部截止（不真的等它）
+    const f = makeFrame({ form: "hang", config: { codexCli: { budgetCapMs: CAP } } })
+    const grace = makeGraceTimer()
+    f.deps.forcedSettleOpts = grace.opts
+    const cap = captureOneTimer(CAP)
+    try {
+      const _cap = await captureWarn(async () => {
+        const pending = runEngCoder(f.deps, { task: "forced settle on the sync path", designToken: f.st.designToken, docs: [], background: false })
+        // 就绪信号 = 内部截止定时器已注册 + 子代理已派发（后者保证 await run.result 已挂上）
+        await flush(() => cap.hits().length === 1 && f.requests.length === 1,
+          "A42-2②：同步路径的内部截止 setTimeout + ctx.subagents.start（requests 一）")
+        const t = cap.hits()[0]
+        clearTimeout(t.hd)
+        t.fn()
+        assert.equal(grace.created.length, 1, "★ 宽限在**同步截止回调**里武装（第 4 个既有中止回调）")
+        assert.equal(grace.pendingCount(), 1, "★ 前置：武装后宽限回调真的注册在假定时器里（pending 非空）")
+        grace.fire()
+        // ★ 审计 D（有上界）：等待**必须有界** —— 等待点若退化回裸 await，本行在 1500ms 后抛错变红，
+        //   而不是让整档挂死（挂死 = 同档其余腿全部连坐，且拿不到失败项名）。
+        const out = String(await withDeadline(pending, 1500, "A42-2② eng 同步强制结算"))
+        assert.ok(out.includes("未响应 abort"),
+          "★ AC-11：同步路径在内部截止 + 宽限内以失败落账，文案含「未响应 abort」：" + out.slice(0, 260))
+        assert.ok(out.includes("超内部截止"),
+          "保留「超内部截止」这句归因（审计 F1：强制分支措辞已改——不再声称「被终止」；归因词照旧）")
+        assert.ok(out.includes("Partial output:"), "★ AC-7 同款：partial 段保留")
+        assert.ok(out.includes("--- eng_coder 执行已停止 —— **不自动重派**，由用户裁决。---"),
+          "失败后缀块照旧（同步强制分支复用既有信封）")
+        // ★ AC-6 反向（审计 F1）：同步强制分支**曾**写「超限任务被终止」——词表扩到「被终止」后，
+        //   这条断言在修复前**必红**（它就是 F1 的可执行形态）。
+        assert.equal(out.includes("已终止"), false, "★ AC-6 反向：不得声称已终止")
+        assert.equal(out.includes("被终止"), false, "★ AC-6 反向：也不得写「被终止」（无法终止就不许说）")
+        // ★ 审计 C：原 `pendingCount() === 0` 恒真（假 fire() 自己 clear）⇒ 改成观察「结算后不再新增」。
+        assert.equal(grace.created.length, 1, "★ AC-12：结算后**不再新增**宽限计时器（多武装一次本行即红）")
+      })
+    } finally {
+      cap.restore()
+      f.drop()
+    }
+  }
 })
 
 // ═══════════════ 批 29 / §2.9（收尾四 · 2026-09-27）：交付码评 6 条 🔵 收干（A29-15 · A29-16 · AC-12）═══════════════

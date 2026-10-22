@@ -2069,4 +2069,298 @@ test("T-42（批 41 · 设计档 §八）：发货定义同步锁——cordis.pa
       + JSON.stringify(toleratedParsed))
 })
 
+// ═══════════════ 批 42（看门狗硬结算 · 设计档 2026-10-22-forced-settle-design.md）会诊腿 ═══════════════
+//
+// 覆盖 §八 的 AC-1（永不 settle ⇒ timeout+grace 内 settled）· AC-3（pending 恰一次）·
+// AC-4（强制结算后迟到 reject 不成未处理拒绝、不改账）· AC-6（文案含「未响应 abort」且不含
+// 「已终止」/「被终止」）· AC-8（`forced` 只在强制路径写进账本）· AC-12（abort 后 reject ⇒ disarm 无残留）。
+//
+// ★ **四条独立用例**（批 42 修复轮 · 锚 A-4）：AC-1 · AC-3（多模型）· AC-12 · AC-5 各是一个 `test()`——
+//   合在一个 test() 里时「②一红 ⇒ ③④ 不执行」，「删实现即红」对这些腿事实上不可达。
+//
+// ★ 零真实等待（与设计档 §五 FR-6「注入假定时器/假时钟」对位）：
+//   ① 会诊看门狗（`lib/consult.mjs` 的真实 `setTimeout(consultTimeoutMs)`）由本档**捕获后手动点火**
+//      ⇒ 不等 consultTimeoutMs（且**先 clearTimeout**：旧值 7ms 与 5ms 轮询只差 2ms，看门狗会自己到点）；
+//   ② 宽限计时器（批 42 新增）走 `deps.forcedSettleOpts` 注入的假定时器 ⇒ 不等 60s，点火即到期；
+//   ③ 唯一真实等待 = 快行子代理的既有 10ms 夹具延迟（与同档其它腿同量级）。
+
+/** 假宽限计时器（`deps.forcedSettleOpts` 注入缝）：不注册真实定时器，到点由测试显式点火。 */
+function makeGraceTimer() {
+  const pending = new Map()
+  const created = []
+  const cleared = []
+  const msSeen = []
+  let nextId = 0
+  return {
+    opts: {
+      setTimeout: (fn, ms) => {
+        nextId += 1
+        msSeen.push(ms)
+        const hd = { id: nextId, unrefCalls: 0, unref() { this.unrefCalls += 1 } }
+        pending.set(hd, fn)
+        created.push(hd)
+        return hd
+      },
+      clearTimeout: (hd) => { cleared.push(hd); pending.delete(hd) },
+    },
+    created,
+    cleared,
+    msSeen,
+    pendingCount: () => pending.size,
+    /** 点火：执行当前挂着的宽限回调（模拟「宽限到期」）。 */
+    fire() {
+      const fns = [...pending.values()]
+      pending.clear()
+      for (const fn of fns) fn()
+    },
+  }
+}
+
+/**
+ * 捕获此后注册的真实 `setTimeout`（同时保留**回调**与句柄）——用来手动点火会诊看门狗。
+ * 只按「延迟 == consultTimeoutMs」取用；其余定时器（本档的 sleep / 夹具延迟）照常透传。
+ */
+function captureRealTimers() {
+  const captured = []
+  const orig = globalThis.setTimeout
+  globalThis.setTimeout = function (fn, delay, ...rest) {
+    const hd = orig(fn, delay, ...rest)
+    captured.push({ fn, delay, hd })
+    return hd
+  }
+  return {
+    ofDelay: (delay) => captured.filter((c) => c.delay === delay),
+    restore: () => { globalThis.setTimeout = orig },
+  }
+}
+
+// ═══ 用例 1/4（锚 A-4：AC-1 · AC-3 · AC-4 · AC-6 · AC-8 独立自证）═══
+// ★ 为什么拆成四条独立 test()（批 42 修复轮 · 审计 B）：此前四条挤在**同一个** test() 的 ①②③④ 段里，
+//   ②一红 ③④ 根本不执行 ⇒「删掉对应实现即红」对 ③④ 事实上不可达（本轮实测即是）。
+// ★ 时序纪律（审计 A）：TIMEOUT 取 300（快行夹具 10ms / 轮询间隔 5ms 的两个数量级以上），且一律
+//   **先 clearTimeout、再手动点火** ⇒ 真实看门狗不会自己先到点。旧值 7ms 与 5ms 轮询只差 2ms，
+//   轮询稍慢看门狗就会自己到点并把宽限提前武装，断言的起火点因此不可控。
+test("批 42 AC-1 / AC-3 / AC-4 / AC-6 / AC-8：假子代理永不 settle ⇒ 预算+宽限内落账；pending 恰一次；文案如实；迟到 reject 不改账", async () => {
+  // ★ 时序（审计 A）：300 远大于快行夹具 10ms 与轮询间隔 5ms，且先 clearTimeout 再手动点火。
+  const TIMEOUT = 300
+  const aborts = []
+  let requests = 0
+  let rejectLate = null
+  const sub = {
+    async start(_kind, req) {
+      requests += 1
+      req.signal?.addEventListener("abort", () => { aborts.push(Date.now()) }, { once: true })
+      return {
+        // ★ 「永不 settle」的忠实夹具：连 abort 也不响应（这正是 #108 跑 88.8 分钟的那种形态）
+        result: new Promise((_resolve, reject) => { rejectLate = reject }),
+        dispose: async () => { },
+      }
+    },
+  }
+  const h = makeDeps({ subagents: sub, config: { consultTimeoutMs: TIMEOUT } })
+  const grace = makeGraceTimer()
+  h.deps.forcedSettleOpts = grace.opts
+  const cap = captureRealTimers()
+  try {
+    const s = await startConsultSession(h.deps, "问题", undefined)
+    await waitFor(() => cap.ofDelay(TIMEOUT).length >= 1, 1000)
+    // 先等子代理真的派发（abort 监听已挂）再点火——否则「abort ⇒ 子代理收到」这条前置不成立
+    await waitFor(() => requests === 1, 1000)
+    const wd = cap.ofDelay(TIMEOUT)[0]
+    clearTimeout(wd.hd) // 真实看门狗不再自己跑（手动点火 ⇒ 零真实等待）
+    assert.equal(grace.created.length, 0, "前置：预算未到点 ⇒ **宽限计时器尚未武装**（正常路径零资源成本）")
+    wd.fn()             // 看门狗到点：先武装、再发中止
+    assert.equal(aborts.length, 1, "前置：看门狗确实经**既有中止写点** abort 了子代理（D5 零新增写点）")
+    assert.equal(grace.created.length, 1, "★ AC-1 前置：宽限计时器在**既有中止回调**里武装（删掉 armAfterAbort ⇒ 本行必红）")
+    assert.deepEqual(grace.msSeen, [60000], "生产路径宽限缺省 = 60000（D1：用户不可配；本腿不注入 graceMs）")
+    grace.fire()        // 宽限到期 ⇒ 强制结算（不等 60s）
+
+    const sess = sessOf(h.state, s.id)
+    const digest = await waitDigest(sess)
+    assert.equal(sess.pending, 0, "★ AC-3：pending 恰好递减一次（重复递减会到 −1）")
+    assert.equal(sess.failed, 1, "强制结算计入 failed（不伪造成功）")
+    assert.equal(sess.received, 0, "没有任何真实回复 ⇒ received 必须为 0（绝不伪造成交付）")
+    assert.ok(digest.includes("未响应 abort"),
+      "★ AC-6：强制结算文案必须含「未响应 abort」：" + digest.slice(0, 400))
+    assert.ok(digest.includes("consultation timed out after"),
+      "沿用既有超时前缀（不是新造一种超时文案）")
+    assert.equal(digest.includes("已终止"), false, "★ AC-6 反向：不得声称「已终止」（我们无法终止它）")
+    assert.equal(digest.includes("被终止"), false,
+      "★ AC-6 反向（审计 F1 的绕过形态）：也不得写「被终止」——它和「已终止」是同一句话的两个说法")
+
+    // AC-8：账本 settled 事件带**加性**字段 forced:true（且恰一条 —— 单一写点）
+    const settled = readConsultLedger(h.deps).rows.filter((r) => r.ev === "settled" && String(r.id) === String(s.id))
+    assert.equal(settled.length, 1, "恰一条 settled 事件（settleAndDeliver 单一写点）")
+    assert.equal(settled[0].forced, true, "★ AC-8：强制路径写入加性字段 forced:true")
+    assert.equal(sess.forced, true, "会话面同样可辨（供 digest/排障）")
+
+    // AC-4：强制结算之后 run.result 迟到 reject ⇒ **不得**成为未处理拒绝、不得再改账
+    const unhandled = []
+    const onUnhandled = (e) => { unhandled.push(e) }
+    process.on("unhandledRejection", onUnhandled)
+    try {
+      rejectLate(new Error("late reject after forced settle"))
+      await sleep(10)
+    } finally {
+      process.off("unhandledRejection", onUnhandled)
+    }
+    assert.deepEqual(unhandled.map((e) => String(e?.message ?? e)), [],
+      "★ AC-4：迟到 reject 不得变成未处理拒绝（race 已挂 handler；改回裸 await 本行必红）")
+    assert.equal(sess.pending, 0, "★ AC-4：迟到 reject 不得再动账（pending 仍为 0）")
+    assert.equal(sess.failed, 1, "★ AC-4：failed 不得二次递增")
+  } finally {
+    cap.restore()
+    cleanup(h.sessionId, h.state)
+  }
+})
+
+// ═══ 用例 2/4（AC-3 的多模型面 + AC-8）═══
+// 一个模型在宽限内**正常回复**，另一个永不 settle ⇒ 先到者赢、pending 只归零一次。
+// ★ 本腿是「finally 里的 forced.disarm()」在多模型面上的判据：快行 settle 后若未 disarm，
+//   它的宽限对象会在下方手动点火时被武装 ⇒ grace.created 变 2 ⇒ 本腿红。
+test("批 42 AC-3（多模型）/ AC-8：快行正常回复 + 慢行永不 settle ⇒ 先到者赢、pending 恰一次归零、账本 forced:true", async () => {
+  // ★ 时序（审计 A）：300 远大于快行夹具 10ms 与轮询间隔 5ms，且先 clearTimeout 再手动点火。
+  const TIMEOUT = 300
+  let starts = 0
+  const sub = {
+    async start(_kind, req) {
+      starts += 1
+      const mine = starts
+      if (mine === 1) {
+        // 快行：既有夹具形态（10ms 后 completed）——它自己的宽限计时器在 finally 里被 disarm
+        return {
+          result: (async () => {
+            await sleep(10)
+            return { output: [{ type: "text", text: "fast-reply" }], stopReason: "completed" }
+          })(),
+          dispose: async () => { },
+        }
+      }
+      req.signal?.addEventListener("abort", () => { }, { once: true })
+      return { result: new Promise(() => { }), dispose: async () => { } } // 永不 settle
+    },
+  }
+  const h = makeDeps({
+    subagents: sub,
+    config: { consultTimeoutMs: TIMEOUT, consultModels: [{ provider: "p", model: "a" }, { provider: "p", model: "b" }] },
+  })
+  const grace = makeGraceTimer()
+  h.deps.forcedSettleOpts = grace.opts
+  const cap = captureRealTimers()
+  try {
+    const s = await startConsultSession(h.deps, "问题", undefined)
+    const sess = sessOf(h.state, s.id)
+    // 先让快行**正常**落地（此时它自己的宽限对象已 disarm）⇒ 再点火看门狗只会武装慢行
+    await waitFor(() => sess.received === 1, 2000)
+    await sleep(5) // 等快行走完 finally（disarm）——否则本腿会把它的宽限也武装起来（假红）
+    await waitFor(() => cap.ofDelay(TIMEOUT).length === 2, 1000)
+    for (const wd of cap.ofDelay(TIMEOUT)) { clearTimeout(wd.hd); wd.fn() }
+    assert.equal(grace.created.length, 1,
+      "宽限只被**慢行**武装（快行已 settle ⇒ 其 disarm 生效；否则本行会 ≥2）")
+    grace.fire()
+    const digest = await waitDigest(sess)
+    assert.equal(sess.pending, 0, "★ AC-3：多模型场景由**最后一个** child 归零（恰一次，绝不 −1）")
+    assert.equal(sess.received, 1, "快行的真实回复保留（先到者赢，不被强制结算挤掉）")
+    assert.equal(sess.failed, 1, "慢行按失败结算")
+    assert.match(digest.split("\n")[0], /1 of 2 replied \(1 failed\)/, "头部行如实报 1/2：" + digest.split("\n")[0])
+    assert.ok(digest.includes("fast-reply"), "快行的真实回复经 digest 可见（D4 先到者赢）")
+    assert.ok(digest.includes("未响应 abort"), "慢行的强制结算说明在位")
+    const settled = readConsultLedger(h.deps).rows.filter((r) => r.ev === "settled" && String(r.id) === String(s.id))
+    assert.equal(settled[0].forced, true, "AC-8：该会话确有一路强制结算 ⇒ 账本带 forced:true")
+  } finally {
+    cap.restore()
+    cleanup(h.sessionId, h.state)
+  }
+})
+
+// ═══ 用例 3/4（AC-12 的既有失败路径 + AC-8 的非强制面）═══
+// abort 之后子代理在**宽限内 reject** ⇒ 走既有超时失败路径、**必须 disarm**（无残留计时器），
+// 且账本**不得**出现 forced 字段（加性字段只在强制路径写）。
+test("批 42 AC-12 / AC-8：abort 后子代理在宽限内 reject ⇒ 既有失败路径同样 disarm（无残留计时器）、账本无 forced 字段", async () => {
+  // ★ 时序（审计 A）：300 远大于快行夹具 10ms 与轮询间隔 5ms，且先 clearTimeout 再手动点火。
+  const TIMEOUT = 300
+  let aborted = 0
+  let requests = 0
+  const sub = {
+    async start(_kind, req) {
+      requests += 1
+      const result = new Promise((_resolve, reject) => {
+        req.signal?.addEventListener("abort", () => {
+          aborted += 1
+          const e = new Error("subagent aborted by consult watchdog")
+          e.name = "AbortError"
+          reject(e)
+        }, { once: true })
+      })
+      return { result, dispose: async () => { } }
+    },
+  }
+  const h = makeDeps({ subagents: sub, config: { consultTimeoutMs: TIMEOUT } })
+  const grace = makeGraceTimer()
+  h.deps.forcedSettleOpts = grace.opts
+  const cap = captureRealTimers()
+  try {
+    const s = await startConsultSession(h.deps, "问题", undefined)
+    await waitFor(() => cap.ofDelay(TIMEOUT).length >= 1, 1000)
+    await waitFor(() => requests === 1, 1000) // 同用例 1：先等 abort 监听挂上
+    const wd = cap.ofDelay(TIMEOUT)[0]
+    clearTimeout(wd.hd)
+    wd.fn() // 武装 + abort ⇒ 子代理在宽限内 reject（既有失败路径）
+    const sess = sessOf(h.state, s.id)
+    const digest = await waitDigest(sess)
+    assert.equal(aborted, 1, "前置：abort 确实到达子代理（它在宽限内 reject，**不是**强制结算）")
+    assert.equal(grace.created.length, 1, "前置：宽限计时器曾被武装（否则下方 disarm 断言恒真）")
+    assert.equal(grace.cleared.length, 1, "★ AC-12：既有失败路径同样执行 disarm()——clearTimeout 恰一次")
+    assert.equal(grace.pendingCount(), 0, "★ AC-12：settle 之后**无残留宽限计时器**")
+    assert.equal(digest.includes("未响应 abort"), false, "既有失败路径的文案逐字不变（不追加强制说明）")
+    assert.ok(digest.includes("consultation timed out after"), "仍走既有超时归因（timedOutNow 派生）")
+    const settled = readConsultLedger(h.deps).rows.filter((r) => r.ev === "settled" && String(r.id) === String(s.id))
+    assert.equal("forced" in settled[0], false,
+      "★ AC-8：非强制路径**不得**写入 forced 键（加性字段只在强制路径出现，正常事件逐字不变）")
+    assert.equal(sess.forced, undefined, "会话面同样不得被置位")
+  } finally {
+    cap.restore()
+    cleanup(h.sessionId, h.state)
+  }
+})
+
+// ═══ 用例 4/4（AC-5：dispose 挂死不得把强制结算拖回无界等待）═══
+// 判据 = digest 在 waitDigest 的短超时内出现。实现若改回 `await run.dispose()`（强制路径也 await），
+// 子代理函数永不返回 ⇒ pending 不归零 ⇒ digest 永不合成 ⇒ **本腿超时必红**。
+test("批 42 AC-5：run.dispose() 永不返回 ⇒ 强制结算仍完成（digest 在短超时内合成）", async () => {
+  // ★ 时序（审计 A）：300 远大于快行夹具 10ms 与轮询间隔 5ms，且先 clearTimeout 再手动点火。
+  const TIMEOUT = 300
+  let disposed = 0
+  const sub = {
+    async start() {
+      return {
+        result: new Promise(() => { }),            // 永不 settle
+        dispose: () => { disposed++; return new Promise(() => { }) }, // 永不返回
+      }
+    },
+  }
+  const h = makeDeps({ subagents: sub, config: { consultTimeoutMs: TIMEOUT } })
+  const grace = makeGraceTimer()
+  h.deps.forcedSettleOpts = grace.opts
+  const cap = captureRealTimers()
+  try {
+    const s = await startConsultSession(h.deps, "问题", undefined)
+    await waitFor(() => cap.ofDelay(TIMEOUT).length >= 1, 1000)
+    const wd = cap.ofDelay(TIMEOUT)[0]
+    clearTimeout(wd.hd)
+    wd.fn()
+    assert.equal(grace.created.length, 1, "前置：宽限已武装")
+    grace.fire()
+    const sess = sessOf(h.state, s.id)
+    const digest = await waitDigest(sess, 1500) // ← 若强制路径 await dispose，这里**超时**（本腿即红）
+    assert.equal(disposed, 1, "★ AC-5：dispose 仍被**调用**（只是不 await）")
+    assert.equal(sess.pending, 0, "★ AC-5：dispose 挂死不影响结算（pending 已归零）")
+    assert.ok(digest.includes("未响应 abort"), "★ AC-5：digest 照常合成且带强制说明")
+  } finally {
+    cap.restore()
+    cleanup(h.sessionId, h.state)
+  }
+})
+
+
 
