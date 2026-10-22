@@ -258,3 +258,5 @@ sequenceDiagram
 - **轮 2（2026-10-22，deepseek-official:deepseek-flash）**：`VERDICT: PASS`——原 🔴 已实质闭合（AC + 非空洞正向锚 + 测试腿映射齐备）；剩余 🟡（AC-12 缺测试腿映射）与 🔵（评审轮次未留痕）在签发后补齐：A-4 纳入 AC-12、§十 用例清单补该腿、本节即轮次记录。
 - **design token**：轮 2 签发，有效至 2026-10-29（已用于实施）。
 - **交付代码评审（2026-10-22，zai-coding-cn:glm-5.3）**：`VERDICT: PASS`——0 🔴；🟡1 = CHANGELOG 收口项（主代理已补 `0.39.0` 条目）；🔵2 = 同步路径 spawn 失败漏 `disarm()`、后台 catch 信封漏 `forcedNote()`，两条均由主代理按「评审后小修」补上并复跑全量绿。
+
+- **真机验证（2026-10-22 22:00 前后，受控）**：临时把 `consultTimeoutMs` 设为 `30000`，只起一个模型并指示它先用 `run_code` 睡 600s（人为制造「abort 之后不 settle」的形态）。实测台账 `started → settled` = **90,007 ms**（30s 预算 + 60s 宽限），`settled` 事件带 `forced:true`，digest 文案含「未响应 abort」且不含「被终止」；验证后配置已还原 `1800000`。纪要：`docs/consult-minutes/2026-10-22-consult-126-minutes.md`。被测子代理是否真的退出，本插件无法断言（平台无终止接口）——与 §十一 的边界声明一致。
