@@ -385,6 +385,8 @@ flowchart LR
 | **A** | 默认（`sendPurpose=true`） | `deepseek-official:deepseek-flash` | ❌ **400** | `code=INVALID_REQUEST` · `status=400` · 无 `requestId` |
 | **B** | `advisor_config set sendPurpose=false` | 同上 | ❌ **400** | 同上 |
 
+> **状态口径说明（预答评审反复点名的一项）**：本节的「已执行」指 **22:47–22:52 的实测**。此前一轮交付代码评审的响应表把该项写成 `Deferred`（「等你重启决定」），是因为**那张响应表产生于重启之前**——属**时序先后**，不是状态矛盾。此后同一路由另有两轮实测（23:52 关闭会话日志后跑通 7069 B；23:5x 用户改回 `deepseek-official` 后跑通 8743 B）。
+
 ### ★ 订正（2026-11-07 23:2x，依据会诊 #165 的 `llmqax` 行 + 父侧复核适配器源码）
 
 **原结论「A/B 机械排除了 `purpose`」的理由是错的。**
