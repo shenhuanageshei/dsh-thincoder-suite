@@ -93,8 +93,8 @@ count-marks: 项|处|条|档|版|组
 
 | 位置 | 改动 |
 |---|---|
-| 流观测行（`lib/advisor.mjs:1410-1430` 构造处） | 追加 `code=<failure.code>` · `status=<failure.status>` · `requestId=<截断 64>`；字段缺失时**不输出该键**（不出现 `undefined`） |
-| 失败正文（`:1649` 的 `body`） | 追加 `(<code> · HTTP <status>)` 括号段，令用户不读日志也能判读；**字段缺失时整个括号段不追加**（与观测行同口径，避免出现 `(undefined · HTTP undefined)`） |
+| 流观测行（`lib/advisor.mjs:1494` 的 `streamObservationLine` 构造处，as-of 批 46） | 追加 `code=<failure.code>` · `status=<failure.status>` · `requestId=<截断 64>`；字段缺失时**不输出该键**（不出现 `undefined`） |
+| 失败正文（`lib/advisor.mjs:1735` 的 `body`，as-of 批 46） | 追加 `(<code> · HTTP <status>)` 括号段，令用户不读日志也能判读；`requestId` 在场时同段原样保留（键值对形态 `requestId=…`，见 §12.3 D-01）；**字段缺失时整个括号段不追加**（与观测行同口径，避免出现 `(undefined · HTTP undefined)`） |
 
 > **口径闭合（评审 #4）**：**LLM 直连面只有 advisor**（走 `ctx.llm.stream`）；`escalate` / `eng_coder` / `consult` 走**子代理信封**，由 FR-1 覆盖。故 US-1 的「一次 LLM 调用失败」在实现上等价于「advisor 的流调用失败」，并不泛指子代理。
 
@@ -102,7 +102,7 @@ count-marks: 项|处|条|档|版|组
 
 | 位置 | 改动 |
 |---|---|
-| `lib/advisor.mjs:1555` | `...(sendPurpose ? { purpose: "thincoder-advisor" } : {})` |
+| `lib/advisor.mjs:1640`（as-of 批 46） | `...(sendPurpose ? { purpose: "thincoder-advisor" } : {})` |
 | 新增解析器 | `resolveSendPurpose({ config, override })` → `{ value, source }`；照 `resolveIncludeProjectGuide` 的形态（`:733-745`） |
 | `advisor_config` | `set` / `reset` 的路径闭集加入 `sendPurpose`；`info` 行展示 `sendPurpose: <bool> (source: …)` |
 
@@ -376,30 +376,49 @@ flowchart LR
 
 ---
 
-## §12.4 purpose 对照实验（A/B）—— **已执行，结论：排除 `purpose`**
+## §12.4 purpose 对照实验（A/B）—— 已执行；结论成立，**但理由已订正**
 
-**执行时间**：2026-11-07 22:47–22:52（用户重启 DSH 之后）。**执行前先验「新代码已装载」**——`advisor_config get` 出现批 46 新增的 `sendPurpose: true (source: default)` 行；若该行不出现即说明仍是旧字节，读数无效。
-
-**先决条件**：改 `lib/` 不热重载（需求档 §2.4 探针实证），故本实验**必须在重启后**执行。
+**执行**：2026-11-07 22:47–22:52（用户重启 DSH 之后）。执行前先验「新代码已装载」——`advisor_config get` 出现批 46 新增的 `sendPurpose: true (source: default)` 行。
 
 | 组 | 配置 | 路由 | 结果 | 观测读数 |
 |---|---|---|---|---|
-| **A** | 默认（`sendPurpose=true`） | `deepseek-official:deepseek-flash` | ❌ **400** | `code=INVALID_REQUEST` · `status=400` · **无 `requestId`** |
-| **B** | `advisor_config set sendPurpose=false` | 同上 | ❌ **400** | `code=INVALID_REQUEST` · `status=400` · **无 `requestId`** |
+| **A** | 默认（`sendPurpose=true`） | `deepseek-official:deepseek-flash` | ❌ **400** | `code=INVALID_REQUEST` · `status=400` · 无 `requestId` |
+| **B** | `advisor_config set sendPurpose=false` | 同上 | ❌ **400** | 同上 |
 
-**结论**：**`purpose` 不是元凶** —— 关掉它 400 依旧。这条自批 45 起悬了一整天的假设被**机械排除**。
+### ★ 订正（2026-11-07 23:2x，依据会诊 #165 的 `llmqax` 行 + 父侧复核适配器源码）
 
-**同时验证了 FR-2 在真实故障上生效**（本批的主要目的）：失败正文现逐字为
+**原结论「A/B 机械排除了 `purpose`」的理由是错的。**
+
+父侧复核平台适配器（`dsh-llm-deepseek` 解包，127,856 B）实测：
+
+- **L2213** `...options.purpose === void 0 ? {} : { purpose: options.purpose }` —— `purpose` 只进 `requestIdentity`（供**请求扩展**准备用），**不直接进请求体**；
+- **L2245** `...requestIdentity.purpose === "compaction" ? { "x-deepseek-harness-compact": "1" } : {}` —— **唯一的 wire 效应**是当 `purpose === "compaction"` 时加一个 header。
+
+⇒ **`purpose: "thincoder-advisor"` 在 wire 上零差异**。因此 A 组与 B 组**发出的请求本来就一模一样** —— 那次 A/B 是**空操作**，它**结构上不可能**给出差异。
+
+**结论本身仍然成立**（`purpose` 不是元凶），但正确理由是：**它压根到不了服务端**（compaction 以外的取值不产生任何 wire 字段），而不是「关掉它没变化」。
+
+> **教训（已写入会诊纪要 §4）**：做 A/B 之前必须先证明**这个变量真的会出现在 wire 上**。开关在插件侧有效（`streamOpts` 整键缺席、测试可断言）**不等于**它对服务端可见。这是一条「结构上不可能失败的腿」——本仓反复打击的假腿形态，这次出现在人的推理里。
+
+### 本批同时验证了 FR-2 在真实故障上生效
 
 ```text
 Advisor: review failed — DeepSeek Messages request failed (400) (INVALID_REQUEST · HTTP 400)
-[thincoder-suite] stream observation: finish=error | blocks(text=0,tool-call=0) | failure.message="DeepSeek Messages request failed (400)" | code=INVALID_REQUEST | status=400 | usage=none
+[thincoder-suite] stream observation: ... | code=INVALID_REQUEST | status=400 | usage=none
 ```
 
 改造前只有 `(400)` 一句兜底文案，**无法区分「请求非法 / 鉴权 / 配额 / 服务端」**；现在一眼可判 `INVALID_REQUEST`。
 
-**一条重要的负面读数**：该失败**没有 `requestId`**（平台 `LlmFailure.requestId` 为可选，此路径未填充）⇒ FR-4 原计划的「把 requestId 交平台方对账」**不可执行**，只能交「端点 + code + status + 可复现请求形态」。
+**负面读数**：该失败**没有 `requestId`**（平台 `LlmFailure.requestId` 为可选，此路径未填充；适配器侧 L1785 只从响应头三选一取，实际是上游没给）⇒「交平台方按 requestId 对账」不可执行。
 
-**恢复**：实验后已 `advisor_config reset sendPurpose` ⇒ 回到默认（发送）；`advisor_config get` 复核为 `sendPurpose: true (source: default)`。
+### 会诊 #165 带来的定性变化（2026-11-07 23:2x）
 
-**剩余未排除项**（本批不做，登记 **R-46-3**）：正常对话走同一 provider、同一 key、同一适配器**是通的**（用户实测会话 `session-4339c7ca`），故差异只可能在这份请求**承载的内容**上 —— `tools` 数组 / `system` 提示 / `messages` 形态 / `sessionId`。已排除：模型名 · `reasoningEffort`（high/off）· `maxTokens`（65536/8192/1024）· 凭据（重存 key）· **`purpose`（本节）**。
+| 读数 | 意义 |
+|---|---|
+| 会诊 **4/4 全部可用**，**含 `deepseek-official:deepseek-v4-pro`**（它通过**子代理对话**路径正常作答） | **provider / 凭据 / 账号 / 网关全部排除** |
+| 用户切换后 advisor 收敛轮 `llmqax:deepseek-v4-flash` 跑通（6029 B 完整二轮复核） | 收敛轮已有可用路径 |
+| 同一 provider 在「子代理对话」通、在「advisor 直连 `ctx.llm.stream`」400 | **400 是 advisor 直连请求承载内容特有**，不是整条路由坏 |
+
+**新线索（可行性未证）**：适配器 **L2259** `cause: new Error(text)` 保留了**原始响应体** —— 那里面有服务端真正的报错文案。但它挂在 **throw 的 `LlmError`** 上，而 advisor 消费的是 **stream 的 `LlmFailure` 对象**（该契约无 `cause`）⇒ 插件侧能否取到，**未验证**。
+
+**`maxTokens` 实验有效性存疑（未采纳）**：会诊 `llmqax` 行称「1024 因 <4096 回落到 16384」——父侧复核 L1732 与 L329 **未见此夹取**，该断言缺证据，故 `maxTokens` 仍按「已排除」但标注**证据强度弱**。

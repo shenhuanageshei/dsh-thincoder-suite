@@ -102,7 +102,7 @@ interface LlmFailure {
 |---|---|---|
 | **R-46-1** | `purpose` 是否应作为**永久**可选字段 | 由实验结论决定；本批只提供**隔离能力**，不预设结论 |
 | **R-46-2** | 平台侧 `providerError()` 在响应体无 `error.message` 时只给兜底文案 | 平台代码，本仓不可改；本批只把自己能拿到的结构化字段打出来 |
-| **R-46-3** | **`deepseek-official` 400 的剩余未排除项**：正常对话走同一 provider / 同一 key / 同一适配器**是通的**（用户实测会话 `session-4339c7ca`），故差异只在这份请求**承载的内容**上——`tools` 数组 / `system` 提示 / `messages` 形态 / `sessionId`。已排除：模型名 · `reasoningEffort`（high/off）· `maxTokens`（65536/8192/1024）· 凭据（重存 key）· **`purpose`**（批 46 §12.4 A/B 实测） | 需下一批做受控隔离（每项一个会话开关，同本批 `sendPurpose` 的做法）；本次实验证明该路径**不返回 `requestId`**，无法靠它向平台方对账 |
+| **R-46-3** | **`deepseek-official` 400 的剩余未排除项**：正常对话走同一 provider / 同一 key / 同一适配器**是通的**（用户实测会话 `session-4339c7ca`），故差异只在这份请求**承载的内容**上——`tools` 数组 / `system` 提示 / `messages` 形态 / `sessionId`。已排除：模型名 · `reasoningEffort`（high/off）· `maxTokens`（65536/8192/1024）· 凭据（重存 key）· **`purpose`**（批 46 §12.4 A/B 实测） | **2026-11-07 会诊 #165 更新**：会诊 4/4 可用（**含 `deepseek-official` 本身**）⇒ provider/凭据/网关**全部排除**，400 是 **advisor 直连 `ctx.llm.stream` 的承载内容特有**；且 `purpose` 经复核**结构性不上 wire**（除 `compaction`），故原 A/B 为空操作、结论须改由结构论证支撑。新线索：适配器 L2259 `cause` 保存**原始响应体**（可行性未证）。需下一批做受控隔离（每项一个会话开关，同本批 `sendPurpose` 的做法）；本次实验证明该路径**不返回 `requestId`**，无法靠它向平台方对账 |
 
 ### §5.3 扫过的面 / 排除的面
 
