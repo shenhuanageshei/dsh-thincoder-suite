@@ -376,14 +376,30 @@ flowchart LR
 
 ---
 
-## §12.4 purpose 对照实验（A/B）
+## §12.4 purpose 对照实验（A/B）—— **已执行，结论：排除 `purpose`**
 
-**状态：pending —— 需用户重启 DSH 后执行**（改 `lib/` 不热重载，见需求档 §2.4）。
+**执行时间**：2026-11-07 22:47–22:52（用户重启 DSH 之后）。**执行前先验「新代码已装载」**——`advisor_config get` 出现批 46 新增的 `sendPurpose: true (source: default)` 行；若该行不出现即说明仍是旧字节，读数无效。
 
-| 组 | 配置 | 读数 |
-|---|---|---|
-| A | 默认（`sendPurpose=true`） | （待执行） |
-| B | `advisor_config set sendPurpose=false` | （待执行） |
+**先决条件**：改 `lib/` 不热重载（需求档 §2.4 探针实证），故本实验**必须在重启后**执行。
 
-判读规则：B 组不再 400 ⇒ `purpose` 是元凶；B 组仍 400 ⇒ 排除 `purpose`，把 `requestId` 交平台方。实验后 `reset sendPurpose` 恢复默认。
+| 组 | 配置 | 路由 | 结果 | 观测读数 |
+|---|---|---|---|---|
+| **A** | 默认（`sendPurpose=true`） | `deepseek-official:deepseek-flash` | ❌ **400** | `code=INVALID_REQUEST` · `status=400` · **无 `requestId`** |
+| **B** | `advisor_config set sendPurpose=false` | 同上 | ❌ **400** | `code=INVALID_REQUEST` · `status=400` · **无 `requestId`** |
 
+**结论**：**`purpose` 不是元凶** —— 关掉它 400 依旧。这条自批 45 起悬了一整天的假设被**机械排除**。
+
+**同时验证了 FR-2 在真实故障上生效**（本批的主要目的）：失败正文现逐字为
+
+```text
+Advisor: review failed — DeepSeek Messages request failed (400) (INVALID_REQUEST · HTTP 400)
+[thincoder-suite] stream observation: finish=error | blocks(text=0,tool-call=0) | failure.message="DeepSeek Messages request failed (400)" | code=INVALID_REQUEST | status=400 | usage=none
+```
+
+改造前只有 `(400)` 一句兜底文案，**无法区分「请求非法 / 鉴权 / 配额 / 服务端」**；现在一眼可判 `INVALID_REQUEST`。
+
+**一条重要的负面读数**：该失败**没有 `requestId`**（平台 `LlmFailure.requestId` 为可选，此路径未填充）⇒ FR-4 原计划的「把 requestId 交平台方对账」**不可执行**，只能交「端点 + code + status + 可复现请求形态」。
+
+**恢复**：实验后已 `advisor_config reset sendPurpose` ⇒ 回到默认（发送）；`advisor_config get` 复核为 `sendPurpose: true (source: default)`。
+
+**剩余未排除项**（本批不做，登记 **R-46-3**）：正常对话走同一 provider、同一 key、同一适配器**是通的**（用户实测会话 `session-4339c7ca`），故差异只可能在这份请求**承载的内容**上 —— `tools` 数组 / `system` 提示 / `messages` 形态 / `sessionId`。已排除：模型名 · `reasoningEffort`（high/off）· `maxTokens`（65536/8192/1024）· 凭据（重存 key）· **`purpose`（本节）**。
