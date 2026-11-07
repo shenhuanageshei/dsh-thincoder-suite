@@ -880,6 +880,19 @@ test("T-E19 (AC-E19, N-1): 既有测试档零修改——测试档清单 = 下�
     // 台账行 docs/test-lifecycle.md 由同一交付登记（批 42 的 Stage 4）。
     "settle-deadline.test.mjs",
     "escalate.test.mjs",
+    // 批 46（失败面可诊断性 + purpose 隔离 · docs/2026-11-07-failure-diagnostics-design.md，
+    // 设计评审 #1 折入 §十 点名的新增测试档）新增一档——**在其落地的同一 stage 内登记**
+    // （批 9 §七 纪律：T-E19 的「fs ↔ 本表」等值腿会在「fs 已 +1 而本表未登记」时先红）。
+    // 理由与设计档引用（§五 FR-1/FR-2 · §8.1 AC-1…AC-4 · §十）：
+    //   · advisor-envelope.test.mjs —— advisor **三处**失败信封（lib/advisor.mjs 的 :2508 jobs
+    //     结算 / :2596 超 cap 降级 / :2620 同步直跑）的**逐处**双显示腿（AC-1 对六处全部具备可
+    //     变异锚点：任一处退回 || ⇒ 该处腿红）+ 空壳两向（AC-2）+ FR-2 观测行与失败正文的
+    //     code/status/requestId 三键（AC-4：缺字段不输出该键 · requestId 截断 64 · NaN status
+    //     不输出）。AC-3 的去重腿落在单点 helper（test/codex-runner.test.mjs）——真实信封不存在
+    //     userMessage === diagnostics 的形态，D1 的意图即单点闸门。
+    // 授权面 = **只改本清单数组与本注释**，不动本档其它任何断言（先例 = 批 27/28/29/34/36/42 同款登记行）。
+    // 台账行 docs/test-lifecycle.md 由同一交付登记（批 46 的 Stage 4）。
+    "advisor-envelope.test.mjs",
   ]
   assert.deepEqual(files, [...existing, "guard-e.test.mjs"].sort(),
     // ★ 批 10 交付代码评审 🔵#3（收尾轮）：本消息串此前自报「既有 11 档 + 批 7/8/9 各批登记档」

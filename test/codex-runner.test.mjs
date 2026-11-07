@@ -17,6 +17,8 @@ import { join, resolve } from "node:path"
 import {
   normalizeRunnerValue, validateRunnerValue, resolveCodexCliGlobals, CODEX_RUNNER_VALUE_HINT,
   buildCodexArgs, resolveExecutableFile, runCodexTask, discoverCodexModels, codexRowLabel, sweepStaleCodexTempDirs,
+  // 批 46（FR-1）：统一失败信封的单点 helper（设计档 docs/2026-11-07-failure-diagnostics-design.md §五）
+  failureDetail,
 } from "../lib/codex-adapter.mjs"
 // 批 40（台账 t-7）：Windows 系统代理继承（设计档 docs/2026-10-18-codex-system-proxy-design.md §八 T-P1…T-P4）
 import {
@@ -112,6 +114,30 @@ const baseDeps = (spawn) => ({ spawn, platform: "linux", env: {} })
 const probeScript = (args) => args.includes("--version")
   ? { events: [{ data: "codex-cli 0.150.1\n" }], exitCode: 0 }
   : null
+
+// ————————————— 批 46（FR-1 / AC-1·AC-2·AC-3）failureDetail 三条腿 —————————————
+// 设计档 §四 D2 / §六：人话 + 机械事实，**去重**、**不出现空壳**、两者皆空回落调用点兜底词。
+// 这是六处调用点的**单点闸门**（D1）——本组腿是「口径退回二选一」的变异锚点。
+test("B46 FR-1: failureDetail —— 双显示（人话 · 机械事实）/ 字面去重 / 空壳不出分隔符 / 兜底词", () => {
+  // ① 双显示（AC-1 的 helper 面）：userMessage 在场时 diagnostics **不得被吞**（旧 `||` 形态此处必红）
+  assert.equal(
+    failureDetail({ userMessage: "codex 进程失败（非零退出且无有效输出）", diagnostics: "exit=1 | stderr: boom" }),
+    "codex 进程失败（非零退出且无有效输出） · exit=1 | stderr: boom",
+  )
+  // ② 去重（AC-3）：diagnostics 有时就是 userMessage 加前缀，字面相同只保留一份
+  assert.equal(failureDetail({ userMessage: "同一句", diagnostics: "同一句" }), "同一句")
+  assert.equal(failureDetail({ userMessage: "同一句", diagnostics: "  同一句  " }), "同一句", "trim 后判重")
+  // ③ 空壳（AC-2）：空串 / 纯空白 / 非字符串一律不参与拼接（不出现 undefined、不留尾随分隔符）
+  for (const diagnostics of ["", "   ", undefined, null, 42, {}, []]) {
+    assert.equal(failureDetail({ userMessage: "人话", diagnostics }), "人话", "空壳形态: " + String(diagnostics))
+  }
+  assert.equal(failureDetail({ userMessage: "", diagnostics: "exit=2" }), "exit=2", "反侧空壳：只剩机械事实")
+  // ④ 兜底：两者皆空 / env 非对象 / env 缺失 ⇒ 默认 "unknown"，调用点可指定自有兜底词
+  for (const env of [null, undefined, {}, { userMessage: "", diagnostics: "" }, "boom", 42]) {
+    assert.equal(failureDetail(env), "unknown", "兜底形态: " + String(env))
+  }
+  assert.equal(failureDetail({}, "unknown error"), "unknown error", "调用点兜底词逐字保留（advisor 形态）")
+})
 
 // ————————————— runner 规范化（B2/B4/B12） —————————————
 

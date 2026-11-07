@@ -13,7 +13,7 @@ import { dirname, join, resolve } from "node:path"
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import {
-  advisorGroupKey, resolveAdvisorRoute, resolveIncludeProjectGuide,
+  advisorGroupKey, resolveAdvisorRoute, resolveIncludeProjectGuide, resolveSendPurpose,
   runAdvisorConfigTool, runAdvisorToolLoop, isApprovalVerdict, runAdvisorReview,
   parseVerdict, hasUnresolvedBlockingRow, designApprovalCode,
 } from "../lib/advisor.mjs"
@@ -329,6 +329,97 @@ test("T10: advisor_config invalid input → error text and advisorOverride uncha
     assert.ok(out.includes(reason), req + " → " + out)
     assert.deepEqual(state.advisorOverride, { round1: { provider: "keep" } }, "state unchanged: " + req)
   }
+})
+
+// ————————————— 批 46（FR-3 / 设计档 2026-11-07-failure-diagnostics-design.md §五）—————————————
+// purpose 会话开关：`state.advisorOverride.sendPurpose`（**会话内存态**，不落盘、不新增全局键 N-2）。
+// AC-5 = 缺省必须**发送**（与旧版逐字节同，NA-2）；AC-6 = set false 后 streamOpts **整键缺席**、
+// reset 后恢复。两条都走**真实评审入口**取 llm.stream 的 opts——不测 helper 自称，测到线才算数。
+
+/** 跑一次真实 code 评审并抓 llm.stream 的 opts（advisor dsh 主路径；无 ctx.jobs ⇒ 同步钳制路径）。 */
+async function captureAdvisorStreamOpts(sid, config = {}) {
+  const llm = makeLlm([() => (async function* () { yield* textBlocks("review body") })()])
+  const agent = {
+    session: { id: sid, header: { cwd: PLUGIN_DIR }, deriveMessages: () => [] },
+    options: { provider: "p", model: "m" },
+  }
+  const out = await runAdvisorReview({ llm }, {
+    agent, config, reviewType: "code", paths: ["package.json"], documents: [],
+    signal: undefined, configDefaultEngineering: false,
+  })
+  assert.ok(llm.calls.length >= 1, "评审必须真的发起一次 llm.stream（否则本腿是假锁）: " + out.slice(0, 160))
+  return { opts: llm.calls[0], out }
+}
+
+test("B46 AC-5: sendPurpose 缺省 ⇒ 解析为 true(source default)，且 streamOpts 含 purpose:'thincoder-advisor'（逐字节同旧版）", async () => {
+  // 解析器三形态：缺省 / 空对象 / 显式 null 覆盖 ⇒ 一律 default true（N-1：默认必须等于旧行为）
+  assert.deepEqual(resolveSendPurpose(), { value: true, source: "default" })
+  assert.deepEqual(resolveSendPurpose({}), { value: true, source: "default" })
+  assert.deepEqual(resolveSendPurpose({ config: { advisor: { round1: {} } }, override: null }), { value: true, source: "default" })
+  // 非布尔覆盖不得生效（防「字符串 'false' 被当真」——那会让默认行为随配置垃圾值改变）
+  assert.deepEqual(resolveSendPurpose({ override: { sendPurpose: "false" } }), { value: true, source: "default" })
+  assert.deepEqual(resolveSendPurpose({ override: { sendPurpose: false } }), { value: false, source: "session override" })
+  const sid = "b46-ac5-" + randomUUID()
+  try {
+    const { opts } = await captureAdvisorStreamOpts(sid)
+    assert.equal(opts.purpose, "thincoder-advisor", "缺省必须发送 purpose（NA-2）")
+    // 逐字节同旧版：该键只此一处、值逐字是该字面量
+    assert.deepEqual(Object.entries(opts).filter(([k]) => k === "purpose"), [["purpose", "thincoder-advisor"]])
+  } finally {
+    dropSession(sid)
+  }
+})
+
+test("B46 AC-6: advisor_config set sendPurpose=false ⇒ streamOpts **不含** purpose；reset ⇒ 恢复 true", async () => {
+  const sid = "b46-ac6-" + randomUUID()
+  const state = sessionState(sid) // 与 runAdvisorReview 内部读到的是**同一个活对象**
+  const deps = { config: {}, agentOpts: { provider: "p", model: "m" }, state, sessionId: sid }
+  try {
+    // info 行：缺省档（实验前必须先能读出当前档位）
+    let out = runAdvisorConfigTool('{"action":"get"}', deps)
+    assert.ok(out.includes("sendPurpose: true (source: default)"), "缺省 info 行: " + out)
+    // set false（只写会话覆盖）
+    const setOut = runAdvisorConfigTool('{"action":"set","path":"sendPurpose","value":false}', deps)
+    assert.ok(setOut.startsWith("advisor_config: set sendPurpose = false"), setOut)
+    assert.equal(state.advisorOverride.sendPurpose, false, "会话覆盖被写入")
+    out = runAdvisorConfigTool('{"action":"get"}', deps)
+    assert.ok(out.includes("sendPurpose: false (source: session override)"), "覆盖后 info 行: " + out)
+    // 真实评审：键**整键缺席**（不是 undefined 占位——请求内容因此与旧版不同，这正是被测的实验手段）
+    const off = await captureAdvisorStreamOpts(sid)
+    assert.equal("purpose" in off.opts, false, "关闭后 streamOpts 不得含 purpose：keys=" + JSON.stringify(Object.keys(off.opts)))
+    // reset ⇒ 恢复默认 true
+    const resetOut = runAdvisorConfigTool('{"action":"reset","path":"sendPurpose"}', deps)
+    assert.ok(resetOut.startsWith("advisor_config: reset sendPurpose"), resetOut)
+    assert.equal(state.advisorOverride, null, "空覆盖回落 null（与既有 reset 语义一致）")
+    out = runAdvisorConfigTool('{"action":"get"}', deps)
+    assert.ok(out.includes("sendPurpose: true (source: default)"), "reset 后 info 行: " + out)
+    const on = await captureAdvisorStreamOpts(sid)
+    assert.equal(on.opts.purpose, "thincoder-advisor", "reset 后恢复发送")
+  } finally {
+    dropSession(sid)
+  }
+})
+
+test("B46 FR-3: sendPurpose 路径闭集——只认布尔；组内形态（round1.sendPurpose）与未知 path 一律拒收", () => {
+  const state = { advisorOverride: { sendPurpose: true } }
+  const deps = { config: {}, agentOpts: {}, state, sessionId: "b46-fr3-closed" }
+  const before = JSON.stringify(state.advisorOverride)
+  for (const bad of ['{"action":"set","path":"sendPurpose","value":"false"}',
+    '{"action":"set","path":"sendPurpose","value":0}',
+    '{"action":"set","path":"sendPurpose","value":null}',
+    '{"action":"set","path":"sendPurpose","value":[]}']) {
+    const out = runAdvisorConfigTool(bad, deps)
+    assert.ok(out.startsWith("advisor_config: invalid input — "), bad + " → " + out)
+    assert.ok(out.includes("must be a boolean"), bad + " → " + out)
+  }
+  assert.equal(JSON.stringify(state.advisorOverride), before, "拒收不改会话覆盖（N4）")
+  // 顶层闭集不收组内形态（sendPurpose 不是组字段）
+  const grouped = runAdvisorConfigTool('{"action":"set","path":"round1.sendPurpose","value":false}', deps)
+  assert.ok(grouped.startsWith("advisor_config: invalid input — ") && grouped.includes("is not settable"), grouped)
+  assert.ok(grouped.includes("sendPurpose"), "拒绝文案列出闭集（模型可自纠）: " + grouped)
+  // reset 闭集同步
+  const badReset = runAdvisorConfigTool('{"action":"reset","path":"round1.sendPurpose"}', deps)
+  assert.ok(badReset.startsWith("advisor_config: invalid input — ") && badReset.includes("is not resettable"), badReset)
 })
 
 // ————————————— T11 fallback 链每环 —————————————

@@ -14,10 +14,14 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { tmpdir } from "node:os"
+import { EventEmitter } from "node:events"
 import { runEscalate } from "../lib/escalate.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 
 process.env.DSH_HOME = ""
+
+/** 让出一拍（审计 D-04：假子进程必须在 spawn 返回后才 emit，否则监听还没挂上）。 */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /** 假 jobs 服务（平台契约：`start(spec)` 调 `spec.run()` 取 `{cancel, done}` 并返回 branded string）。 */
 function fakeJobs() {
@@ -113,6 +117,91 @@ async function captureWarn(fn) {
   console.warn = (m) => { warnings.push(String(m)) }
   try { return { value: await fn(), warnings } } finally { console.warn = orig }
 }
+
+// ————————————— 批 46（FR-1 / AC-1）：escalate 的**两处**失败信封双显示 —————————————
+// 设计档：docs/2026-11-07-failure-diagnostics-design.md §五 FR-1（`lib/escalate.mjs:216` / `:282`）。
+// 病：`(env.userMessage || env.diagnostics)` 二选一 ⇒ 只看到「codex 进程失败（非零退出且无有效输出）」，
+// 看不到 exit / stderr（需求档 §2.1 早上那次定位失败的原形）。
+/** 假 codex 子进程：`--version` 探测通过；任务进程非零退出并把 stderr 原文吐出来。 */
+function failingCodexSpawn(stderrText) {
+  return (file, args) => {
+    const child = new EventEmitter()
+    child.pid = 424242
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.stdin = { write() {}, end() {} }
+    child.kill = () => { child.killed = true; setImmediate(() => child.emit("exit", null, "SIGKILL")) }
+    ;(async () => {
+      // ★ 先让出一拍再发事件（审计 D-04）：调用方是在 spawn 返回**之后**才挂 `stdout.on("data")` 的
+      //   （`lib/codex-adapter.mjs:419` spawn ⇒ `:425` 挂监听），同步 emit 会**整批丢失**
+      //   （现场形态 = 「codex --version 退出码 0（输出: ）」⇒ RUNNER_UNAVAILABLE，而非预期的 PROCESS_ERROR）。
+      //   照 test/consult.test.mjs:800-801 的既有先例。
+      await sleep(0)
+      if (args.includes("--version")) {
+        child.stdout.emit("data", Buffer.from("codex-cli 0.150.1\n"))
+        await null
+        child.emit("exit", 0)
+        return
+      }
+      await new Promise((r) => setTimeout(r, 5))
+      child.stderr.emit("data", Buffer.from(stderrText))
+      await new Promise((r) => setTimeout(r, 5))
+      child.emit("exit", 1)
+    })()
+    return child
+  }
+}
+const CODEX_ESC_CONFIG = {
+  consultModels: [{ runner: { kind: "codex-cli", model: "codex-model-a", timeoutMs: 900000 } }],
+  codexCli: { executable: process.execPath },
+}
+/** 捕获 console.warn（降级告警不算断言对象——本组腿只断言**返回文本**的双显示）。 */
+async function withWarns(fn) {
+  const warns = []
+  const orig = console.warn
+  console.warn = (m) => { warns.push(String(m)) }
+  try { return { value: await fn(), warns } } finally { console.warn = orig }
+}
+const STDERR_TEXT = "escalate boom: model is not supported with this account"
+function assertEnvelopeDoubleDisplay(text, where) {
+  assert.ok(text.includes("codex 进程失败（非零退出且无有效输出）"), where + "：人话段缺失: " + text.slice(0, 320))
+  assert.ok(text.includes("exit=1 | stderr: " + STDERR_TEXT), where + "：机械事实段缺失: " + text.slice(0, 320))
+  assert.ok(text.includes("） · exit=1 | stderr: "), where + "：两段必须以 ' · ' 连接: " + text.slice(0, 320))
+}
+
+test("B46 AC-1: escalate 失败信封双显示——同步路径（:282）与 jobs 结算（:216）两处都含人话 + exit/stderr", async () => {
+  // —— ① 同步路径：预算 900000 > budgetCap(540000) 且 ctx.jobs 缺失 ⇒ 降级同步 ——
+  const sidSync = "esc46-sync-" + randomUUID()
+  try {
+    const deps = {
+      ctx: {}, agent: { session: { id: sidSync, header: { delegationDepth: 0, cwd: tmpdir() } } },
+      config: CODEX_ESC_CONFIG, state: sessionState(sidSync), signal: undefined,
+      spawn: failingCodexSpawn(STDERR_TEXT), platform: "linux", env: {},
+    }
+    const r = await withWarns(() => runEscalate(deps, "fix the bug", undefined))
+    assert.ok(r.value.includes("escalate (") && r.value.includes(") ended: codex-cli PROCESS_ERROR"), "失败前缀保持既有形态: " + r.value.slice(0, 240))
+    assert.ok(r.warns.some((w) => w.includes("ctx.jobs 不可用")), "确证走的是同步降级路径")
+    assertEnvelopeDoubleDisplay(r.value, ":282 同步路径")
+  } finally { dropSession(sidSync) }
+
+  // —— ② jobs 结算路径：jobs 可用 ⇒ 后台派发，失败正文在 outcome.output ——
+  const sidJobs = "esc46-jobs-" + randomUUID()
+  try {
+    const { jobs, specs } = fakeJobs()
+    const deps = {
+      ctx: { get: (svc) => (svc === "jobs" ? jobs : null) },
+      agent: { session: { id: sidJobs, header: { delegationDepth: 0, cwd: tmpdir() } } },
+      config: CODEX_ESC_CONFIG, state: sessionState(sidJobs), signal: undefined,
+      spawn: failingCodexSpawn(STDERR_TEXT), platform: "linux", env: {},
+    }
+    const r = await withWarns(() => runEscalate(deps, "fix the bug", undefined))
+    assert.ok(String(r.value).includes("background job"), "确证走的是 jobs 派发路径: " + String(r.value).slice(0, 200))
+    assert.equal(specs.length, 1, "恰一个 escalate-codex job")
+    const outcome = await specs[0].hooks.done
+    assert.equal(outcome.status, "failed")
+    assertEnvelopeDoubleDisplay(outcome.output, ":216 jobs 结算")
+  } finally { dropSession(sidJobs) }
+})
 
 /** deps 夹具（`delegationDepth: 0` ⇒ 顶层；`state` 走真实内存态）。 */
 function makeDeps({ subagents, config, jobs }) {

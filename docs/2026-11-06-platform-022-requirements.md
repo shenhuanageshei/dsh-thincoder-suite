@@ -114,8 +114,10 @@ count-marks: 项|处|条|档|版|组
 | **R-45-4** | `GenerateOptions` 在 0.2.2 变成泛型（`LlmRequestPurposeMap` 可扩展 `purpose`） | 运行时 `purpose` 零校验（实测 `dsh-llm/lib/index.js` 两次扫描命中数均为 0），纯类型面 |
 | **R-45-5** | 平台新口径 `engines.dsh`（写了它就**独自决定**、忽略 `peerDependencies`）暂不采用 | 与现有 peer 声明**功能等价**（两者都放行 `0.2.2-rc.1`），但切换会同时改动「闸门口径」与「文档口径」两处，收益为零；等 `0.3.0` 真正需要换档时再一次性改（设计档：§四 D3 的被否决备选 B6） |
 | **R-45-6** | 代码评审 🔵②：`test/contract-baseline.test.mjs` 的 T-45a 只断言 `source`/版本，未逐字落 AC-10 要求的子断言「evidence **不含**『未返回数组』」 | 等价承重成立（摘 `await` ⇒ 落 unknown 分支 ⇒ source 断言即红，宿主的变异 M1 已实证），**非假腿**；纯字面覆盖缺口，建议随下次测试收口批补一行 `assert.ok(!…evidence.includes("未返回数组"))` |
-| **R-45-8** | **验收期新发现**（非本批引入）：`lib/escalate.mjs:216` / `:282` 仍是 `env.userMessage \|\| env.diagnostics` **二选一** —— 与批 30 在 `lib/consult.mjs:1251-1252` 修掉的 **D-58 / 锚 A30-9③ 同型**。codex 失败时 `userMessage` 在场 ⇒ **exit code 与 stderr 尾部被吞**，现场无法判根因 | 今天验飞刀时就撞上了：只拿到「codex 进程失败（非零退出且无有效输出）」，看不到 exit 值与 stderr。建议照 consult 口径改为「`userMessage` + `diagnostics` **一并显示**」 |
 | **R-45-7** | 代码评审 🔵③：同档 `:477` 的断言消息写「批 34 的 11 → 15」，而权威登记口径是**批 36** | **仅影响失败时的诊断文案**，不影响任何判定；改消息即可，与 `REGISTRATION_SURFACE_BASELINE` 注释同口径 |
+| **R-45-8** | **验收期新发现**（非本批引入）：`lib/escalate.mjs:216` / `:282` 仍是 `env.userMessage \|\| env.diagnostics` **二选一** —— 与批 30 在 `lib/consult.mjs:1251-1252` 修掉的 **D-58 / 锚 A30-9③ 同型**。codex 失败时 `userMessage` 在场 ⇒ **exit code 与 stderr 尾部被吞**，现场无法判根因 | 今天验飞刀时就撞上了：只拿到「codex 进程失败（非零退出且无有效输出）」，看不到 exit 值与 stderr。建议照 consult 口径改为「`userMessage` + `diagnostics` **一并显示**」 |
+| **R-45-9** | **验收期新发现（下游反馈追查）**：advisor 的失败诊断面只输出 `failure.message`（`lib/advisor.mjs:1649`），而平台已把 400 分类为 **`code: INVALID_REQUEST`**、并可能带 details/原始响应体——全被丢弃。今天追查 `deepseek-official` 的 400 时**拿不到任何可判读的原因** | **由批 46 处置**（见 [2026-11-07-failure-diagnostics-design.md](2026-11-07-failure-diagnostics-design.md)：§12.2）。与 **R-45-8** 同型（`userMessage \|\| diagnostics` 二选一）。建议 `stream observation` 行同时输出 `failure.code` 与原始细节 |
+| **R-45-10** | **环境/路由面（非本仓缺陷）**：`deepseek-official`（`deepseek-flash` 与 `deepseek-v4-pro` 均是）对 advisor 请求**稳定返回 400**。已排除：模型名、`reasoningEffort`（high/off 均 400）、`maxOutputTokens`（65536/8192 均 400）；**同一请求换 `zai-coding-cn:glm-5.3` 立即成功**（5497 B 完整评审） | 需平台/凭据侧排查该 provider 的路由与请求契约；本仓侧无代码可改 |
 
 ### §5.3 扫过的面 / 排除的面（否定性结论的前提）
 

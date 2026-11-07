@@ -14,7 +14,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { fileURLToPath } from "node:url"
 import { dirname, join, resolve } from "node:path"
 import { tmpdir } from "node:os"
-import { makeWriteGate } from "../lib/eng.mjs"
+import { EventEmitter } from "node:events"
+import { makeWriteGate, runEngCoder } from "../lib/eng.mjs"
 import { sessionState, dropSession } from "../lib/state.mjs"
 import { resolveTokenStorePath, removeTokenRecord } from "../lib/token-store.mjs"
 
@@ -28,6 +29,8 @@ const newSid = () => "b10-" + randomUUID()
 const cleanSid = (sid) => { try { dropSession(sid) } catch { /* noop */ } }
 /** 产品代码（门禁的拦截域 —— path-kind 单一权威判它 true）。 */
 const PRODUCT = join(PLUGIN_DIR, "lib", "eng.mjs")
+/** 让出一拍（审计 D-04：假子进程必须在 spawn 返回后才 emit，否则监听还没挂上）。 */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /** 两段式令牌（D-30）：`<uuid>:<expiresAt>`。 */
 const mint = (ttlMs) => randomUUID() + ":" + (Date.now() + ttlMs)
@@ -279,6 +282,68 @@ test("T-TF6 (AC-G6 配套 / 零回归): 回退腿不越界 —— 子代理 / �
     assert.equal(ok.allowed, true, "回到正题：本会话有效盘记录 ⇒ 放行")
     assert.equal(sessionState(sid).designToken, token, "回填")
   } finally { cleanSid(sid); rmHome(home) }
+})
+
+// ————————————— 批 46（FR-1 / AC-1 eng_coder）：失败信封「人话 + 机械事实」双显示 —————————————
+// 设计档：docs/2026-11-07-failure-diagnostics-design.md §五 FR-1（`lib/eng.mjs` 的失败正文）。
+// 病：`(env.userMessage || env.diagnostics)` 二选一 ⇒ codex 交付失败只剩「codex 进程失败
+// （非零退出且无有效输出）」，exit / stderr 尾部全部丢掉。本腿用**假 codex 子进程**走到真实
+// 失败正文：两段必须同时可见（任一段被吞即红）。
+const ENG_STDERR = "eng boom: The model is not supported when using Codex with a ChatGPT account."
+/** 假子进程：--version 探测通过；任务进程 exit=1 + stderr 原文（不写 -o 输出文件）。 */
+function failingCodexSpawn(stderrText) {
+  return (file, args) => {
+    const child = new EventEmitter()
+    child.pid = 424242
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.stdin = { write() {}, end() {} }
+    child.kill = () => { child.killed = true; setImmediate(() => child.emit("exit", null, "SIGKILL")) }
+    ;(async () => {
+      // ★ 先让出一拍再发事件（审计 D-04）：调用方是在 spawn 返回**之后**才挂 `stdout.on("data")` 的
+      //   （`lib/codex-adapter.mjs:419` spawn ⇒ `:425` 挂监听），同步 emit 会**整批丢失**
+      //   （现场形态 = 「codex --version 退出码 0（输出: ）」⇒ RUNNER_UNAVAILABLE，而非预期的 PROCESS_ERROR）。
+      //   照 test/consult.test.mjs:800-801 的既有先例。
+      await sleep(0)
+      if (args.includes("--version")) {
+        child.stdout.emit("data", Buffer.from("codex-cli 0.150.1\n"))
+        await null
+        child.emit("exit", 0)
+        return
+      }
+      await new Promise((r) => setTimeout(r, 5))
+      child.stderr.emit("data", Buffer.from(stderrText))
+      await new Promise((r) => setTimeout(r, 5))
+      child.emit("exit", 1)
+    })()
+    return child
+  }
+}
+
+test("B46 AC-1: eng_coder codex 失败（同步降级）⇒ 失败正文同时含人话与 exit/stderr（双显示）", async () => {
+  const sid = newSid()
+  const state = freshState(sid)
+  state.engineering = true
+  state.designToken = mint(3600_000)
+  try {
+    const deps = {
+      // ctx.jobs 缺失 ⇒ 预算 1800000ms 超 cap 540000 后降级同步（失败正文走 eng.mjs 的唯一落点）
+      ctx: { get: () => null, subagents: { start: () => { throw new Error("dsh 子代理路径不该在 codex 后端被用到") } } },
+      agent: { session: { id: sid, header: { cwd: PLUGIN_DIR } }, options: { provider: "p", model: "m" } },
+      config: { codexCli: { engCoderRunner: "codex-cli", model: "codex-model-a", executable: process.execPath } },
+      signal: undefined, configDefaultEngineering: false,
+      spawn: failingCodexSpawn(ENG_STDERR), platform: "linux", env: {},
+    }
+    const r = await withWarns(() => runEngCoder(deps, { task: "implement x", designToken: state.designToken, docs: [] }))
+    const text = String(r.value)
+    assert.ok(text.includes("eng_coder ended: codex-cli PROCESS_ERROR"), "失败前缀保持既有形态: " + text.slice(0, 240))
+    assert.ok(text.includes("codex 进程失败（非零退出且无有效输出）"), "人话段缺失: " + text.slice(0, 320))
+    assert.ok(text.includes("exit=1 | stderr: " + ENG_STDERR), "机械事实段（exit + stderr 尾部）缺失: " + text.slice(0, 320))
+    assert.ok(text.includes("） · exit=1 | stderr: "), "两段必须以 ' · ' 连接（双显示形态）: " + text.slice(0, 320))
+    assert.equal(text.includes("undefined"), false, "不得出现 undefined")
+  } finally {
+    cleanSid(sid)
+  }
 })
 
 test("T-TF7 (AC-G6 / 锚 M13): **D1 注释已同步改写** —— 旧注释字面零残留 + 翻案说明在位（防 doc-code drift）", () => {
