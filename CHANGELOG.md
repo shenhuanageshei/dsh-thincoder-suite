@@ -2,6 +2,57 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.41.0] — 2026-11-07
+
+> **一句话（人话）**：这版修的是「**失败的时候说不清**」。同一天里，我先因为飞刀失败只看到一句「codex 进程失败」、后来因为 400 只看到一句「request failed (400)」，**两次都查不下去**。原因是六处失败信息把「人话」与「机械事实」**二选一**显示——`userMessage` 在场就把 `exit=`/`stderr:` 吞掉。这版把它们统一成「人话 · 机械事实」双显示，并给 advisor 的失败观测面补上 `code` / `status` / `requestId`。**评审判定逻辑零变化。**
+
+**【计数行】**：`node --test` **692/692**（**基线 678 + 本批 14**：新增 `test/advisor-envelope.test.mjs` 8 腿 + `advisor-config` 3 腿 + `escalate` / `eng-token-fallback` / `codex-runner` 各 1 腿）。测试档 32 → **33**。
+
+**一、为什么做**
+
+批 30 修过同一个病灶（会诊的 `userMessage || diagnostics`），但**只修了一处**，其余三处一直没修。代价是可量化的：
+
+- 早上验飞刀 ⇒ 只拿到「codex 进程失败（非零退出且无有效输出）」，看不到 exit 与 stderr，**无法判断是环境问题还是代码问题**；
+- 下午查 `deepseek-official` 400 ⇒ 只拿到兜底文案，**连「请求非法 / 鉴权 / 配额 / 服务端」都分不出**。
+
+**二、做了什么**
+
+1. **六处失败信封统一**：新增共享 `failureDetail(env, fallback)`（`lib/codex-adapter.mjs`），advisor ×3 · escalate ×2 · eng ×1 全部改为调用它——取 `userMessage` 与 `diagnostics` 的**非空值、字面去重、以中点连接**，两者皆空才回落兜底词。抽成单点是为了**下次口径变更只改一处**（六处手写必然漂移，本批立项原因正是漂移）。
+2. **advisor 观测面加结构化字段**：观测行与失败正文都输出 `code` / `status` / `requestId`（缺字段**不输出该键**，不出 `undefined`；`requestId` 截断 64 字符）。
+3. **新增会话级 `sendPurpose` 开关**：`advisor_config set sendPurpose=false` 可让请求不带 `purpose` 字段，缺省 `true` ⇒ **默认请求与旧版逐字节相同**。**不新增全局配置键**（`config-api` 的 TOP/合计计数未变）。
+
+**三、证据**
+
+| 项 | 读数 |
+|---|---|
+| 全量测试 | **692 / 692** |
+| 变异自证 | **16 条变异 · 16 红 / 16 复绿**（逐条读数见设计档 §12.3） |
+| 独立偏离审计 | `AUDIT: DIVERGED` 13 条（🔴4 / 🟡6 / 🔵3）→ **全部闭合** |
+| 设计评审 / 交付代码评审 | **PASS / PASS**（🔴 均为 0） |
+| 真机生效 | 400 实测输出 `(INVALID_REQUEST · HTTP 400)`；改造前只有 `(400)` |
+
+**四、顺带定案的平台缺陷（非本仓）**
+
+`deepseek-official` 的 400 自批 45 起悬了两天，期间排除过模型名 / `reasoningEffort` / `maxTokens` / 凭据 / `purpose` 五组变量——**全部是红鲱鱼**。本批用本地抓包代理取得**服务端原话**后定案：
+
+```text
+Failed to parse the request body as JSON:
+dsh_session_log.events[218].data.message.content[0].text:
+unexpected end of hex escape at line 1 column 987644
+```
+
+平台插件 `@deepseek-ai/dsh-session-log-deepseek`（`maxBytes` 默认 **8 MiB**、`enabled` 默认 **true**）按字节预算打包会话日志时，**在字符串的 `\uXXXX` 转义中途截断**，产出非法 JSON ⇒ 服务端拒绝**整个请求**。实测请求体 8,417,277 B 中 `dsh_session_log` 占 **8,385,604 B（99.6%）**，本仓贡献仅约 15 KB。
+
+**为什么「只有 advisor 坏」**：该字段只对**携带存活 `sessionId`** 的请求挂载，而本仓只有 advisor 把**主会话 id** 交给 `ctx.llm.stream`；consult / eng_coder / escalate 走子代理（短会话，日志仅几 KB）⇒ 不触发。
+
+**决定性验证**：关闭「设置 → 通用 → 在使用官方模型 API 时上传 Session Log」后，同一 `deepseek-official` 请求**连续两次跑通**（7069 B / 8743 B）；开启时**连续 9 次 400**。
+
+**五、诚实清单**
+
+- ✅ 已验证：6 处信封双显示、去重、空壳、观测面三键、`sendPurpose` 开/关、默认请求逐字节不变、全量绿、16 条变异可红。
+- ⚠️ 未验证：`sendPurpose` 只在真机派发中用过 2 次，**无长期运行样本**；`requestId` 在 400 路径上**不出现**（平台 `LlmFailure.requestId` 可选，该路径未填充）——本批只能如实显示「有则显示、无则不输出」。
+- 📌 平台侧待办（已写进设计档 §12.5.7）：会话日志打包应按转义后字节切分或切后校验 JSON；400 时应把响应体透出到 `LlmFailure`（现 `failureSnapshot` 只放行 6 个字段，`cause` 被丢弃）。
+
 ## [0.40.0] — 2026-11-06
 
 > **一句话（人话）**：桌面版 DSH 于 2026-11-06 自己从 `0.2.1-rc.2` 升到了 `0.2.2-rc.1`。插件照跑，但有两件事要跟上：① 版本哨兵每次装配都在喊「平台版本和我验证过的不一致」——把验证基线抬到新平台，它就安静了；② 平台把 `listBundles()` 从「同步返回数组」改成了「返回 Promise」，插件那条「问平台服务要版本」的路因此**悄悄断了**（读数由最后一条兜底源提供，结论仍对，但四源链断了一级）。这版把那条路接到异步上，并补了一条**能变红的行为锁**——下次再有这种「长得一样、返回形状变了」的漂移，测试会当场红。**用户可见行为零变化。**
