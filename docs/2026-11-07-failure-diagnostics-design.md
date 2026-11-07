@@ -422,3 +422,67 @@ Advisor: review failed — DeepSeek Messages request failed (400) (INVALID_REQUE
 **新线索（可行性未证）**：适配器 **L2259** `cause: new Error(text)` 保留了**原始响应体** —— 那里面有服务端真正的报错文案。但它挂在 **throw 的 `LlmError`** 上，而 advisor 消费的是 **stream 的 `LlmFailure` 对象**（该契约无 `cause`）⇒ 插件侧能否取到，**未验证**。
 
 **`maxTokens` 实验有效性存疑（未采纳）**：会诊 `llmqax` 行称「1024 因 <4096 回落到 16384」——父侧复核 L1732 与 L329 **未见此夹取**，该断言缺证据，故 `maxTokens` 仍按「已排除」但标注**证据强度弱**。
+
+## §12.5 ★ 400 根因定案（2026-11-07 23:39–23:52 · 本地抓包取证）
+
+> 自批 45 起悬了两天、排除过 5 组变量的 `deepseek-official` 400，本节给出**服务端原话级**的定案。
+
+### §12.5.1 取证方法（可复现）
+
+平台适配器 `dsh-llm-deepseek` 的 baseURL 判定顺序（解包源码 L441）：
+
+```js
+const baseURL = config.baseURL ?? environment?.get("DEEPSEEK_BASE_URL")?.value ?? "https://api.deepseek.com/anthropic"
+```
+
+⇒ 在 **设置 → Providers → `deepseek-official` 的 Base URL** 填 `http://127.0.0.1:8899`，请求就会先过本地代理。代理（Node，约 60 行）转发到真实端点、记字段体积与响应体（自动 gunzip、`x-api-key` 打码）。**用户已授权该临时改动；取证后 baseURL 已清空、代理脚本与日志已删除、端口 8899 已关闭。**
+
+### §12.5.2 服务端原话（唯一的决定性证据）
+
+```text
+Failed to parse the request body as JSON:
+dsh_session_log.events[218].data.message.content[0].text:
+unexpected end of hex escape at line 1 column 987644
+```
+
+### §12.5.3 请求体实测分解（`content-length = 8,417,277`）
+
+| 字段 | 字节 | 来源 |
+|---|---:|---|
+| **`dsh_session_log`** | **8,385,604** | **平台插件 `@deepseek-ai/dsh-session-log-deepseek` 注入** |
+| `dsh_plugin_packages` | 16,526 | 平台注入 |
+| `messages` | 8,347 | 本仓 |
+| `system` | 5,161 | 本仓 |
+| `tools` | 1,443（`read`/`glob`/`grep`/`ls`） | 本仓 |
+| `model` / `stream` / `max_tokens` / `thinking` / `output_config` | 60 | 平台 |
+
+**本仓贡献 ≈ 15 KB；平台注入占 99.6%。**
+
+### §12.5.4 根因
+
+`@deepseek-ai/dsh-session-log-deepseek`（README 自述：「面向官方 DeepSeek API 的**增量上传规范会话日志**」；`maxBytes` 默认 **8 MiB**，`enabled` 默认 **true**）按字节预算把会话事件塞进请求字段时，**序列化结果在某个字符串的 `\uXXXX` 转义中途被截断**，产出非法 JSON；服务端因此拒绝**整个请求**（含真正的模型调用）。
+
+**与「只有 advisor 坏」的关系**：`dsh_session_log` 只对**携带存活 `sessionId`** 的请求挂载。本仓只有 `lib/advisor.mjs` 会把**主会话 id** 交给 `ctx.llm.stream`；consult / eng_coder / escalate 走子代理，各自新建**短会话**，日志仅几 KB ⇒ 不触发。因此「长会话 + 官方 DeepSeek API」才会 400，**advisor 只是唯一一条把长会话 id 带进去的路**。
+
+### §12.5.5 决定性验证（正向与反向都有）
+
+| 组 | 设置 → 通用 →「在使用官方模型 API 时上传 Session Log」 | 结果 |
+|---|---|---|
+| **开**（默认） | 开启 | ❌ 400（`INVALID_REQUEST`，连续 9 次复现） |
+| **关** | 关闭 | ✅ **完成**（`advisor-dsh-88d2907164d5482c`，7069 B 完整第三轮复核） |
+
+### §12.5.6 本仓此前排除的 5 组变量，全部是红鲱鱼
+
+模型名 · `reasoningEffort` · `maxTokens` · 凭据 · `purpose` —— 它们**从未是原因**。真正原因是平台注入字段的序列化缺陷，本仓代码零参与。
+
+### §12.5.7 对平台方的报障要点
+
+1. `dsh-session-log-deepseek` 打包时应按**转义后的 UTF-8 字节**精确切分，或切分后**校验 JSON 可解析**；
+2. 400 时应把响应体透出到 `LlmFailure`（现 `normalizeLlmFailure` L402-410 与 `failureSnapshot` L439-460 只放行 6 字段，`cause` 被丢弃 ⇒ 客户端拿不到任何可判读原因）；
+3. 评估单请求 8 MiB 增量是否合理。
+
+### §12.5.8 本次取证留下的能力
+
+- 本仓 **FR-2**（`code`/`status`/`requestId`）让 400 第一次可被判读为 `INVALID_REQUEST`（而不是鉴权/配额）；
+- **FR-3** 的会话级开关模式被证明可复用（`sendPurpose`），尽管本次证明 `purpose` 与该 400 无关；
+- 结论：**诊断能力的投入是对的** —— 它把「一整天查不出」变成「一次抓包定案」。
