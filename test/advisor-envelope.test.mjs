@@ -3,7 +3,7 @@
 // 需求档：docs/2026-11-07-failure-diagnostics-requirements.md §2.1 / §2.2 / US-1 / US-2。
 //
 // 为什么单开一档（设计评审 #1 折入）：六处 `userMessage || diagnostics` 二选一里，advisor 独占三处
-// （`lib/advisor.mjs` 的 :2508 jobs 结算 / :2596 超 cap 降级 / :2620 同步直跑）——它们是**三条不同
+// （`lib/advisor.mjs` 的 :2598 jobs 结算 / :2686 超 cap 降级 / :2710 同步直跑 · 行号 as-of 批 46 收口）——它们是**三条不同
 // 代码路径**，只测其中一条等于给另外两条留漂移窗口。本档逐条走到，使 AC-1 对六处**全部**具备
 // 可变异锚点（AC-8）：任一处退回 `||` ⇒ 该处腿红。
 //
@@ -122,18 +122,18 @@ function assertDoubleDisplay(text, where) {
     where + "：两段必须以 ' · ' 连接、且 diagnostics 原样可见（双显示形态）——实得: " + String(text).slice(0, 320))
 }
 
-// ═════════ AC-1 逐处：advisor 三处失败信封（:2508 jobs / :2596 超 cap 降级 / :2620 同步） ═════════
+// ═════════ AC-1 逐处：advisor 三处失败信封（:2598 jobs / :2686 超 cap 降级 / :2710 同步） ═════════
 
-test("B46 AC-1 ①(:2620 同步直跑): codex PROCESS_ERROR ⇒ 失败正文同时含 userMessage 与 diagnostics", async () => {
+test("B46 AC-1 ①(:2710 同步直跑): codex PROCESS_ERROR ⇒ 失败正文同时含 userMessage 与 diagnostics", async () => {
   const sid = freshSid("sync")
   try {
     const out = await captureWarn(() => runReview(sid, codexConfig(300000), codexDeps(failingSpawn())))
     assert.ok(out.value.includes("Advisor: review failed (codex-cli PROCESS_ERROR)"), "失败前缀保持既有形态: " + out.value.slice(0, 200))
-    assertDoubleDisplay(out.value, ":2620 同步直跑")
+    assertDoubleDisplay(out.value, ":2710 同步直跑")
   } finally { dropSession(sid) }
 })
 
-test("B46 AC-1 ②(:2596 超 cap 且 jobs 缺失 → 同步降级): 同一信封同样双显示", async () => {
+test("B46 AC-1 ②(:2686 超 cap 且 jobs 缺失 → 同步降级): 同一信封同样双显示", async () => {
   const sid = freshSid("degrade")
   try {
     // timeoutMs 900000 > codexCli.budgetCapMs(540000) 且 deps 无 ctx.jobs ⇒ 降级同步路径
@@ -141,11 +141,11 @@ test("B46 AC-1 ②(:2596 超 cap 且 jobs 缺失 → 同步降级): 同一信封
     const out = await captureWarn(() => runReview(sid, codexConfig(900000), codexDeps(failingSpawn())))
     assert.ok(out.warns.some((w) => w.includes("ctx.jobs 不可用") && w.includes("codex 评审预算")),
       "确证走的是超 cap 降级同步路径: " + JSON.stringify(out.warns.slice(0, 4)))
-    assertDoubleDisplay(out.value, ":2596 超 cap 降级")
+    assertDoubleDisplay(out.value, ":2686 超 cap 降级")
   } finally { dropSession(sid) }
 })
 
-test("B46 AC-1 ③(:2508 jobs 结算): 后台 job 的 outcome.output 同样双显示", async () => {
+test("B46 AC-1 ③(:2598 jobs 结算): 后台 job 的 outcome.output 同样双显示", async () => {
   const sid = freshSid("jobs")
   try {
     const { jobs, specs } = fakeJobs()
@@ -154,7 +154,7 @@ test("B46 AC-1 ③(:2508 jobs 结算): 后台 job 的 outcome.output 同样双�
     assert.equal(specs.length, 1, "恰一个 advisor-codex job")
     const outcome = await specs[0].hooks.done
     assert.equal(outcome.status, "failed")
-    assertDoubleDisplay(outcome.output, ":2508 jobs 结算")
+    assertDoubleDisplay(outcome.output, ":2598 jobs 结算")
     assert.ok(outcome.output.includes("review failed"), "失败 detail 语义不变: " + String(outcome.detail))
   } finally { dropSession(sid) }
 })
