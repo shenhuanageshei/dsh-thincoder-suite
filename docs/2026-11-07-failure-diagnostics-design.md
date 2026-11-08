@@ -557,3 +557,40 @@ if (candidateBytes > maxBytes) break
 **仿真结论**：64 KiB 下仍会**真实携带 2,576 B / 18 条事件**的字段（不是省略）⇒ 那次成功是**带字段的小请求**成功，**排除了「字段被省略」这条替代解释**。
 
 另记：本会话**单条事件最大 361,289 B（352 KiB）** —— 说明「首条事件超预算 ⇒ 省略字段」的路径在本会话确实存在可触发性，只是 64 KiB 那档没有触发。
+
+### §12.6.7 ★★ 真正的根因：**孤立代理项**（lone surrogate）——2026-11-08 抓包定案
+
+在 `maxBytes = 256000`（已知会 400 的那一档）抓包，得到**小体积失败请求**：
+
+| 项 | 读数 |
+|---|---|
+| 我方 body | **313,318 B**（283,279 个 UTF-16 码元） |
+| 本地 `JSON.parse` | ✅ **合格**（序列化本身没问题） |
+| `dsh_session_log` | 224,672 B · 72 条事件（afterSeq=282 → throughSeq=354） |
+| 服务端原文 | `Failed to parse the request body as JSON: dsh_session_log.events[69].data.message.content[0].text: unexpected end of hex escape at line 1 column 309248` |
+
+**关键交叉验证**：
+
+1. 对 body 做完整扫描 ⇒ **恰好 1 个孤立代理项**：`\ud83d`（高位、无低位配对），位置正是 `dsh_session_log.events[69].data.message.content[0].text` —— **与服务端点名的路径逐字符一致**；
+2. 该事件是 **`seq=352` · `type=tool/result`**；
+3. 它的字节偏移 ≈ 309,240，服务端报的 **309,248** 就在这个转义末尾。
+
+**事件原文（截取）**：
+
+```text
+=== our lib approval refs ===
+lib\advisor-msgs.mjs:160: "This approval signal is EQUALLY VALID … finds NO unresolved <LONE SURROGATE \ud83d>
+lib\advisor-msgs.mjs:162: "🟡 (Advisory) and 🔵 (Note) findings do NOT block approval — … but stil
+```
+
+`🔴` = `U+1F534` = `\ud83d\udd34`。某个工具的「按字符数截断每行」把这对代理项**劈成两半**：留下 `\ud83d`、丢掉 `\udd34`。同一段里 `but stil` 也是半截，印证「按码元截断」。
+
+**结论（三层）**：
+
+1. **我方序列化没坏**：`JSON.stringify` 输出的是**词法合法**的 JSON（含 `\udXXX` 孤立代理项，JSON 语法允许，Node 也接受）；
+2. **但对端解析器不接受孤立代理项**，且报错文案是**误导性的** `unexpected end of hex escape`（让人以为是截断，其实是我方数据里就有半个 emoji）；
+3. **上游要修的是「截断侧」**：任何按码元/字节切文本的地方都必须**对齐代理对边界**（或事后把孤立代理项替换成 `U+FFFD`）。
+
+**为什么「大日志更容易挂」**：事件越多，命中「某条工具结果里被劈开 emoji」的概率越高 —— 与体积阈值现象完全吻合，但**真正的开关是「有没有那条脏数据」**，不是字节数。
+
+**为什么只有 advisor 中招**：`dsh_session_log` 只挂在带存活 `sessionId` 的请求上，而本仓只有 advisor 把主会话 id 交给 `ctx.llm.stream`。
