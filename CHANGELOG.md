@@ -2,6 +2,44 @@
 
 本插件遵循语义化版本。完整设计文档见 [`docs/`](./docs/)，工程方法论见 [METHODOLOGY.md](./METHODOLOGY.md)。
 
+## [0.41.1] — 2026-11-19
+
+> **一句话（人话）**：DSH 桌面版自动升到 `0.2.2-rc.5` 之后，平台把「怎么开一个子代理」的参数结构**换了形状** —— 原来 `parent`、`prompt` 装在一个叫 `request` 的盒子里，新版本要求它们**平铺在顶层**。我们仍按旧形状递，平台读不到 `parent` 就去读 `spec.parent.id`，于是抛了一句让人摸不着头脑的 `Cannot read properties of undefined (reading 'id')`。后果是**会诊、eng_coder、飞刀三条路一起全灭**。这版让同一份参数**同时给出两种形状**，新老平台都能读。
+
+**【计数行】**：`node --test` **692/692**（**基线 692 + 本批 0**：本批零新增用例，新增的 4 条断言挂在既有 `consult` 档的 `T-30c` 上，用例总数不变）。
+
+**一、为什么做**
+
+2026-11-19 平台升级后实测：`advisor` 正常（两条路由都通过），但 `consult_start` **4/4 全失败**，文案逐字为 `(consultation failed: Cannot read properties of undefined (reading 'id'))`。会诊 / `eng_coder` / `escalate` 共用同一个派发入口，故三条路同时失效。
+
+**二、你会看到什么**
+
+· 会诊恢复正常：重启后同一 brief、同一模型池 **0/4 → 4/4**。
+· `eng_coder` 恢复正常：冒烟任务真实跑完并回报（含核对本次修复已落地）。
+· `advisor` 行为**不变**（它不经过子代理派发，升级期间也没坏）。
+· `escalate` 的 dsh 路线**仍按设计拒绝**（无法保证 deny 工具面 ⇒ fail-closed），与会诊失败无关、本版未改。
+
+**三、改了什么（技术面）**
+
+| 位置 | 改动 |
+|---|---|
+| `lib/subagent-dispatch.mjs` · `startViaActivation` | spec 改为**双形同送**：`{ ...inner, provider, label, signal, delivery, request: inner }` —— 顶层平铺给新宿主（rc.5+），`request` 给老宿主（≤rc.1）。两侧只读自己认识的键，未知键被忽略 ⇒ 无需版本嗅探 |
+| `test/consult.test.mjs` · `T-30c` | 新增 4 条断言：顶层必须有 `parent` / `prompt`，且与 `spec.request` 内**同值**（把 `...inner` 删掉即变红） |
+| `lib/contract-baseline.mjs` | 验证基线 `0.2.2-rc.1` → **`0.2.2-rc.5`**（记录日 2026-11-19），并把「**源码文本锁全绿 ≠ 运行时契约不变**」写进基线证据 |
+| `docs/2026-11-19-platform-rc5-subagent-contract-design.md`（新） | 本批设计档（九节 + 图）：根因带平台源码 `file:line`、决策含被否备选、前后真机对照 |
+
+**四、过程与诚实清单**
+
+· **根因证据来自平台源码**：`packages/subagent/subagent/src/types.ts:29`（`SubagentActivationSpec extends Omit<SubagentStartRequest,'label'|'signal'>` 压平）与 `packages/subagent/subagent/src/index.ts:275`（`agents.get(spec.parent.id) !== spec.parent`）。
+· **第一次排查拿错版本**：`D:\workspace\deepseek-harness` 当时停在 `0.2.2-rc.1`（`fcc0ad46`），与运行中的 `0.2.2-rc.5` 不一致；实际契约是用 **npm 发布的 rc.5 包**比对出来的，源码由用户随后 `git pull` 到 rc.5 复核一致。
+· **提交 ≠ 生效**：修复提交后第一次会诊（#176）仍报同一错误 —— `lib/**` 不热重载，**必须重启 DSH**。这条已写进 #176 纪要。
+· **本轮测试未设 30 分钟超时**：连通性测试用 4 分钟档；仅设计评审用到 10 分钟（那是真评审，不是测试）。
+
+**五、测试**
+
+· 全量 `node --test` **692/692**；文档闸门 `doc-hygiene` + `test-lifecycle` **31/31**。
+· 真机对照：会诊 `#175` 0/4 → `#176` 0/4（未重启）→ `#177` **4/4**（重启后）。
+
 ## [0.41.0] — 2026-11-07
 
 > **一句话（人话）**：这版修的是「**失败的时候说不清**」。同一天里，我先因为飞刀失败只看到一句「codex 进程失败」、后来因为 400 只看到一句「request failed (400)」，**两次都查不下去**。原因是六处失败信息把「人话」与「机械事实」**二选一**显示——`userMessage` 在场就把 `exit=`/`stderr:` 吞掉。这版把它们统一成「人话 · 机械事实」双显示，并给 advisor 的失败观测面补上 `code` / `status` / `requestId`。**评审判定逻辑零变化。**
