@@ -1439,6 +1439,18 @@ test("A29-7 (D-52): 会诊只读白名单对位锁——静态成员集 = 只读
   assert.equal("signal" in t30bCalls[0].request, false, "T-30b：request 不得再带 signal")
   assert.equal("persona" in t30bCalls[0].request, false, "T-30b：0.2.1 request 不含 persona（显式降级）")
   assert.equal("toolFilter" in t30bCalls[0].request, false, "T-30b：0.2.1 request 不含 toolFilter（显式降级）")
+  // ★ 批 47（平台 0.2.2-rc.5 契约漂移 · 锚 T-30c）：`SubagentActivationSpec` 在 rc.5 被**压平**——
+  //   它 `extends Omit<SubagentStartRequest,'label'|'signal'>`，平台实现读 `spec.parent.id`
+  //   （`agents.get(spec.parent.id) !== spec.parent` ⇒ UNAUTHORIZED）。旧形状（parent 只住在
+  //   `spec.request` 里）会让 `spec.parent` 为 undefined ⇒ 抛裸 TypeError
+  //   `Cannot read properties of undefined (reading 'id')`，会诊 / eng_coder / escalate 三条路同时全灭。
+  //   锁：**同一 spec 必须同时给出两形**（顶层平铺给新宿主 + request 给老宿主）。
+  assert.ok(t30bCalls[0].parent !== undefined && t30bCalls[0].parent !== null
+    && typeof t30bCalls[0].parent === "object",
+    "T-30c：新宿主契约要求 parent 在 spec **顶层**（rc.5 压平）；缺失 ⇒ 平台读 spec.parent.id 抛裸 TypeError")
+  assert.deepEqual(t30bCalls[0].prompt, [{ type: "text", text: "x" }], "T-30c：prompt 也必须在顶层")
+  assert.equal(t30bCalls[0].request.parent, t30bCalls[0].parent, "T-30c：老宿主（≤rc.1）仍读 spec.request ⇒ 两形并存且同值")
+  assert.equal(t30bCalls[0].request.prompt, t30bCalls[0].prompt, "T-30c：request.prompt 与顶层同值")
   assert.equal(t30bRun.id, "t30b-child", "T-30b：receipt.childId 映射为旧 run.id")
   assert.equal(t30bRun.localAgent.id, "t30b-child", "T-30b：ctx.agents 可读时补 localAgent（可读不到不伪造）")
   assert.equal((await t30bRun.result).stopReason, "completed", "T-30b：新路线 result 可读")
