@@ -113,3 +113,67 @@ flowchart LR
 | 根因证据 | 平台 `lib/index.js:3024` / 源码 `packages/subagent/subagent/src/index.ts:275`；`types.ts:29` 压平 |
 | 修复前后读数 | 修复前：会诊 0/4（#175 / #176 各一次）；重启后：会诊 **4/4**（#177） |
 | 测试 | 692/692 · consult 15/15 |
+## §十二 追加（同日 · 用户裁定 A）：escalate 的 deny 工具面从「硬拒」降为「尽力 + 自身硬护栏」
+
+### §12.1 背景（前因后果）
+
+§一~§十一 修好了**派发本身**；但飞刀（`escalate`）仍不可用 —— 它卡在**另一道闸**上：
+
+```js
+// lib/escalate.mjs（修复前）
+if (!dispatchSupport.toolFilter) return "Error: escalate … 拒绝运行"
+```
+
+批 37 的判据：0.2.1+ 的 `SubagentStartRequest` **不含** `toolFilter` ⇒ 宿主不执行 `deny` 名单 ⇒ 拿不到就**硬拒**。
+后果：dsh 路线**永久不可用**，只剩 `codex-cli`；而用户本机 codex 不可用 ⇒ 整个飞刀被废。
+
+### §12.2 裁定（用户 2026-11-19 选 A）
+
+**真正的递归防护不依赖平台工具面**：
+
+| 护栏 | 位置 | 性质 |
+|---|---|---|
+| `delegationDepth > 0` ⇒ 直接拒 | `lib/escalate.mjs:309-310` | **本方代码**，子代理调不到 escalate |
+| `maxDepth: 1` | `:443` | 平台侧防套娃第二道 |
+
+未被下发的 `deny` 名单只影响「子代理能否自行开会诊 / 进工程模式」——**成本面子**，且这些工具只作用于它自己的会话。
+⇒ 为它硬拒整个功能不划算。
+
+### §12.3 方案（FR-3 / FR-4）
+
+**FR-3**：`dispatchSupport.dispatchable === false` ⇒ 仍然 fail-closed（没有派发路线就绝不假装）；
+`dispatchable === true` 但 `toolFilter` 不被遵守 ⇒ **剥掉 `toolFilter` 后继续派发**，并 `console.warn` + 返回正文附诚实说明。
+
+**FR-4（同一约束的第二处）**：`persona` 同样不在新契约里 —— 只修 toolFilter 时后台 job 仍以
+「不遵守 persona ⇒ 拒绝派发」失败（**实测捕获**）。⇒ `persona` **并入 prompt 正文**（内容逐字保留，只换承载位置）后从请求移除。
+
+### §12.4 图示
+
+```mermaid
+flowchart TD
+  A["escalate 入口"] --> B{"delegationDepth > 0?"}
+  B -- 是 --> R1["拒绝：only available at the top level"]
+  B -- 否 --> C{"dispatchable?"}
+  C -- 否 --> R2["拒绝：没有可用派发路线（fail-closed）"]
+  C -- 是 --> D{"toolFilter 被遵守?"}
+  D -- 是（老宿主） --> E["照送 deny 名单"]
+  D -- 否（startActivation） --> F["剥 toolFilter + persona 并入 prompt + 响亮告警"]
+  E --> G["dispatchSubagent"]
+  F --> G
+```
+
+### §12.5 防偏离（AC，已做变异自证）
+
+| # | 锚（用例名） | 断言 | 变异结果 |
+|---|---|---|---|
+| 1 | A48-ESC-1 | startActivation 路线**不再硬拒**；顶层无 `toolFilter`；`spec.request` 也无；`persona` 已移除且正文并入 prompt；告警与返回正文含诚实说明 | 改回硬拒 ⇒ **红**；不搬 persona ⇒ **红** |
+| 2 | A48-ESC-2（负控） | `delegationDepth=1` 仍直接拒且**零派发** | 删深度判据 ⇒ 红 |
+
+### §12.6 边界与失败方向
+
+| 边界 | 行为 |
+|---|---|
+| 老宿主（`subagents.start`，遵守 toolFilter） | 逐字不变：仍下发 deny 名单 |
+| 新宿主（startActivation） | 不下发 deny；递归由 depth + maxDepth 承担；**响亮告警**不假装 |
+| 无派发路线 | fail-closed 拒绝，零派发 |
+| 用户可见 | 后台 job 的返回正文尾附「未下发 deny 工具面…」一行 |

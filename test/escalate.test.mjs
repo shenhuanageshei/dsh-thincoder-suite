@@ -365,3 +365,98 @@ test("A42-ESC-3 (AC-2 / AC-8 escalate 面): 正常路径零行为变化——宽
     dropSession(sid)
   }
 })
+
+// ————————————— 批 48（用户 2026-11-19 裁定 A）：dsh 路线不再因 toolFilter 被硬拒 —————————————
+// 设计档：docs/2026-11-19-platform-rc5-subagent-contract-design.md §十二。
+// 病：0.2.1+ 的 SubagentStartRequest 不含 toolFilter ⇒ 批 37 的硬拒判据让 dsh 路线**永久不可用**，
+//     只剩 codex；用户本机 codex 不可用 ⇒ 整个飞刀被废。
+// 裁定：真正要防的递归由「delegationDepth 判据（本方代码）+ maxDepth:1（平台侧）」承担，
+//     未下发的 deny 名单只影响「子代理能否自开会诊/进工程模式」⇒ 降级为尽力，并响亮告警。
+test("A48-ESC-1（裁定 A）: startActivation 路线**不再硬拒** —— 不发 toolFilter、附诚实告警、仍派发成功", async () => {
+  const { jobs } = fakeJobs()
+  const specs = []
+  const provider = {
+    name: "spawn",
+    capabilities: { agentOptions: true, agentPreset: true, outputSchema: true, depthLimit: true },
+    async prepareContinuable() { return {} },
+  }
+  const subagents = {
+    getProvider: () => provider,
+    agents: { get: (id) => ({ id }) },
+    async startActivation(spec) {
+      specs.push(spec)
+      return {
+        childId: "a48-child",
+        result: Promise.resolve({ output: [{ type: "text", text: "done" }], stopReason: "completed" }),
+        dispose: async () => { },
+      }
+    },
+  }
+  const { sid, deps } = makeDeps({
+    subagents, jobs,
+    config: { consultModels: [{ provider: "p", model: "m" }], dshBackgroundTimeoutMs: 3000 },
+  })
+  deps.forcedSettleOpts = makeGraceTimer().opts
+  try {
+    let dispatch = ""
+    const warnings = []
+    const origWarn = console.warn
+    console.warn = (m) => { warnings.push(String(m)) }
+    try {
+      const cap = captureOneTimer(3000)
+      try {
+        dispatch = String(await runEscalate(deps, "implement the thing", undefined, false, true))
+      } finally {
+        for (const t of cap.hits()) clearTimeout(t.hd)
+        cap.restore()
+      }
+    } finally { console.warn = origWarn }
+
+    assert.equal(dispatch.includes("拒绝运行"), false,
+      "★ 裁定 A 核心：startActivation 路线**不得**再因 toolFilter 被硬拒（改回硬拒 ⇒ 本行必红）："
+      + dispatch.slice(0, 200))
+    await flush(() => specs.length === 1, "A48-ESC-1：子代理已派发")
+    const spec = specs[0]
+    assert.equal(spec.provider, "spawn")
+    assert.ok(spec.parent && typeof spec.parent === "object",
+      "派发 spec 顶层必须有 parent（rc.5 压平契约；缺失 ⇒ 平台读 spec.parent.id 抛裸 TypeError）")
+    assert.equal("toolFilter" in spec, false, "顶层不得出现 toolFilter（新契约不认）")
+    assert.equal("toolFilter" in (spec.request ?? {}), false,
+      "★ 未下发的 deny 名单**不得**继续塞进 spec.request —— 否则 dispatchSubagent 的 wantsComposition 会 fail-closed")
+    assert.equal("persona" in (spec.request ?? {}), false,
+      "persona 同样不在新契约里 ⇒ 必须从请求移除（否则 wantsComposition 仍 fail-closed）")
+    const promptText = String(spec.request?.prompt?.[0]?.text ?? "")
+    assert.ok(promptText.includes("implement the thing") && promptText.length > 200,
+      "persona 正文必须**并入 prompt**（不丢角色框定，只换承载位置）：len=" + promptText.length)
+    assert.ok(warnings.some((w) => w.includes("未下发 deny 工具面")),
+      "必须**响亮告警**（不假装名单生效）：" + JSON.stringify(warnings.slice(0, 3)))
+    assert.ok(dispatch.includes("未下发 deny 工具面"),
+      "后台返回正文必须带诚实说明：" + dispatch.slice(0, 300))
+  } finally { dropSession(sid) }
+})
+
+test("A48-ESC-2（负控）: 自身硬护栏仍在 —— delegationDepth>0 直接拒（证明放宽的不是递归防护）", async () => {
+  const { jobs } = fakeJobs()
+  let called = 0
+  const subagents = {
+    getProvider: () => ({
+      name: "spawn",
+      capabilities: { agentOptions: true, agentPreset: true, outputSchema: true, depthLimit: true },
+      async prepareContinuable() { return {} },
+    }),
+    agents: { get: (id) => ({ id }) },
+    async startActivation() { called += 1; return { childId: "x", result: Promise.resolve({ output: [], stopReason: "completed" }), dispose: async () => { } } },
+  }
+  const { sid, deps } = makeDeps({
+    subagents, jobs,
+    config: { consultModels: [{ provider: "p", model: "m" }], dshBackgroundTimeoutMs: 3000 },
+  })
+  deps.agent.session.header.delegationDepth = 1 // 子代理语境
+  try {
+    const r = String(await runEscalate(deps, "nested attempt", undefined, false, true))
+    assert.ok(r.includes("only available at the top level"),
+      "★ 子代理不得再飞刀（删掉 delegationDepth 判据 ⇒ 本行必红）：" + r.slice(0, 200))
+    assert.equal(called, 0, "负控：被拒时零派发（不消耗预算）")
+  } finally { dropSession(sid) }
+})
+
